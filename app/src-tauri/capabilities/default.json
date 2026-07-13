@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "core access for the manager window and all pet windows",
+  "windows": ["manager", "pet-*"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

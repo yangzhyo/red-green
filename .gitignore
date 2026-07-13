@@ -1,0 +1,7 @@
+node_modules/
+target/
+dist/
+.DS_Store
+app/src-tauri/gen/
+app/src-tauri/icons/android/
+app/src-tauri/icons/ios/
