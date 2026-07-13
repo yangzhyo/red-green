@@ -1,10 +1,10 @@
-// 逻辑中枢：监听状态快照，管理宠物窗口的生死、声音和已阅。
+// 逻辑中枢：监听状态快照，管理宠物窗口的生死、叫声和已阅。
 // 宠物窗口是哑渲染器，一切决策都在这里。
 const { invoke } = window.__TAURI__.core;
 const { listen, emitTo } = window.__TAURI__.event;
 
-// 状态转移进入这两个状态时发声（前台静默规则见 reconcile）
-const SOUND = { awaiting: "Glass", aborted: "Basso" };
+// 叫声：转移进入这些状态时发声，音色属物种、节奏属状态（前台静默规则见 reconcile）
+const CALL_STATES = new Set(["awaiting", "aborted", "your_turn", "completed"]);
 const ACK_STATES = new Set(["completed", "aborted"]);
 
 // sid -> { slot, prevState, since, acked }
@@ -47,10 +47,10 @@ async function reconcile(sessions) {
     }
     const effective = pet.acked && ACK_STATES.has(s.state) ? "idle" : s.state;
 
-    // 声音：仅在真正发生转移、且该会话的终端标签页不在前台时
-    if (effective !== pet.prevState && SOUND[effective]) {
+    // 叫声：仅在真正发生转移、且该会话的终端标签页不在前台时；被静默即消失，不补发
+    if (effective !== pet.prevState && CALL_STATES.has(effective)) {
       if (!front || front !== s.tty) {
-        invoke("play_sound", { name: SOUND[effective] });
+        invoke("play_sound", { name: `${SPRITES.pick(s.project)}-${effective}` });
       }
     }
     pet.prevState = effective;

@@ -260,14 +260,23 @@ fn frontmost_tty() -> Option<String> {
     frontmost_tty_impl()
 }
 
+// 叫声文件名 = 皮肤-状态（如 crab-your_turn），产物由 scripts/gen-sounds.mjs 生成、
+// 随 bundle resources 打包；afplay 需要真实文件路径，所以不走前端资源而走 Resource 目录
 #[tauri::command]
-fn play_sound(name: String) {
-    if !name.chars().all(|c| c.is_ascii_alphanumeric()) {
+fn play_sound(app: AppHandle, name: String) {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return;
     }
-    let _ = Command::new("afplay")
-        .arg(format!("/System/Library/Sounds/{name}.aiff"))
-        .spawn();
+    let Ok(path) = app.path().resolve(
+        format!("sounds/{name}.wav"),
+        tauri::path::BaseDirectory::Resource,
+    ) else {
+        return;
+    };
+    let _ = Command::new("afplay").arg(path).spawn();
 }
 
 fn main() {
