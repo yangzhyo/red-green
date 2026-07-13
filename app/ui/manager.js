@@ -17,9 +17,13 @@ function allocSlot() {
   return i;
 }
 
+// 由 Rust 心跳（front-tick）更新；隐藏窗口的 JS 定时器会被 WebKit 挂起，
+// 所以 manager 只做事件响应，自己不跑 setInterval
+let lastFront = null;
+
 async function reconcile(sessions) {
   const seen = new Set();
-  const front = await invoke("frontmost_tty").catch(() => null);
+  const front = lastFront;
 
   for (const s of sessions) {
     seen.add(s.session_id);
@@ -68,6 +72,10 @@ async function tick() {
 }
 
 listen("sessions-changed", (e) => reconcile(e.payload));
-// 轮询兜底：驱动已阅检测（聚焦终端不产生文件事件），也修补丢失的窗口事件
-setInterval(tick, 1500);
+// Rust 每 1.5s 推一次前台 tty：驱动已阅检测（聚焦终端不产生文件事件），
+// 也兼作兜底轮询修补丢失的窗口事件
+listen("front-tick", (e) => {
+  lastFront = e.payload ?? null;
+  tick();
+});
 tick();

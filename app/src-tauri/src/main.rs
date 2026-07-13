@@ -100,6 +100,19 @@ fn remove_pet(app: AppHandle, sid: String) {
     }
 }
 
+fn dbg_log(msg: &str) {
+    if let Ok(home) = std::env::var("HOME") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{home}/.claude/session-status/.app-debug.log"))
+        {
+            let _ = writeln!(f, "{msg}");
+        }
+    }
+}
+
 // tmux 常见安装路径逐个尝试：将来以 .app 方式从 launchd 启动时没有 brew PATH
 fn tmux(args: &[&str]) -> Option<String> {
     for bin in ["tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
@@ -107,6 +120,7 @@ fn tmux(args: &[&str]) -> Option<String> {
             Ok(out) if out.status.success() => {
                 return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
             }
+            // 失败不记日志：心跳每 1.5s 走这里，无 tmux 的环境会刷爆日志文件
             Ok(_) => return None, // tmux 存在但命令失败（如无 server）
             Err(_) => continue,
         }
@@ -116,32 +130,44 @@ fn tmux(args: &[&str]) -> Option<String> {
 
 // pane tty -> (tmux 目标 "session:window.pane", 挂载客户端的 tty)
 fn tmux_locate(pane_tty: &str) -> Option<(String, Option<String>)> {
+    // 分隔符用空格：tmux 会把输出中的控制字符（含制表符）消毒成 "_"
     let panes = tmux(&[
         "list-panes",
         "-a",
         "-F",
-        "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}",
+        "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}",
     ])?;
-    let target = panes.lines().find_map(|l| {
-        let (ptty, tgt) = l.split_once('\t')?;
+    let target = match panes.lines().find_map(|l| {
+        let (ptty, tgt) = l.split_once(' ')?;
         (ptty == pane_tty).then(|| tgt.to_string())
-    })?;
+    }) {
+        Some(t) => t,
+        None => {
+            dbg_log(&format!(
+                "tmux_locate pane={pane_tty} not found, raw panes={panes:?}"
+            ));
+            return None;
+        }
+    };
     let session = target.split(':').next().unwrap_or_default().to_string();
-    let client = tmux(&["list-clients", "-F", "#{client_tty}\t#{client_session}"])
-        .and_then(|s| {
-            s.lines().find_map(|l| {
-                let (ctty, csess) = l.split_once('\t')?;
-                (csess == session).then(|| ctty.to_string())
-            })
-        });
+    let clients_raw = tmux(&["list-clients", "-F", "#{client_tty} #{client_session}"]);
+    let client = clients_raw.as_deref().and_then(|s| {
+        s.lines().find_map(|l| {
+            let (ctty, csess) = l.split_once(' ')?;
+            (csess == session).then(|| ctty.to_string())
+        })
+    });
+    dbg_log(&format!(
+        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients_raw:?} client={client:?}"
+    ));
     Some((target, client))
 }
 
 // 前台 tab 挂着 tmux 客户端时，用户实际看到的是该 session 当前窗口的活动 pane
 fn tmux_client_active_pane(client_tty: &str) -> Option<String> {
-    let clients = tmux(&["list-clients", "-F", "#{client_tty}\t#{client_session}"])?;
+    let clients = tmux(&["list-clients", "-F", "#{client_tty} #{client_session}"])?;
     let session = clients.lines().find_map(|l| {
-        let (ctty, cs) = l.split_once('\t')?;
+        let (ctty, cs) = l.split_once(' ')?;
         (ctty == client_tty).then(|| cs.to_string())
     })?;
     tmux(&["display-message", "-p", "-t", &session, "#{pane_tty}"])
@@ -168,25 +194,48 @@ fn focus_terminal(tty: String) {
             tab_tty = ct;
         }
     }
+    // set frontmost 比 set index 可靠；activate 必须在命中之后——
+    // 放在最前会在找不到 tab 时把 Terminal 连同错误的窗口带到前台
     let script = format!(
         r#"tell application "Terminal"
-    activate
     repeat with w in windows
         repeat with t in tabs of w
             if tty of t is "{tab_tty}" then
                 set selected of t to true
-                set index of w to 1
+                set frontmost of w to true
+                activate
                 return
             end if
         end repeat
     end repeat
 end tell"#
     );
-    let _ = Command::new("osascript").arg("-e").arg(script).spawn();
+    let out = Command::new("osascript").arg("-e").arg(script).output();
+    // 现场日志：点击定位涉及 tmux 解析 + TCC 权限 + AppleScript 三层，
+    // 出问题时凭这行就能定位是哪层
+    let msg = match &out {
+        Ok(o) => format!(
+            "tty={} tab_tty={} osascript_ok={} err={}",
+            tty,
+            tab_tty,
+            o.status.success(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => format!("tty={} tab_tty={} spawn_err={}", tty, tab_tty, e),
+    };
+    if let Ok(home) = std::env::var("HOME") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{home}/.claude/session-status/.app-debug.log"))
+        {
+            let _ = writeln!(f, "focus_terminal {msg}");
+        }
+    }
 }
 
-#[tauri::command]
-fn frontmost_tty() -> Option<String> {
+fn frontmost_tty_impl() -> Option<String> {
     let script = r#"tell application "System Events"
     set frontApp to bundle identifier of first process whose frontmost is true
 end tell
@@ -204,6 +253,11 @@ end if"#;
         return Some(pane);
     }
     Some(s)
+}
+
+#[tauri::command]
+fn frontmost_tty() -> Option<String> {
+    frontmost_tty_impl()
 }
 
 #[tauri::command]
@@ -253,6 +307,14 @@ fn main() {
                     {}
                     let _ = handle.emit("sessions-changed", read_snapshot());
                 }
+            });
+
+            // 已阅心跳必须在 Rust 侧：manager 是隐藏窗口，
+            // WebKit 会挂起不可见 webview 的 JS 定时器（事件不受影响）
+            let heartbeat = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                let _ = heartbeat.emit("front-tick", frontmost_tty_impl());
             });
             Ok(())
         })
