@@ -4,11 +4,11 @@ const { invoke } = window.__TAURI__.core;
 const { listen, emitTo } = window.__TAURI__.event;
 
 // 叫声：转移进入这些状态时发声，音色属物种、节奏属状态（前台静默规则见 reconcile）
-// 状态集与文件名契约在 calls.js，与 gen-sounds.mjs 共享同一处定义
+// 状态集与文件名契约在 calls.js，与 gen-calls.mjs 共享同一处定义
 const CALL_STATES = new Set(CALLS.STATES);
 const ACK_STATES = new Set(["completed", "aborted"]);
 
-// sid -> { slot, prevState, since, acked }
+// sid -> { slot, prevState, since, acked, model }
 const pets = new Map();
 
 function allocSlot() {
@@ -30,7 +30,7 @@ async function reconcile(sessions) {
     seen.add(s.session_id);
     let pet = pets.get(s.session_id);
     if (!pet) {
-      pet = { slot: allocSlot(), prevState: null, since: null, acked: false };
+      pet = { slot: allocSlot(), prevState: null, since: null, acked: false, model: null };
       pets.set(s.session_id, pet);
       await invoke("ensure_pet", { sid: s.session_id, slot: pet.slot }).catch(
         console.error
@@ -48,15 +48,18 @@ async function reconcile(sessions) {
     }
     const effective = pet.acked && ACK_STATES.has(s.state) ? "idle" : s.state;
 
-    // 叫声：仅在真正发生转移、且该会话的终端标签页不在前台时；被静默即消失，不补发
-    if (effective !== pet.prevState && CALL_STATES.has(effective)) {
+    // 叫声：仅在真正发生转移、且该会话的终端标签页不在前台时；被静默即消失，不补发。
+    // 首见（含 app 启动时既存的会话）只采纳状态不算转移——重启不该把旧状态再叫一遍
+    if (pet.prevState !== null && effective !== pet.prevState && CALL_STATES.has(effective)) {
       if (!front || front !== s.tty) {
-        invoke("play_sound", { name: CALLS.name(SKINS.pick(s.project), effective) });
+        invoke("play_call", { name: CALLS.name(SKINS.pick(s.project), effective) });
       }
     }
     pet.prevState = effective;
 
-    emitTo(`pet-${s.session_id}`, "pet-update", { ...s, state: effective });
+    // 皮肤在这里定：pet 是哑渲染器，模型给什么画什么
+    pet.model = { ...s, state: effective, skin: SKINS.pick(s.project) };
+    emitTo(`pet-${s.session_id}`, "pet-update", pet.model);
   }
 
   for (const [sid, pet] of pets) {
@@ -72,11 +75,24 @@ async function tick() {
   await reconcile(sessions);
 }
 
-listen("sessions-changed", (e) => reconcile(e.payload));
+// 静默/已阅的裁决要用发声那一刻的前台，不能用至多 1.5s 前的心跳旧值
+async function refreshFront() {
+  lastFront = (await invoke("frontmost_tty").catch(() => null)) ?? null;
+}
+
+listen("sessions-changed", async (e) => {
+  await refreshFront();
+  reconcile(e.payload);
+});
 // Rust 每 1.5s 推一次前台 tty：驱动已阅检测（聚焦终端不产生文件事件），
 // 也兼作兜底轮询修补丢失的窗口事件
 listen("front-tick", (e) => {
   lastFront = e.payload ?? null;
   tick();
 });
-tick();
+// 窗口刚创建时 emitTo 可能先于 pet 的监听器就绪；pet 就绪后自报家门，这里补发最新模型
+listen("pet-ready", (e) => {
+  const pet = pets.get(e.payload);
+  if (pet?.model) emitTo(`pet-${e.payload}`, "pet-update", pet.model);
+});
+refreshFront().then(tick);

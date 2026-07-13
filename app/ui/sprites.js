@@ -74,32 +74,32 @@ window.SPRITES = (function () {
     if (!blinkOff) p[lampChar] = lampColor;
     return p;
   }
-  function robotState(s) {
+  function robotFrames(s) {
     function pose(arms) {
       return stamp(clone(ROBOT_BASE), ARMS[arms], "A");
     }
     switch (s) {
       case "idle":
-        return { frames: [{ g: pose("down"), p: robotPal("3", C.idle, C.idle, true) }] };
+        return [{ g: pose("down"), p: robotPal("3", C.idle, C.idle, true) }];
       case "running":
-        return { interval: 210, frames: [
+        return [
           { g: pose("typeL"), p: robotPal("2", C.running, C.running) },
           { g: pose("typeR"), p: robotPal("2", C.running, C.running) },
-        ] };
+        ];
       case "awaiting":
-        return { frames: [{ g: pose("up"), p: robotPal("1", C.awaiting, C.awaiting) }] };
+        return [{ g: pose("up"), p: robotPal("1", C.awaiting, C.awaiting) }];
       case "your_turn":
-        return { interval: 500, frames: [
+        return [
           { g: pose("wave"), p: robotPal("3", C.your_turn, C.your_turn) },
           { g: pose("wave"), p: robotPal("3", C.your_turn, C.your_turn, true) },
-        ] };
+        ];
       case "completed":
-        return { frames: [{ g: pose("up"), p: robotPal("3", C.completed, C.completed) }] };
+        return [{ g: pose("up"), p: robotPal("3", C.completed, C.completed) }];
       case "aborted":
-        return { interval: 420, frames: [
+        return [
           { g: pose("down"), p: robotPal("1", C.aborted, C.aborted) },
           { g: pose("down"), p: robotPal("1", C.aborted, C.aborted, true) },
-        ] };
+        ];
     }
   }
 
@@ -128,29 +128,29 @@ window.SPRITES = (function () {
       S: blinkOff ? C.dim : lamp,
     };
   }
-  function crabState(s) {
+  function crabFrames(s) {
     switch (s) {
       case "idle":
-        return { frames: [{ g: crabGrid(false), p: crabPal(C.idle, true) }] };
+        return [{ g: crabGrid(false), p: crabPal(C.idle, true) }];
       case "running":
-        return { interval: 210, frames: [
+        return [
           { g: crabGrid(false), p: crabPal(C.running) },
           { g: crabGrid(true), p: crabPal(C.running) },
-        ] };
+        ];
       case "awaiting":
-        return { frames: [{ g: crabGrid(true), p: crabPal(C.awaiting) }] };
+        return [{ g: crabGrid(true), p: crabPal(C.awaiting) }];
       case "your_turn":
-        return { interval: 500, frames: [
+        return [
           { g: crabGrid(true), p: crabPal(C.your_turn) },
           { g: crabGrid(true), p: crabPal(C.your_turn, true) },
-        ] };
+        ];
       case "completed":
-        return { frames: [{ g: crabGrid(true), p: crabPal(C.completed) }] };
+        return [{ g: crabGrid(true), p: crabPal(C.completed) }];
       case "aborted":
-        return { interval: 420, frames: [
+        return [
           { g: crabGrid(false), p: crabPal(C.aborted) },
           { g: crabGrid(false), p: crabPal(C.aborted, true) },
-        ] };
+        ];
     }
   }
 
@@ -191,37 +191,46 @@ window.SPRITES = (function () {
       S: blinkOff ? C.furDk : bell,
     };
   }
-  function catState(s) {
+  function catFrames(s) {
     switch (s) {
       case "idle":
-        return { frames: [{ g: CAT_SLEEP, p: catPal(C.idle, true, true) }] };
+        return [{ g: CAT_SLEEP, p: catPal(C.idle, true, true) }];
       case "running":
-        return { frames: [{ g: CAT_SIT, p: catPal(C.running) }] };
+        return [{ g: CAT_SIT, p: catPal(C.running) }];
       case "awaiting":
-        return { frames: [{ g: CAT_SIT, p: catPal(C.awaiting) }] };
+        return [{ g: CAT_SIT, p: catPal(C.awaiting) }];
       case "your_turn":
-        return { interval: 500, frames: [
+        return [
           { g: CAT_SIT, p: catPal(C.your_turn) },
           { g: CAT_SIT, p: catPal(C.your_turn, false, true) },
-        ] };
+        ];
       case "completed":
-        return { frames: [{ g: CAT_SIT, p: catPal(C.completed) }] };
+        return [{ g: CAT_SIT, p: catPal(C.completed) }];
       case "aborted":
-        return { interval: 420, frames: [
+        return [
           { g: CAT_SLEEP, p: catPal(C.aborted, true) },
           { g: CAT_SLEEP, p: catPal(C.aborted, true, true) },
-        ] };
+        ];
     }
   }
 
-  var MAKERS = { robot: robotState, crab: crabState, cat: catState };
+  var MAKERS = { robot: robotFrames, crab: crabFrames, cat: catFrames };
+
+  // 双帧动画的节律三物种共享：运行中敲击、轮到你/异常中止灯光明灭。
+  // 物种只提供各状态的帧（几帧、什么姿态），快慢是状态的语义，不属物种
+  var TEMPO = { running: 210, your_turn: 500, aborted: 420 };
 
   function spec(skin, state) {
-    return (MAKERS[skin] || MAKERS.robot)(state) || MAKERS.robot("idle");
+    var frames = (MAKERS[skin] || MAKERS.robot)(state) || MAKERS.robot("idle");
+    return frames.length > 1
+      ? { interval: TEMPO[state], frames: frames }
+      : { frames: frames };
   }
 
   // scale 为内部像素倍率，CSS 尺寸取一半以适配 Retina
-  function draw(canvas, grid, pal, scale) {
+  function draw(canvas, frame, scale) {
+    var grid = frame.g,
+      pal = frame.p;
     var h = grid.length,
       w = 0;
     grid.forEach(function (r) {

@@ -1,6 +1,6 @@
 // 哑渲染器：只负责把 manager 发来的宠物模型画出来，点击时请求聚焦终端。
 const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+const { listen, emit } = window.__TAURI__.event;
 
 const sid = new URLSearchParams(location.search).get("sid");
 
@@ -39,11 +39,11 @@ function renderSprite(state) {
   // 内部 8px/格、CSS 4px/格（Retina 2x 整数倍，像素不糊）
   const SCALE = 8;
   let i = 0;
-  window.SPRITES.draw(cv, spec.frames[0].g, spec.frames[0].p, SCALE);
+  window.SPRITES.draw(cv, spec.frames[0], SCALE);
   if (spec.frames.length > 1) {
     spriteTimer = setInterval(() => {
       i = (i + 1) % spec.frames.length;
-      window.SPRITES.draw(cv, spec.frames[i].g, spec.frames[i].p, SCALE);
+      window.SPRITES.draw(cv, spec.frames[i], SCALE);
     }, spec.interval || 400);
   }
 }
@@ -53,9 +53,8 @@ function render(m) {
   model = m;
   document.body.dataset.state = m.state;
 
-  const newSkin = window.SKINS.pick(m.project);
-  if (newSkin !== skin || m.state !== prev) {
-    skin = newSkin;
+  if (m.skin !== skin || m.state !== prev) {
+    skin = m.skin;
     document.body.dataset.skin = skin;
     renderSprite(m.state);
   }
@@ -86,12 +85,10 @@ listen("pet-update", (e) => {
   // Tauri 的 plain listen 是 Any-target：收得到发给所有窗口的事件，必须自筛
   if (e.payload.session_id !== sid) return;
   render(e.payload);
-});
-
-// 首帧自取：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪
-invoke("get_sessions").then((list) => {
-  const s = list.find((x) => x.session_id === sid);
-  if (s) render(s);
+}).then(() => {
+  // 首帧握手：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪，
+  // 就绪后自报家门请 manager 补发模型——不自取原始文件，已阅/皮肤的裁决只在 manager
+  emit("pet-ready", sid);
 });
 
 // 整只宠物既可点也可拖：按下后移动 >4px 进入窗口拖拽，原地松手视为点击聚焦。

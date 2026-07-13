@@ -1,5 +1,5 @@
 // 皮肤即会话身份：按项目名哈希确定性分配——同一项目永远同一只。
-// 形象（sprites.js）与音色（scripts/gen-sounds.mjs）共用这一条轴；
+// 形象（sprites.js）与音色（scripts/gen-calls.mjs）共用这一条轴；
 // 浏览器 <script> 与 Node import 都要加载，故挂 globalThis 而非 window。
 globalThis.SKINS = (function () {
   var LIST = ["robot", "crab", "cat"];

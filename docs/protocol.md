@@ -19,7 +19,7 @@ hooks 与宠物 app 之间的唯一契约。领域词汇见根目录 [CONTEXT.md
   "session_id": "uuid",
   "state": "idle | running | awaiting | your_turn | completed | aborted",
   "cwd": "/Users/y9g/repositories/red-green",
-  "project": "red-green（git 仓库根目录名；cwd 不在 git 仓库内时取 cwd 末级目录名。cwd 会随会话内的 cd 漂移，项目身份不随之漂移）",
+  "project": "red-green（git 仓库根目录名；cwd 不在 git 仓库内时取 cwd 末级目录名。cwd 会随会话内的 cd 漂移，项目身份不随之漂移——首次写入即锚定，后续事件沿用文件中已有的值。两者都取不到时为 ?）",
   "tty": "/dev/ttys012",
   "detail": "最近一条通知消息或 Claude 最后一句话的摘录（≤300 字符）",
   "since": "2026-07-13T08:00:00Z"
@@ -62,12 +62,12 @@ hooks 与宠物 app 之间的唯一契约。领域词汇见根目录 [CONTEXT.md
    │        │ Stop:问句结尾
    │        ▼
    │      轮到你 ─────── 用户作答 UserPromptSubmit ────▶ 运行中
-   │    (招手,蓝灯闪,鸣响)   不适用已阅：问题没回答就一直成立
+   │  (探头张望,蓝灯闪,鸣响)  不适用已阅：问题没回答就一直成立
    │
    └── SessionEnd（任何状态）→ 删除状态文件，宠物离场
 ```
 
-两层结构：**hooks 写的是原始状态**（上图实线），**app 在显示层叠加已阅**（已完成/异常中止 + 前台聚焦 → 显示为空闲，不写回文件）。叫声在进入待确认/异常中止/轮到你/已完成时各响一次：音色属物种、节奏属状态（节奏语法见 [CONTEXT.md](../CONTEXT.md)「叫声」），文件名 `皮肤-状态.wav`（契约定义在 `app/ui/calls.js`），由 `scripts/gen-sounds.mjs` 生成、随 .app 的 bundle resources 打包。受前台静默约束：该会话终端标签页在前台则不响（tmux 解析到活动 pane），被静默即消失，不补发。
+两层结构：**hooks 写的是原始状态**（上图实线），**app 在显示层叠加已阅**（已完成/异常中止 + 前台聚焦 → 显示为空闲，不写回文件）。叫声在进入待确认/异常中止/轮到你/已完成时各响一次：音色属物种、节奏属状态（节奏语法见 [CONTEXT.md](../CONTEXT.md)「叫声」），文件名 `皮肤-状态.wav`（契约定义在 `app/ui/calls.js`），由 `scripts/gen-calls.mjs` 生成、随 .app 的 bundle resources 打包。受前台静默约束：该会话终端标签页在前台则不响（tmux 解析到活动 pane），被静默即消失，不补发。
 
 ## 事件 → 状态映射
 

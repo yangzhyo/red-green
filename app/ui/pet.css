@@ -1,4 +1,4 @@
-/* 像素皮肤版：造型由 sprites.js 画在 canvas 上，
+/* 像素皮肤版：视觉形象由 sprites.js 画在 canvas 上，
    这里只负责动作（body[data-state] 驱动）和周边 UI。 */
 
 html,

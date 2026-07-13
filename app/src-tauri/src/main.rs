@@ -100,13 +100,15 @@ fn remove_pet(app: AppHandle, sid: String) {
     }
 }
 
+// 日志不能落在 status_dir：那是被 watch 的契约目录（协议规定 app 只读），
+// 写进去每条日志都会自触发一次 sessions-changed
 fn dbg_log(msg: &str) {
     if let Ok(home) = std::env::var("HOME") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(format!("{home}/.claude/session-status/.app-debug.log"))
+            .open(format!("{home}/Library/Logs/red-green.log"))
         {
             let _ = writeln!(f, "{msg}");
         }
@@ -126,6 +128,17 @@ fn tmux(args: &[&str]) -> Option<String> {
         }
     }
     None
+}
+
+// tmux 客户端清单：(client_tty, client_session) 对
+fn tmux_clients() -> Vec<(String, String)> {
+    tmux(&["list-clients", "-F", "#{client_tty} #{client_session}"])
+        .map(|out| {
+            out.lines()
+                .filter_map(|l| l.split_once(' ').map(|(t, s)| (t.to_string(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // pane tty -> (tmux 目标 "session:window.pane", 挂载客户端的 tty)
@@ -150,26 +163,21 @@ fn tmux_locate(pane_tty: &str) -> Option<(String, Option<String>)> {
         }
     };
     let session = target.split(':').next().unwrap_or_default().to_string();
-    let clients_raw = tmux(&["list-clients", "-F", "#{client_tty} #{client_session}"]);
-    let client = clients_raw.as_deref().and_then(|s| {
-        s.lines().find_map(|l| {
-            let (ctty, csess) = l.split_once(' ')?;
-            (csess == session).then(|| ctty.to_string())
-        })
-    });
+    let clients = tmux_clients();
+    let client = clients
+        .iter()
+        .find_map(|(ctty, csess)| (*csess == session).then(|| ctty.clone()));
     dbg_log(&format!(
-        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients_raw:?} client={client:?}"
+        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients:?} client={client:?}"
     ));
     Some((target, client))
 }
 
 // 前台 tab 挂着 tmux 客户端时，用户实际看到的是该 session 当前窗口的活动 pane
 fn tmux_client_active_pane(client_tty: &str) -> Option<String> {
-    let clients = tmux(&["list-clients", "-F", "#{client_tty} #{client_session}"])?;
-    let session = clients.lines().find_map(|l| {
-        let (ctty, cs) = l.split_once(' ')?;
-        (ctty == client_tty).then(|| cs.to_string())
-    })?;
+    let session = tmux_clients()
+        .into_iter()
+        .find_map(|(ctty, cs)| (ctty == client_tty).then_some(cs))?;
     tmux(&["display-message", "-p", "-t", &session, "#{pane_tty}"])
 }
 
@@ -223,16 +231,7 @@ end tell"#
         ),
         Err(e) => format!("tty={} tab_tty={} spawn_err={}", tty, tab_tty, e),
     };
-    if let Ok(home) = std::env::var("HOME") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("{home}/.claude/session-status/.app-debug.log"))
-        {
-            let _ = writeln!(f, "focus_terminal {msg}");
-        }
-    }
+    dbg_log(&format!("focus_terminal {msg}"));
 }
 
 fn frontmost_tty_impl() -> Option<String> {
@@ -260,10 +259,10 @@ fn frontmost_tty() -> Option<String> {
     frontmost_tty_impl()
 }
 
-// 叫声文件名 = 皮肤-状态（如 crab-your_turn），产物由 scripts/gen-sounds.mjs 生成、
+// 叫声文件名 = 皮肤-状态（如 crab-your_turn），产物由 scripts/gen-calls.mjs 生成、
 // 随 bundle resources 打包；afplay 需要真实文件路径，所以不走前端资源而走 Resource 目录
 #[tauri::command]
-fn play_sound(app: AppHandle, name: String) {
+fn play_call(app: AppHandle, name: String) {
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -271,7 +270,7 @@ fn play_sound(app: AppHandle, name: String) {
         return;
     }
     let Ok(path) = app.path().resolve(
-        format!("sounds/{name}.wav"),
+        format!("calls/{name}.wav"),
         tauri::path::BaseDirectory::Resource,
     ) else {
         return;
@@ -287,7 +286,7 @@ fn main() {
             remove_pet,
             focus_terminal,
             frontmost_tty,
-            play_sound
+            play_call
         ])
         .setup(|app| {
             // pets are ambient: no dock icon, no app switcher entry

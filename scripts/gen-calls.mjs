@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Generate the pet call sounds (皮肤 x 叫声状态 全矩阵) as 16-bit mono WAV, no deps.
+// Generate the pet calls (皮肤 x 叫声状态 全矩阵) as 16-bit mono WAV, no deps.
 // 节奏属状态（听节奏辨事件），音色属物种（听声辨项目）——见 CONTEXT.md「叫声」。
 // 两条轴与文件名契约来自 app/ui/{skins,calls}.js，与运行时共享同一处定义。
-// Usage: node gen-sounds.mjs [outdir]   (default: app/src-tauri/sounds/)
+// Usage: node gen-calls.mjs [outdir]   (default: app/src-tauri/calls/)
 
 import fs from "node:fs";
 import path from "node:path";
@@ -150,7 +150,7 @@ function wav(pcm) {
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const outdir = process.argv[2] ?? path.join(here, "..", "app", "src-tauri", "sounds");
+const outdir = process.argv[2] ?? path.join(here, "..", "app", "src-tauri", "calls");
 fs.mkdirSync(outdir, { recursive: true });
 
 // 沿共享轴遍历：皮肤缺音色或状态缺节奏会直接抛错，不会静默漏生成

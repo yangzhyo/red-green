@@ -43,17 +43,18 @@ while true; do ps -eo ppid,args | awk '$2=="afplay"'; sleep 0.04; done >> /tmp/a
 ```
 
 ppid 区分实例(dev = target/debug 的进程号)。dev 实例的资源解析到
-`app/src-tauri/target/debug/sounds/`。
+`app/src-tauri/target/debug/calls/`。
 
 **渲染**:宠物窗口置顶,`screencapture -x out.png` 全屏截图即可看到精灵、项目名标签与状态特效。
 窗口计数走 osascript 需要辅助功能权限(会弹系统授权框,别用)。
 
-**生成脚本**:`node scripts/gen-sounds.mjs <临时目录>` 后与 `app/src-tauri/sounds/` 逐字节
+**生成脚本**:`node scripts/gen-calls.mjs <临时目录>` 后与 `app/src-tauri/calls/` 逐字节
 `cmp`——固定种子,等价即逐字节相同。
 
 ## 值得驱动的流
 
 - 转移进叫声状态(awaiting/aborted/your_turn/completed)→ 响对应 `皮肤-状态.wav`
 - 转移进 running/idle → 无声;同状态重写(仅 `since` 变)→ 不重复叫
+- app 启动前状态文件已是叫声状态 → 静默采纳,不补叫(首见不算转移)
 - 未知 state → 不叫、不崩、精灵回退 robot idle
 - 删状态文件 → 宠物离场
