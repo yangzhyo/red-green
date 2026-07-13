@@ -36,12 +36,14 @@ function renderSprite(state) {
   const cv = document.getElementById("sprite");
   clearInterval(spriteTimer);
   spriteTimer = null;
+  // 内部 8px/格、CSS 4px/格（Retina 2x 整数倍，像素不糊）
+  const SCALE = 8;
   let i = 0;
-  window.SPRITES.draw(cv, spec.frames[0].g, spec.frames[0].p, 12);
+  window.SPRITES.draw(cv, spec.frames[0].g, spec.frames[0].p, SCALE);
   if (spec.frames.length > 1) {
     spriteTimer = setInterval(() => {
       i = (i + 1) % spec.frames.length;
-      window.SPRITES.draw(cv, spec.frames[i].g, spec.frames[i].p, 12);
+      window.SPRITES.draw(cv, spec.frames[i].g, spec.frames[i].p, SCALE);
     }, spec.interval || 400);
   }
 }

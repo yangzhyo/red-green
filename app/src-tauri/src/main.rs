@@ -46,14 +46,14 @@ fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     if app.get_webview_window(&label).is_some() {
         return Ok(());
     }
-    const PET_W: f64 = 140.0;
-    // 高度 = 内容 ~166 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
-    const PET_H: f64 = 184.0;
-    // 内容在窗口内居中，精灵两侧留白约 22-28px，加上窗口边距视觉距右缘约 30px
+    const PET_W: f64 = 116.0;
+    // 高度 = 内容 ~134 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
+    const PET_H: f64 = 152.0;
+    // 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
     const MARGIN_X: f64 = 4.0;
     const MARGIN_Y: f64 = 132.0;
     // 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
-    const SPACING: f64 = 188.0;
+    const SPACING: f64 = 158.0;
 
     // pets stack vertically along the right edge of the primary monitor's
     // work area (excludes the Dock and menu bar), growing bottom-up from
