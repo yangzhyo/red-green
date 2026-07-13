@@ -1,5 +1,5 @@
 // 三套像素皮肤：灯灯（红绿灯头机器人）/ 钳钳（螃蟹）/ 灰灰（猫）。
-// 皮肤按项目名哈希确定性分配——同一项目永远同一只。
+// 纯渲染器：皮肤分配（项目名 → 物种）在 skins.js。
 // 每个状态给出 1-2 帧像素矩阵 + 调色板；动作（跳/探头/摇摆）由 pet.css 负责。
 window.SPRITES = (function () {
   var C = {
@@ -215,16 +215,6 @@ window.SPRITES = (function () {
   }
 
   var MAKERS = { robot: robotState, crab: crabState, cat: catState };
-  var SKINS = ["robot", "crab", "cat"];
-
-  function pick(project) {
-    var h = 0;
-    project = project || "";
-    for (var i = 0; i < project.length; i++) {
-      h = (h * 31 + project.charCodeAt(i)) >>> 0;
-    }
-    return SKINS[h % SKINS.length];
-  }
 
   function spec(skin, state) {
     return (MAKERS[skin] || MAKERS.robot)(state) || MAKERS.robot("idle");
@@ -253,5 +243,5 @@ window.SPRITES = (function () {
     }
   }
 
-  return { pick: pick, spec: spec, draw: draw };
+  return { spec: spec, draw: draw };
 })();

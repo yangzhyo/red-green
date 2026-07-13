@@ -53,7 +53,7 @@ function render(m) {
   model = m;
   document.body.dataset.state = m.state;
 
-  const newSkin = window.SPRITES.pick(m.project);
+  const newSkin = window.SKINS.pick(m.project);
   if (newSkin !== skin || m.state !== prev) {
     skin = newSkin;
     document.body.dataset.skin = skin;

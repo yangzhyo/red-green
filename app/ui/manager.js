@@ -4,7 +4,8 @@ const { invoke } = window.__TAURI__.core;
 const { listen, emitTo } = window.__TAURI__.event;
 
 // 叫声：转移进入这些状态时发声，音色属物种、节奏属状态（前台静默规则见 reconcile）
-const CALL_STATES = new Set(["awaiting", "aborted", "your_turn", "completed"]);
+// 状态集与文件名契约在 calls.js，与 gen-sounds.mjs 共享同一处定义
+const CALL_STATES = new Set(CALLS.STATES);
 const ACK_STATES = new Set(["completed", "aborted"]);
 
 // sid -> { slot, prevState, since, acked }
@@ -50,7 +51,7 @@ async function reconcile(sessions) {
     // 叫声：仅在真正发生转移、且该会话的终端标签页不在前台时；被静默即消失，不补发
     if (effective !== pet.prevState && CALL_STATES.has(effective)) {
       if (!front || front !== s.tty) {
-        invoke("play_sound", { name: `${SPRITES.pick(s.project)}-${effective}` });
+        invoke("play_sound", { name: CALLS.name(SKINS.pick(s.project), effective) });
       }
     }
     pet.prevState = effective;

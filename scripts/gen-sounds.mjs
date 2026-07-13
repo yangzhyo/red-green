@@ -1,15 +1,19 @@
 #!/usr/bin/env node
-// Generate the 12 pet call sounds (3 skins x 4 states) as 16-bit mono WAV, no deps.
+// Generate the pet call sounds (皮肤 x 叫声状态 全矩阵) as 16-bit mono WAV, no deps.
 // 节奏属状态（听节奏辨事件），音色属物种（听声辨项目）——见 CONTEXT.md「叫声」。
+// 两条轴与文件名契约来自 app/ui/{skins,calls}.js，与运行时共享同一处定义。
 // Usage: node gen-sounds.mjs [outdir]   (default: app/src-tauri/sounds/)
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import "../app/ui/skins.js";
+import "../app/ui/calls.js";
+const { SKINS, CALLS } = globalThis;
 
 const SR = 44100;
 
-// 节奏语法：每个状态一串音符 {f: 频率Hz, d: 时长s, g: 后置间隔s}。
+// 节奏语法：每个状态一串音符 {f: 频率Hz, d: 时长s, g?: 后置间隔s}。
 // vol 是整档响度，紧急度递减：待确认 > 异常中止 ≈ 轮到你 > 已完成（最轻）
 const PATTERNS = {
   awaiting: {
@@ -17,26 +21,26 @@ const PATTERNS = {
     notes: [
       { f: 880, d: 0.065, g: 0.055 },
       { f: 880, d: 0.065, g: 0.055 },
-      { f: 880, d: 0.065, g: 0 },
+      { f: 880, d: 0.065 },
     ],
   },
   aborted: {
     vol: 0.85,
     notes: [
       { f: 587, d: 0.16, g: 0.05 },
-      { f: 311, d: 0.26, g: 0 },
+      { f: 311, d: 0.26 },
     ],
   },
   your_turn: {
     vol: 0.7,
     notes: [
       { f: 523, d: 0.11, g: 0.045 },
-      { f: 784, d: 0.15, g: 0 },
+      { f: 784, d: 0.15 },
     ],
   },
   completed: {
     vol: 0.45,
-    notes: [{ f: 1047, d: 0.09, g: 0 }],
+    notes: [{ f: 1047, d: 0.09 }],
   },
 };
 
@@ -107,21 +111,22 @@ const TIMBRES = {
 };
 
 function renderCall(timbre, pattern) {
-  const total = pattern.notes.reduce((s, nt) => s + nt.d + nt.g, 0) + 0.05;
+  const total = pattern.notes.reduce((s, nt) => s + nt.d + (nt.g ?? 0), 0) + 0.05;
   const buf = new Float64Array(Math.round(total * SR));
   let at = 0;
   for (const nt of pattern.notes) {
     const s = timbre.render(nt.f, nt.d);
     const off = Math.round(at * SR);
     for (let i = 0; i < s.length; i++) buf[off + i] += s[i];
-    at += nt.d + nt.g;
+    at += nt.d + (nt.g ?? 0);
   }
   let peak = 0;
   for (const v of buf) peak = Math.max(peak, Math.abs(v));
+  // 归一化到 vol*trim*0.9（vol、trim 均 ≤1），样本必然在 ±1 内，无需再钳位
   const k = (pattern.vol * timbre.trim * 0.9) / (peak || 1);
   const pcm = Buffer.alloc(buf.length * 2);
   for (let i = 0; i < buf.length; i++) {
-    pcm.writeInt16LE(Math.round(Math.max(-1, Math.min(1, buf[i] * k)) * 32767), i * 2);
+    pcm.writeInt16LE(Math.round(buf[i] * k * 32767), i * 2);
   }
   return pcm;
 }
@@ -148,10 +153,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const outdir = process.argv[2] ?? path.join(here, "..", "app", "src-tauri", "sounds");
 fs.mkdirSync(outdir, { recursive: true });
 
-for (const [skin, timbre] of Object.entries(TIMBRES)) {
-  for (const [state, pattern] of Object.entries(PATTERNS)) {
-    const file = path.join(outdir, `${skin}-${state}.wav`);
-    fs.writeFileSync(file, wav(renderCall(timbre, pattern)));
+// 沿共享轴遍历：皮肤缺音色或状态缺节奏会直接抛错，不会静默漏生成
+for (const skin of SKINS.LIST) {
+  for (const state of CALLS.STATES) {
+    const file = path.join(outdir, `${CALLS.name(skin, state)}.wav`);
+    fs.writeFileSync(file, wav(renderCall(TIMBRES[skin], PATTERNS[state])));
     console.log(`wrote ${file}`);
   }
 }
