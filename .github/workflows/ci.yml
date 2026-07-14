@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: cargo check
+        run: cargo check --manifest-path app/src-tauri/Cargo.toml
+
+      - name: JS/Shell 语法检查
+        run: |
+          set -e
+          for f in $(find app/ui hooks scripts -name '*.js' -o -name '*.mjs'); do
+            node --check "$f"
+          done
+          bash -n hooks/session-status.sh
+          echo OK
