@@ -42,6 +42,12 @@ body {
   line-height: 1.6;
   min-height: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  /* 与名牌同款限宽兜底：动词超出窗口时圆头同样会被裁成直角 */
+  box-sizing: border-box;
+  max-width: calc(100% - 8px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #pet {
@@ -58,7 +64,9 @@ body {
 }
 
 #tag {
-  max-width: 110px;
+  /* border-box 限宽在窗口内：胶囊圆头一旦超出窗口会被 overflow:hidden 裁成直角 */
+  box-sizing: border-box;
+  max-width: calc(100% - 8px);
   padding: 2px 10px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.4);

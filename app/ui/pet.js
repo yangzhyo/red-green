@@ -77,8 +77,10 @@ function render(m) {
   }
 
   const tag = document.getElementById("tag");
-  tag.textContent = m.project || "?";
-  tag.title = m.detail || "";
+  const project = m.project || "?";
+  tag.textContent = project;
+  // 名字截断后窗口内唯一能看全名的地方是这里：全名与近况合并进 tooltip
+  tag.title = m.detail ? `${project} — ${m.detail}` : project;
 }
 
 listen("pet-update", (e) => {
