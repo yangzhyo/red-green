@@ -10,7 +10,7 @@
 
 **领取** — 用户说「做 #N」：读 issue → 开分支（issue-N-英文短语）→ 实现 → 本地 /verify 验证。实现全部在本地会话完成，不派云端 agent。
 
-**交付** — 走 issue 的必走 PR，描述含 `Closes #N`。CI（macOS `cargo check` + JS/Shell 语法检查）必须绿。
+**交付** — 走 issue 的必走 PR，描述含 `Closes #N`。CI 必须绿（检查项以 .github/workflows/ci.yml 为准）。
 
 **审查** — PR 开出后跑 /code-review 双轴审：Standards（合不合仓库规范）、Spec（对不对得上 issue 验收标准）。发现贴 PR 评论，用户终审。
 

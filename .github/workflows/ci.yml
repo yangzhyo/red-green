@@ -26,9 +26,11 @@ jobs:
 
       - name: JS/Shell 语法检查
         run: |
-          set -e
-          for f in $(find app/ui hooks scripts -name '*.js' -o -name '*.mjs'); do
-            node --check "$f"
-          done
-          bash -n hooks/session-status.sh
-          echo OK
+          fail=0
+          while IFS= read -r -d '' f; do
+            node --check "$f" || fail=1
+          done < <(find app/ui hooks scripts \( -name '*.js' -o -name '*.mjs' \) -print0)
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || fail=1
+          done < <(find . hooks scripts -maxdepth 1 -name '*.sh' -print0)
+          exit $fail
