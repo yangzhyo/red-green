@@ -94,14 +94,7 @@ body[data-state="completed"] #pet {
   animation: wiggle 1.1s ease-in-out infinite;
 }
 
-body[data-state="aborted"] #pet {
-  animation: none;
-  transform: rotate(90deg) translateX(10px);
-}
-/* 螃蟹的异常中止是翻肚皮，不是侧躺 */
-body[data-skin="crab"][data-state="aborted"] #pet {
-  transform: scaleY(-1) translateY(-8px);
-}
+/* aborted 故意无规则：倒地姿态画在精灵网格里（布局可感知，气泡才能贴顶），静止本身就是表达 */
 
 @keyframes breathe {
   0%,

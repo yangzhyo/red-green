@@ -1,6 +1,8 @@
 // 三套像素皮肤：灯灯（红绿灯头机器人）/ 钳钳（螃蟹）/ 灰灰（猫）。
 // 纯渲染器：皮肤分配（项目名 → 物种）在 skins.js。
-// 每个状态给出 1-2 帧像素矩阵 + 调色板；动作（跳/探头/摇摆）由 pet.css 负责。
+// 静态姿态（坐/睡/举手/倒地）全部画在网格里；pet.css 只做周期动作（跳/探头/摇摆）。
+// 契约：每个状态网格的首行必须含可见像素——布局把 canvas 顶当作宠物头顶，
+// 气泡以恒定间距贴随，顶部空行会让气泡飘离头顶。
 window.SPRITES = (function () {
   var C = {
     running: "#ffc53d",
@@ -38,6 +40,39 @@ window.SPRITES = (function () {
     });
     return g;
   }
+  // 顺时针旋转 90°：竖姿变横躺（头朝右），与旧 CSS rotate(90deg) 同视觉
+  function rot(g) {
+    var h = g.length,
+      w = 0;
+    g.forEach(function (r) {
+      w = Math.max(w, r.length);
+    });
+    var out = [];
+    for (var r = 0; r < w; r++) {
+      var row = [];
+      for (var c = 0; c < h; c++) {
+        row.push((g[h - 1 - c] || [])[r] || ".");
+      }
+      out.push(row);
+    }
+    return out;
+  }
+  // 去掉首尾全空行：rot 产物必须重新满足「首行含可见像素」契约
+  function trim(g) {
+    function blank(r) {
+      return r.every(function (ch) {
+        return ch === ".";
+      });
+    }
+    var a = 0,
+      b = g.length;
+    while (a < b && blank(g[a])) a++;
+    while (b > a && blank(g[b - 1])) b--;
+    return g.slice(a, b);
+  }
+  function flipV(g) {
+    return g.slice().reverse();
+  }
 
   /* ---------- 灯灯 ---------- */
   var ROBOT_BASE = parse([
@@ -65,6 +100,7 @@ window.SPRITES = (function () {
     typeR: [[10, 2], [11, 2], [11, 11], [12, 11]],
     wave: [[11, 2], [12, 2], [9, 12], [10, 11]],
   };
+  var ROBOT_FALLEN = trim(rot(stamp(clone(ROBOT_BASE), ARMS.down, "A")));
   function robotPal(lampChar, lampColor, tip, blinkOff) {
     var p = {
       T: tip, H: C.housing, N: C.steelDk, L: C.steelDk,
@@ -97,8 +133,8 @@ window.SPRITES = (function () {
         return [{ g: pose("up"), p: robotPal("3", C.completed, C.completed) }];
       case "aborted":
         return [
-          { g: pose("down"), p: robotPal("1", C.aborted, C.aborted) },
-          { g: pose("down"), p: robotPal("1", C.aborted, C.aborted, true) },
+          { g: ROBOT_FALLEN, p: robotPal("1", C.aborted, C.aborted) },
+          { g: ROBOT_FALLEN, p: robotPal("1", C.aborted, C.aborted, true) },
         ];
     }
   }
@@ -122,6 +158,7 @@ window.SPRITES = (function () {
       : [[5, 0], [5, 1], [6, 0], [5, 14], [5, 15], [6, 15]];
     return stamp(g, claws, "P");
   }
+  var CRAB_FLIPPED = flipV(crabGrid(false));
   function crabPal(lamp, blinkOff) {
     return {
       E: C.white, I: C.shellDk, C: C.shell, P: C.shellDk,
@@ -148,8 +185,8 @@ window.SPRITES = (function () {
         return [{ g: crabGrid(true), p: crabPal(C.completed) }];
       case "aborted":
         return [
-          { g: crabGrid(false), p: crabPal(C.aborted) },
-          { g: crabGrid(false), p: crabPal(C.aborted, true) },
+          { g: CRAB_FLIPPED, p: crabPal(C.aborted) },
+          { g: CRAB_FLIPPED, p: crabPal(C.aborted, true) },
         ];
     }
   }
@@ -171,10 +208,6 @@ window.SPRITES = (function () {
     "...KK...KK....",
   ]);
   var CAT_SLEEP = parse([
-    "..............",
-    "..............",
-    "..............",
-    "..............",
     "..K.......K...",
     "..KK.....KK...",
     "..KKKKKKKKK...",
@@ -183,6 +216,17 @@ window.SPRITES = (function () {
     "KKKKKKKKKKKKK.",
     "KKKKKKKKKKKKK.",
     ".KKKKKKKKKKK..",
+  ]);
+  // 四脚朝天：头在右、x 眼、耳朵垂在头下，铃铛在颈侧
+  var CAT_FALLEN = parse([
+    ".K.K...K.K....",
+    ".K.K...K.K....",
+    "KKKKKKKKKKKKK.",
+    "KwwwwwwwwKKKK.",
+    "KwwwwwwwwKEKEK",
+    "KKKKKKKKKSKwKK",
+    ".KKKKKKKKKKKK.",
+    "..........K.K.",
   ]);
   function catPal(bell, closed, blinkOff) {
     return {
@@ -208,8 +252,8 @@ window.SPRITES = (function () {
         return [{ g: CAT_SIT, p: catPal(C.completed) }];
       case "aborted":
         return [
-          { g: CAT_SLEEP, p: catPal(C.aborted, true) },
-          { g: CAT_SLEEP, p: catPal(C.aborted, true, true) },
+          { g: CAT_FALLEN, p: catPal(C.aborted) },
+          { g: CAT_FALLEN, p: catPal(C.aborted, false, true) },
         ];
     }
   }
