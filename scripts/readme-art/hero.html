@@ -1,0 +1,131 @@
+<!doctype html>
+<!-- README 顶部 hero 舞台：复用真实精灵 app/ui/sprites.js 摆一张静态 CRT 海报。
+     由 scripts/gen-readme-art.sh 用 headless Chrome 截成 docs/assets/hero.png。
+     窗口尺寸 1200×440 即海报尺寸——CRT 铺满视口，截图无需裁剪。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>red-green hero</title>
+<style>
+  :root { --phos: #7dffb0; --phosdim: #2f6b47; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #05070a; }
+  body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  #crt {
+    position: absolute; left: 0; top: 0;
+    width: 1200px; height: 440px;
+    border-radius: 22px;
+    background: radial-gradient(120% 140% at 50% 6%, #0d1a14 0%, #080f0c 55%, #05080a 100%);
+    box-shadow: inset 0 0 90px rgba(0,0,0,.85), inset 0 0 26px rgba(125,255,176,.06);
+    overflow: hidden;
+  }
+  /* 扫描线 */
+  #crt::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.26) 2px 4px);
+    mix-blend-mode: multiply;
+  }
+  /* 屏面泛光 + 暗角 */
+  #crt::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 6;
+    background: radial-gradient(120% 130% at 50% 42%, rgba(125,255,176,.05), rgba(0,0,0,0) 60%);
+    box-shadow: inset 0 0 120px rgba(0,0,0,.6); border-radius: 22px;
+  }
+  #head {
+    position: absolute; left: 42px; top: 28px; right: 42px; z-index: 3;
+    color: var(--phos); text-shadow: 0 0 8px rgba(125,255,176,.55); letter-spacing: .5px;
+  }
+  #head .prompt { font-size: 30px; font-weight: 700; }
+  #head .prompt .cur {
+    display: inline-block; width: 15px; height: 26px; margin-left: 6px;
+    background: var(--phos); vertical-align: -3px; box-shadow: 0 0 10px rgba(125,255,176,.7);
+  }
+  #head .tag { margin-top: 8px; font-size: 14px; color: #9ff0c4; opacity: .82; text-shadow: 0 0 6px rgba(125,255,176,.3); }
+  #head .tag .c { color: var(--phosdim); }
+  /* 背景：淡淡的 session-status 读出，坐实"住在你的终端里" */
+  #log {
+    position: absolute; left: 44px; top: 116px; z-index: 1;
+    font-size: 13px; line-height: 1.72; color: var(--phos); opacity: .1; white-space: pre;
+    text-shadow: 0 0 6px rgba(125,255,176,.4);
+  }
+  #cast {
+    position: absolute; left: 0; right: 0; bottom: 64px; z-index: 3;
+    display: flex; align-items: flex-end; justify-content: center; gap: 86px;
+  }
+  .pet { position: relative; display: flex; flex-direction: column; align-items: center; gap: 9px; }
+  .bubble { height: 30px; font-size: 25px; line-height: 30px; filter: drop-shadow(0 0 6px rgba(0,0,0,.5)); }
+  .pet canvas { image-rendering: pixelated; display: block; filter: drop-shadow(0 3px 3px rgba(0,0,0,.55)); }
+  .tag {
+    padding: 2px 11px; border-radius: 999px; background: rgba(0,0,0,.5); color: #eef2f0;
+    font-size: 13px; white-space: nowrap; border: 1px solid rgba(255,255,255,.08);
+  }
+  .nap { opacity: .5; transform: scale(.8); transform-origin: bottom center; }
+  #floor {
+    position: absolute; left: 42px; right: 42px; bottom: 58px; height: 2px; z-index: 2;
+    background: linear-gradient(90deg, transparent, var(--phosdim) 12%, var(--phos) 50%, var(--phosdim) 88%, transparent);
+    box-shadow: 0 0 14px rgba(125,255,176,.5); opacity: .7;
+  }
+  .glow { position: absolute; bottom: 40px; width: 190px; height: 96px; z-index: 1; border-radius: 50%; filter: blur(13px); pointer-events: none; }
+</style>
+</head>
+<body>
+  <div id="crt">
+    <div id="head">
+      <div class="prompt">red-green<span class="cur"></span></div>
+      <div class="tag"><span class="c">#</span> a desktop pet for every Claude Code session &mdash; so you always know which one needs you</div>
+    </div>
+    <div id="log">$ watch ~/.claude/session-status
+  awaiting    api-gateway   permission?
+  your-turn   red-green     awaiting reply
+  completed   blog          done ✓</div>
+    <div id="floor"></div>
+    <div id="cast"></div>
+  </div>
+
+  <script src="../../app/ui/sprites.js"></script>
+  <script>
+    var BUBBLE = { idle:"💤", awaiting:"🚩❗", your_turn:"👋💬", completed:"✨", aborted:"💥" };
+    var GLOW = { awaiting:"#ff4d4f", your_turn:"#4096ff", completed:"#52c41a", idle:"#8a8f98" };
+    var CELL = 9; // 每格 CSS 像素，厚像素
+
+    function makePet(skin, state, project, opts) {
+      opts = opts || {};
+      var frame = window.SPRITES.spec(skin, state).frames[0];
+      var wrap = document.createElement("div");
+      wrap.className = "pet" + (opts.nap ? " nap" : "");
+      var b = document.createElement("div"); b.className = "bubble"; b.textContent = BUBBLE[state] || ""; wrap.appendChild(b);
+      var cv = document.createElement("canvas");
+      window.SPRITES.draw(cv, frame, 8);
+      var w = cv.width / 8;
+      cv.style.width = (w * CELL) + "px"; cv.style.height = (cv.height / 8 * CELL) + "px";
+      wrap.appendChild(cv);
+      var t = document.createElement("div"); t.className = "tag"; t.textContent = project; wrap.appendChild(t);
+      return wrap;
+    }
+
+    var cast = document.getElementById("cast"), crt = document.getElementById("crt");
+    // 叙事弧：待确认 → 轮到你 → 已完成，角落一只午睡
+    var lineup = [
+      { skin:"robot", state:"awaiting",  project:"api-gateway" },
+      { skin:"crab",  state:"your_turn", project:"red-green" },
+      { skin:"cat",   state:"completed", project:"blog" },
+      { skin:"cat",   state:"idle",      project:"notes", nap:true },
+    ];
+    lineup.forEach(function (p) { cast.appendChild(makePet(p.skin, p.state, p.project, p)); });
+
+    function placeGlows() {
+      var crtBox = crt.getBoundingClientRect();
+      cast.querySelectorAll(".pet").forEach(function (pet, i) {
+        var col = GLOW[lineup[i].state]; if (!col) return;
+        var r = pet.getBoundingClientRect();
+        var g = document.createElement("div"); g.className = "glow";
+        g.style.left = (r.left - crtBox.left + r.width/2 - 95) + "px";
+        g.style.background = "radial-gradient(50% 50%, " + col + "dd, " + col + "00 72%)";
+        g.style.opacity = lineup[i].nap ? ".35" : ".85";
+        crt.appendChild(g);
+      });
+    }
+    window.addEventListener("load", function () { setTimeout(placeGlows, 40); });
+  </script>
+</body>
+</html>

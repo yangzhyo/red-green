@@ -1,0 +1,80 @@
+<!doctype html>
+<!-- README 状态图鉴：复用真实精灵 app/ui/sprites.js，以灯灯（robot）演全六态。
+     由 scripts/gen-readme-art.sh 用 headless Chrome 截成 docs/assets/states.png。
+     窗口尺寸 1320×300 即图鉴尺寸——CRT 铺满视口，截图无需裁剪。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>red-green state legend</title>
+<style>
+  :root { --phos: #7dffb0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #05070a; }
+  body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  #crt {
+    position: absolute; left: 0; top: 0;
+    width: 1320px; height: 300px;
+    background: radial-gradient(120% 160% at 50% 0%, #0d1a14 0%, #080f0c 60%, #05080a 100%);
+    box-shadow: inset 0 0 90px rgba(0,0,0,.8), inset 0 0 26px rgba(125,255,176,.05);
+    overflow: hidden; display: grid; grid-template-columns: repeat(6, 1fr);
+  }
+  #crt::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 9;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.22) 2px 4px);
+    mix-blend-mode: multiply;
+  }
+  .cell { position: relative; display: flex; flex-direction: column; align-items: center; padding: 20px 6px 18px; gap: 6px; }
+  .cell + .cell::before {
+    content: ""; position: absolute; left: 0; top: 24px; bottom: 24px; width: 1px;
+    background: linear-gradient(rgba(125,255,176,0), rgba(125,255,176,.14), rgba(125,255,176,0));
+  }
+  .bubble { height: 30px; font-size: 23px; line-height: 30px; display: flex; align-items: center; }
+  .verb { font-size: 12px; font-weight: 600; font-style: italic; color: rgba(0,0,0,.78); background: rgba(245,246,248,.9); border-radius: 999px; padding: 2px 9px; line-height: 1.5; }
+  .pose { height: 132px; display: flex; align-items: flex-end; }
+  .pose canvas { image-rendering: pixelated; display: block; filter: drop-shadow(0 3px 3px rgba(0,0,0,.5)); }
+  .name { font-size: 15px; font-weight: 700; margin-top: 4px; text-shadow: 0 0 8px currentColor; }
+  .en { font-size: 10.5px; color: #7f8a86; letter-spacing: .4px; text-transform: uppercase; margin-top: -1px; }
+  .rhythm { font-size: 11px; color: #93b7a6; margin-top: 5px; display: flex; align-items: center; gap: 6px; }
+  .dots { letter-spacing: 1px; font-size: 9px; }
+</style>
+</head>
+<body>
+  <div id="crt"></div>
+  <script src="../../app/ui/sprites.js"></script>
+  <script>
+    var BUBBLE = { running:"", awaiting:"🚩❗", your_turn:"👋💬", completed:"✨", aborted:"💥", idle:"💤" };
+    // 叫声节奏文案以 CONTEXT.md「叫声」为准；运行中与空闲无叫声
+    var CELLS = [
+      { s:"running",   zh:"运行中",   en:"running",   col:"#ffc53d", dots:"—",   beat:"无叫声" },
+      { s:"awaiting",  zh:"待确认",   en:"awaiting",  col:"#ff6b6d", dots:"●●●", beat:"急促三连音" },
+      { s:"your_turn", zh:"轮到你",   en:"your turn", col:"#4096ff", dots:"●●↗", beat:"上扬双音" },
+      { s:"completed", zh:"已完成",   en:"completed", col:"#52c41a", dots:"●",   beat:"轻短单音" },
+      { s:"aborted",   zh:"异常中止", en:"aborted",   col:"#e05c58", dots:"●●↘", beat:"下坠双音" },
+      { s:"idle",      zh:"空闲",     en:"idle",      col:"#b8b8b8", dots:"—",   beat:"无叫声" },
+    ];
+    var CELL = 7;
+    var crt = document.getElementById("crt");
+    CELLS.forEach(function (c) {
+      var cell = document.createElement("div"); cell.className = "cell";
+      var b = document.createElement("div"); b.className = "bubble";
+      if (c.s === "running") { var v = document.createElement("span"); v.className = "verb"; v.textContent = "Pondering…"; b.appendChild(v); }
+      else b.textContent = BUBBLE[c.s];
+      cell.appendChild(b);
+      var pose = document.createElement("div"); pose.className = "pose";
+      var cv = document.createElement("canvas");
+      var frame = window.SPRITES.spec("robot", c.s).frames[0];
+      window.SPRITES.draw(cv, frame, 8);
+      var w = cv.width / 8, h = cv.height / 8;
+      cv.style.width = (w * CELL) + "px"; cv.style.height = (h * CELL) + "px";
+      pose.appendChild(cv); cell.appendChild(pose);
+      var n = document.createElement("div"); n.className = "name"; n.textContent = c.zh; n.style.color = c.col; cell.appendChild(n);
+      var en = document.createElement("div"); en.className = "en"; en.textContent = c.en; cell.appendChild(en);
+      var r = document.createElement("div"); r.className = "rhythm";
+      var d = document.createElement("span"); d.className = "dots"; d.textContent = c.dots; d.style.color = c.col;
+      var lb = document.createElement("span"); lb.textContent = c.beat;
+      r.appendChild(d); r.appendChild(lb); cell.appendChild(r);
+      crt.appendChild(cell);
+    });
+  </script>
+</body>
+</html>
