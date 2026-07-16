@@ -12,7 +12,7 @@
 
 **交付** — 走 issue 的必走 PR，描述含 `Closes #N`。CI 必须绿（检查项以 .github/workflows/ci.yml 为准）。
 
-**审查** — PR 开出后跑 /code-review 双轴审：Standards（合不合仓库规范）、Spec（对不对得上 issue 验收标准）。发现贴 PR 评论，用户终审。
+**审查** — PR 开出后跑 /code-review 双轴审：Standards（合不合仓库规范）、Spec（对不对得上 issue 验收标准）。评审毕**必在 PR 留一条小结评论，无论有无发现**——有发现逐条贴；无发现也写明双轴通过并点出 Spec 对齐了哪几项验收标准（如「Standards 无发现；Spec 对齐 #N 全部验收项」）。没有这条小结＝审查未完成、不予合并——它既是审查步的完成定义，也是用户终审的可见抓手。
 
 **合并** — 只在用户说「合」之后执行：`gh pr merge --squash --delete-branch`。squash commit 信息沿用「type: 中文描述」风格；main 保持线性史。
 
