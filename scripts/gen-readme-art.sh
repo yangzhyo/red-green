@@ -19,6 +19,6 @@ shot() { # <html-abs-path> <width> <height> <png-abs-path>
 }
 
 shot "$art/hero.html"   1200 440 "$out/hero.png"
-shot "$art/legend.html" 1320 300 "$out/states.png"
+shot "$art/legend.html" 1380 508 "$out/states.png"
 
 echo "README art regenerated → docs/assets/hero.png, docs/assets/states.png"

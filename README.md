@@ -27,7 +27,7 @@
 
 <p align="center">
   <img src="docs/assets/states.png" width="860"
-       alt="red-green 的六个会话状态：运行中、待确认、轮到你、已完成、异常中止、空闲" />
+       alt="red-green 三套皮肤（灯灯 / 钳钳 / 灰灰）× 六个会话状态：运行中、待确认、轮到你、已完成、异常中止、空闲" />
 </p>
 
 六个**会话状态**由回合边界处的 Claude Code hook 判定，驱动宠物的姿态、气泡与叫声。完整定义——含「轮到你」的问句启发式、「已阅」规则（聚焦终端即视为看到，但看到问题不等于回答了它）、前台静默——见 [CONTEXT.md](CONTEXT.md)。
