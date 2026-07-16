@@ -1,0 +1,113 @@
+<!doctype html>
+<!-- README 状态图鉴:复用真实精灵 app/ui/sprites.js,三套皮肤 × 六态矩阵。
+     列=会话状态(表头带气泡 + 状态名 + 叫声节奏),行=灯灯/钳钳/灰灰。
+     由 scripts/gen-readme-art.sh 用 headless Chrome 截成 docs/assets/states.png。
+     窗口尺寸 1380×508 即图鉴尺寸——CRT 铺满视口,截图无需裁剪。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>red-green state legend</title>
+<style>
+  :root { --phos: #7dffb0; }
+  * { margin: 0; box-sizing: border-box; }
+  html, body { background: #05070a; }
+  body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  #crt {
+    position: absolute; left: 0; top: 0;
+    width: 1380px; height: 508px;
+    background: radial-gradient(120% 150% at 50% 0%, #0d1a14 0%, #080f0c 60%, #05080a 100%);
+    box-shadow: inset 0 0 90px rgba(0,0,0,.8), inset 0 0 26px rgba(125,255,176,.05);
+    overflow: hidden;
+    display: grid; grid-template-columns: 96px repeat(6, 1fr);
+    grid-template-rows: 116px repeat(3, 1fr);
+    padding: 18px 14px;
+  }
+  #crt::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 9;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.2) 2px 4px);
+    mix-blend-mode: multiply;
+  }
+  /* 表头列:气泡 + 状态名 + 英文 + 叫声节奏 */
+  .head { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; padding-bottom: 10px; position: relative; }
+  .head .bubble { height: 28px; font-size: 22px; line-height: 28px; display: flex; align-items: center; }
+  .head .verb { font-size: 11px; font-weight: 600; font-style: italic; color: rgba(0,0,0,.78); background: rgba(245,246,248,.9); border-radius: 999px; padding: 2px 8px; line-height: 1.5; }
+  .head .name { font-size: 14px; font-weight: 700; text-shadow: 0 0 8px currentColor; }
+  .head .en { font-size: 9.5px; color: #7f8a86; letter-spacing: .3px; text-transform: uppercase; }
+  .head .rhythm { font-size: 10px; color: #93b7a6; display: flex; align-items: center; gap: 5px; margin-top: 2px; }
+  .head .dots { letter-spacing: 1px; font-size: 8px; }
+  /* 皮肤行首标签 */
+  .rowlab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: #b6c2bc; }
+  .rowlab .emoji { font-size: 20px; }
+  .rowlab .zh { font-size: 12px; letter-spacing: .5px; }
+  /* 姿态格 */
+  .pose { display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8px; }
+  .pose canvas { image-rendering: pixelated; display: block; filter: drop-shadow(0 3px 3px rgba(0,0,0,.5)); }
+  /* 分隔线 */
+  .corner { position: relative; }
+  .corner .hint { position: absolute; right: 6px; bottom: 10px; font-size: 10px; color: #55635c; }
+  .vsep::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 8px; width: 1px; background: linear-gradient(rgba(125,255,176,0), rgba(125,255,176,.12), rgba(125,255,176,0)); }
+  .hsep::after { content: ""; position: absolute; left: 8px; right: 8px; top: 0; height: 1px; background: linear-gradient(90deg, rgba(125,255,176,0), rgba(125,255,176,.1), rgba(125,255,176,0)); }
+</style>
+</head>
+<body>
+  <div id="crt"></div>
+  <script src="../../app/ui/sprites.js"></script>
+  <script>
+    var BUBBLE = { running:"", awaiting:"🚩❗", your_turn:"👋💬", completed:"✨", aborted:"💥", idle:"💤" };
+    // 叫声节奏文案以 CONTEXT.md「叫声」为准;运行中与空闲无叫声
+    var STATES = [
+      { s:"running",   zh:"运行中",   en:"running",   col:"#ffc53d", dots:"—",   beat:"无叫声" },
+      { s:"awaiting",  zh:"待确认",   en:"awaiting",  col:"#ff6b6d", dots:"●●●", beat:"急促三连音" },
+      { s:"your_turn", zh:"轮到你",   en:"your turn", col:"#4096ff", dots:"●●↗", beat:"上扬双音" },
+      { s:"completed", zh:"已完成",   en:"completed", col:"#52c41a", dots:"●",   beat:"轻短单音" },
+      { s:"aborted",   zh:"异常中止", en:"aborted",   col:"#e05c58", dots:"●●↘", beat:"下坠双音" },
+      { s:"idle",      zh:"空闲",     en:"idle",      col:"#b8b8b8", dots:"—",   beat:"无叫声" },
+    ];
+    var SKINS = [
+      { key:"robot", zh:"灯灯", emoji:"🚦" },
+      { key:"crab",  zh:"钳钳", emoji:"🦀" },
+      { key:"cat",   zh:"灰灰", emoji:"🐱" },
+    ];
+    var SCALE = 6; // 直接按显示尺寸渲染,1:1 不重采样,像素最锐
+    var crt = document.getElementById("crt");
+
+    function el(cls) { var d = document.createElement("div"); d.className = cls; return d; }
+
+    // 表头行:左上角 + 6 个状态头
+    var corner = el("corner");
+    var hint = el("hint"); hint.textContent = "皮肤 ↓ / 状态 →"; corner.appendChild(hint);
+    crt.appendChild(corner);
+    STATES.forEach(function (st, i) {
+      var h = el("head" + (i ? " vsep" : ""));
+      var b = el("bubble");
+      if (st.s === "running") { var v = el("verb"); v.textContent = "Pondering…"; b.appendChild(v); }
+      else b.textContent = BUBBLE[st.s];
+      h.appendChild(b);
+      var n = el("name"); n.textContent = st.zh; n.style.color = st.col; h.appendChild(n);
+      var en = el("en"); en.textContent = st.en; h.appendChild(en);
+      var r = el("rhythm");
+      var d = el("dots"); d.textContent = st.dots; d.style.color = st.col;
+      var lb = document.createElement("span"); lb.textContent = st.beat;
+      r.appendChild(d); r.appendChild(lb); h.appendChild(r);
+      crt.appendChild(h);
+    });
+
+    // 三行皮肤 × 六态
+    SKINS.forEach(function (sk) {
+      var lab = el("rowlab hsep");
+      var em = el("emoji"); em.textContent = sk.emoji; lab.appendChild(em);
+      var zh = el("zh"); zh.textContent = sk.zh; lab.appendChild(zh);
+      crt.appendChild(lab);
+      STATES.forEach(function (st, i) {
+        var cell = el("pose hsep" + (i ? " vsep" : ""));
+        var cv = document.createElement("canvas");
+        var frame = window.SPRITES.spec(sk.key, st.s).frames[0];
+        window.SPRITES.draw(cv, frame, SCALE);
+        cv.style.width = cv.width + "px"; cv.style.height = cv.height + "px";
+        cell.appendChild(cv);
+        crt.appendChild(cell);
+      });
+    });
+  </script>
+</body>
+</html>
