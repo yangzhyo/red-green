@@ -21,4 +21,4 @@
 ## 运行与验证
 
 - 宠物以 .app 常驻（LaunchAgent `dev.y9g.red-green`）；开发迭代前先 `launchctl unload` 该 agent，再在 app/ 下 `pnpm tauri dev`。
-- 端到端验证用 /verify skill：注入假会话状态文件，观察叫声（afplay 进程参数）与宠物窗口渲染。
+- 端到端验证用 /verify skill：注入假会话状态文件与假用量文件，观察叫声（afplay 进程参数）、宠物窗口与用量表的渲染。

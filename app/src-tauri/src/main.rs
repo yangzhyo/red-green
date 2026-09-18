@@ -11,12 +11,19 @@ fn status_dir() -> PathBuf {
         .join("session-status")
 }
 
+// 账号级用量文件：由 status line 脚本写入，与会话文件同目录、共用一个 watcher，
+// 靠文件名区分（见 docs/protocol.md「用量文件」）
+const USAGE_FILE: &str = "usage.json";
+
 fn read_snapshot() -> Vec<Value> {
     let mut sessions = Vec::new();
     if let Ok(entries) = std::fs::read_dir(status_dir()) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some(USAGE_FILE) {
                 continue;
             }
             if let Ok(text) = std::fs::read_to_string(&path) {
@@ -40,57 +47,144 @@ fn get_sessions() -> Vec<Value> {
     read_snapshot()
 }
 
+// 文件不存在或不是合法 JSON 都返回 Null：前端据此整块不显示用量
+fn read_usage() -> Value {
+    std::fs::read_to_string(status_dir().join(USAGE_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+#[tauri::command]
+fn get_usage() -> Value {
+    read_usage()
+}
+
+// ---- 宠物列的几何：沿工作区右缘从上往下排，用量表在最上，宠物从它下面依次往下叠 ----
+// 屏幕右缘的上下两端都有常用按钮（聊天窗口右上的搜索、右下的发送），列从上排起、起点避开顶部工具栏，
+// 下部留给发送按钮之类的东西
+const PET_W: f64 = 116.0;
+// 高度 = 内容 ~134 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
+const PET_H: f64 = 152.0;
+// 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
+const MARGIN_X: f64 = 4.0;
+// 顶边距：工作区上缘（菜单栏之下）到用量表上缘。聊天类窗口贴顶时，工具栏（搜索等按钮）
+// 约占工作区上缘以下 60–80pt，取 120 留出余量
+const MARGIN_TOP: f64 = 120.0;
+// 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
+const SPACING: f64 = 158.0;
+// 槽位间隙；用量表与 slot 0 之间也用它
+const GAP: f64 = SPACING - PET_H;
+// 用量表：与宠物同宽、同一条纵轴
+const GAUGE_W: f64 = PET_W;
+// 高度 = 像素圆表 60（15 格 × 4px）+ 顶部 2px + 底部投影 6px
+const GAUGE_H: f64 = 68.0;
+const GAUGE_LABEL: &str = "usage-gauge";
+// slot 0 上缘距工作区上缘：给用量表留位，没有用量表时这块也空着，宠物位置不因它来去而变
+const PET_TOP: f64 = MARGIN_TOP + GAUGE_H + GAP;
+
+// 宠物列的锚点：主显示器工作区（不含 Dock 与菜单栏）的右上角，逻辑坐标；
+// 显示器并排摆放时工作区原点不为零，所以要带上 position。取不到显示器时用固定点
+fn column_anchor(app: &AppHandle) -> (f64, f64) {
+    match app.primary_monitor() {
+        Ok(Some(m)) => {
+            let scale = m.scale_factor();
+            let wa = m.work_area();
+            let pos = wa.position.to_logical::<f64>(scale);
+            let size = wa.size.to_logical::<f64>(scale);
+            (pos.x + size.width, pos.y)
+        }
+        // 让 slot 0 落在 (600, 194)：720-4-116 = 600，0+194 = 194
+        _ => (720.0, 0.0),
+    }
+}
+
+// 宠物与用量表共用的窗口形态：透明、无边框、无阴影、置顶、跨所有桌面空间、
+// 首次点击即生效（不用先激活窗口）
+fn ambient_window(
+    app: &AppHandle,
+    label: &str,
+    url: &str,
+    title: &str,
+    size: (f64, f64),
+    pos: (f64, f64),
+) -> Result<(), String> {
+    tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(size.0, size.1)
+        .position(pos.0, pos.1)
+        .transparent(true)
+        .decorations(false)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .accept_first_mouse(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     let label = format!("pet-{sid}");
     if app.get_webview_window(&label).is_some() {
         return Ok(());
     }
-    const PET_W: f64 = 116.0;
-    // 高度 = 内容 ~134 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
-    const PET_H: f64 = 152.0;
-    // 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
-    const MARGIN_X: f64 = 4.0;
-    const MARGIN_Y: f64 = 132.0;
-    // 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
-    const SPACING: f64 = 158.0;
-
-    // pets stack vertically along the right edge of the primary monitor's
-    // work area (excludes the Dock and menu bar), growing bottom-up from
-    // the bottom-right corner; monitor origin matters when displays are
-    // arranged side by side
-    let (x, y) = match app.primary_monitor() {
-        Ok(Some(m)) => {
-            let scale = m.scale_factor();
-            let wa = m.work_area();
-            let pos = wa.position.to_logical::<f64>(scale);
-            let size = wa.size.to_logical::<f64>(scale);
-            (
-                pos.x + size.width - MARGIN_X - PET_W,
-                pos.y + size.height - PET_H - MARGIN_Y - slot as f64 * SPACING,
-            )
-        }
-        _ => (600.0, 600.0 - slot as f64 * SPACING),
-    };
-
-    tauri::WebviewWindowBuilder::new(
+    // 宠物沿右缘从用量表下面往下叠
+    let (right, top) = column_anchor(&app);
+    let x = right - MARGIN_X - PET_W;
+    let y = top + PET_TOP + slot as f64 * SPACING;
+    ambient_window(
         &app,
         &label,
-        tauri::WebviewUrl::App(format!("pet.html?sid={sid}").into()),
+        &format!("pet.html?sid={sid}"),
+        "red-green pet",
+        (PET_W, PET_H),
+        (x, y),
     )
-    .title("red-green pet")
-    .inner_size(PET_W, PET_H)
-    .position(x, y)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .resizable(false)
-    .always_on_top(true)
-    .visible_on_all_workspaces(true)
-    .accept_first_mouse(true)
-    .build()
-    .map_err(|e| e.to_string())?;
-    Ok(())
+}
+
+// 用量表只有一个：列的最上面，下缘与 slot 0 宠物窗口隔一个槽位间隙
+#[tauri::command]
+fn ensure_gauge(app: AppHandle) -> Result<(), String> {
+    if app.get_webview_window(GAUGE_LABEL).is_some() {
+        return Ok(());
+    }
+    let (right, top) = column_anchor(&app);
+    let x = right - MARGIN_X - GAUGE_W;
+    let y = top + MARGIN_TOP;
+    ambient_window(
+        &app,
+        GAUGE_LABEL,
+        "gauge.html",
+        "red-green usage gauge",
+        (GAUGE_W, GAUGE_H),
+        (x, y),
+    )
+}
+
+#[tauri::command]
+fn remove_gauge(app: AppHandle) {
+    if let Some(w) = app.get_webview_window(GAUGE_LABEL) {
+        let _ = w.close();
+    }
+}
+
+// 光标在用量表窗口内时给出窗口内的逻辑坐标，否则 None。
+// 两边先各自化为逻辑坐标再比较：cursor_position 按主显示器的缩放给物理坐标，
+// outer_position / outer_size 按窗口所在显示器的缩放——用量表被拖到缩放不同的外接屏时两者基准不同
+fn gauge_cursor_local(app: &AppHandle, w: &tauri::WebviewWindow) -> Option<Value> {
+    let primary_scale = app.primary_monitor().ok()??.scale_factor();
+    let c = app.cursor_position().ok()?.to_logical::<f64>(primary_scale);
+    let scale = w.scale_factor().ok()?;
+    let p = w.outer_position().ok()?.to_logical::<f64>(scale);
+    let s = w.outer_size().ok()?.to_logical::<f64>(scale);
+    let (dx, dy) = (c.x - p.x, c.y - p.y);
+    if dx < 0.0 || dy < 0.0 || dx >= s.width || dy >= s.height {
+        return None;
+    }
+    Some(serde_json::json!({ "x": dx, "y": dy }))
 }
 
 #[tauri::command]
@@ -282,8 +376,11 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_sessions,
+            get_usage,
             ensure_pet,
             remove_pet,
+            ensure_gauge,
+            remove_gauge,
             focus_terminal,
             frontmost_tty,
             play_call
@@ -314,6 +411,28 @@ fn main() {
                         .is_ok()
                     {}
                     let _ = handle.emit("sessions-changed", read_snapshot());
+                    // 用量文件与会话文件同目录：每次目录变化都顺带推一次，manager 侧去重
+                    let _ = handle.emit("usage-changed", read_usage());
+                }
+            });
+
+            // 用量表的悬停也在 Rust 侧：非焦点窗口收不到 WebKit 的 mousemove，
+            // 只能轮询光标位置。进入窗口后持续推送窗口内的逻辑坐标（页面自己判定
+            // 是否落在圆上），离开推一次 null；用量表不存在时什么都不做
+            let hover = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut inside = false;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    let Some(w) = hover.get_webview_window(GAUGE_LABEL) else {
+                        inside = false;
+                        continue;
+                    };
+                    let local = gauge_cursor_local(&hover, &w);
+                    if local.is_some() || inside {
+                        inside = local.is_some();
+                        let _ = hover.emit_to(GAUGE_LABEL, "gauge-hover", local);
+                    }
                 }
             });
 

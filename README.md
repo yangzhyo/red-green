@@ -22,6 +22,8 @@
 - **一会话一宠物**，脚下**名牌**写着项目名；**皮肤**按项目名哈希分配（灯灯🚦 / 钳钳🦀 / 灰灰🐱），同一项目永远同一只——看形象就知是哪个项目。
 - **点宠物**直接聚焦对应的 Terminal 标签页（Apple Terminal，tmux 也认）。
 - 需要拉回注意力的状态还会**叫**：音色随皮肤（听声辨项目），节奏随状态（听节奏辨事件）；你正看着的那个会话不出声（**前台静默**）。
+- 宠物列顶上有一枚**用量表**：账号在五小时窗口与七天窗口里已用的比例，外圈五小时、内圈七天，灯色从绿到红；悬停展开重置时刻。用量耗尽前就能看到，不用回终端敲 `/usage`。
+- 整列沿屏幕右缘**从上往下**排，起点避开聊天窗口贴顶时的工具栏，下部留给发送按钮之类的东西；宠物和用量表都可拖动。
 
 ## 状态图鉴
 
@@ -35,7 +37,7 @@
 ## 安装与运行
 
 ```sh
-./install.sh                 # 1. 装全局 hooks（对新启动的会话生效）
+./install.sh                 # 1. 装全局 hooks 与 status line（对新启动的会话生效）
 cd app && pnpm install       # 2. 前端依赖（仅 @tauri-apps/cli）
 ../scripts/install-app.sh    # 3. 构建 .app 装进 ~/Applications 并注册登录自启
 ```
@@ -48,13 +50,14 @@ cd app && pnpm install       # 2. 前端依赖（仅 @tauri-apps/cli）
 
 ```
 hooks/session-status.sh    # Claude Code hook：把会话状态写进 ~/.claude/session-status/
-scripts/merge-hooks.mjs    # 把 hook 配置幂等合并进 ~/.claude/settings.json（先备份）
+statusline/usage.sh        # Claude Code status line：把账号用量写进同一目录（hooks 拿不到用量）
+scripts/merge-settings.mjs # 把 hook 与 status line 配置幂等合并进 ~/.claude/settings.json（先备份）
 app/
-  ui/          manager（隐藏的逻辑中枢）+ pet（哑渲染器）+ sprites/skins/calls
-  src-tauri/   Rust：文件 watcher + 命令（快照 / 窗口 / 聚焦 / 前台 tty / 叫声）
+  ui/          manager（隐藏的逻辑中枢）+ pet / gauge（哑渲染器）+ sprites/skins/calls/drag
+  src-tauri/   Rust：文件 watcher + 命令（快照 / 用量 / 窗口 / 聚焦 / 前台 tty / 叫声）+ 光标轮询（用量表悬停）
 ```
 
-一句话链路：**hook 在回合边界写状态文件 → Rust watcher 感知变化 → manager 裁决皮肤 / 已阅 / 该不该叫 → 每只 pet 窗口哑渲染**。hooks 与 app 之间的契约见 [docs/protocol.md](docs/protocol.md)，关键架构决策见 [docs/adr/](docs/adr/)。
+一句话链路：**hook 在回合边界写状态文件 → Rust watcher 感知变化 → manager 裁决皮肤 / 已阅 / 该不该叫 → 每只 pet 窗口哑渲染**。账号用量走旁路：status line 脚本写同目录的 usage.json，宠物列顶上的用量表显示一份（悬停展开明细）。hooks 与 app 之间的契约见 [docs/protocol.md](docs/protocol.md)，关键架构决策见 [docs/adr/](docs/adr/)。
 
 宠物形象与叫声都是预渲染、可重跑的：改皮肤看 `app/ui/sprites.js`，改叫声重跑 `scripts/gen-calls.mjs`，顶部这两张图重跑 `scripts/gen-readme-art.sh`。
 

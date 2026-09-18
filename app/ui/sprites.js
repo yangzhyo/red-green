@@ -4,6 +4,9 @@
 // 契约：每个状态网格的首行必须含可见像素——布局把 canvas 顶当作宠物头顶，
 // 气泡以恒定间距贴随，顶部空行会让气泡飘离头顶。
 window.SPRITES = (function () {
+  // 内部 8px/格、CSS 4px/格（Retina 2x 整数倍，像素不糊）；draw 里的 /2 即这层关系
+  var SCALE = 8;
+  // 调色板对外可见：用量表沿用壳体色与灯色，不另抄一份
   var C = {
     running: "#ffc53d",
     awaiting: "#ff4d4f",
@@ -296,5 +299,5 @@ window.SPRITES = (function () {
     }
   }
 
-  return { spec: spec, draw: draw };
+  return { spec: spec, draw: draw, C: C, SCALE: SCALE };
 })();

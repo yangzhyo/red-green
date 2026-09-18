@@ -1,6 +1,6 @@
 ---
 name: verify
-description: 驱动 red-green 桌面宠物 app 做端到端验证——注入假会话状态文件、观察叫声(afplay 进程参数)与宠物窗口渲染。
+description: 驱动 red-green 桌面宠物 app 做端到端验证——注入假会话状态文件与假用量文件、观察叫声(afplay 进程参数)、宠物窗口与用量表的渲染(含模拟光标悬停/拖动)。
 ---
 
 # 验证 red-green 的改动
@@ -34,6 +34,28 @@ app 监听 `~/.claude/session-status/*.json`(hooks 契约见 docs/protocol.md),�
   `node -e 'await import("./app/ui/skins.js");console.log(SKINS.pick("名字"))' --input-type=module` 现算)。
 - 状态转移 = 改 `state` 重写文件;删文件 = 宠物离场。文件监听秒级生效,留 2s 余量。
 
+## 驱动:注入假用量
+
+用量是账号级的,同目录的 `usage.json`(协议见 docs/protocol.md「用量文件」),写文件即驱动、删文件即消失:
+
+```json
+{"five_hour":{"used_percentage":87,"resets_at":<未来Unix秒>},
+ "seven_day":{"used_percentage":41,"resets_at":<未来Unix秒>},"updated_at":"<ISO时间>"}
+```
+
+- 至少要有一只宠物在场(用量表在宠物列最上面、宠物在它下面往下叠,没有宠物就没有用量表)。
+- 用量表静置是一枚像素圆表(外圈五小时、内圈七天、圆心五小时数字),悬停才展开两行明细。悬停由 Rust 轮询光标位置驱动,可用 `scripts/mousemove.swift` 模拟(本机实测不需要额外授权):
+
+  ```bash
+  swiftc -O scripts/mousemove.swift -o /tmp/mousemove
+  /tmp/mousemove 1250 189 1450 189     # 逻辑坐标,从起点分步移到终点
+  # 圆心 = (工作区右缘 - MARGIN_X - GAUGE_W/2, 工作区上缘 + MARGIN_TOP + 2 + 30),常量见 main.rs;
+  # 本机(菜单栏 37)≈ (右缘-62, 189);slot n 宠物窗口上缘 = 工作区上缘 + PET_TOP + n×SPACING
+  /tmp/mousemove 1450 189 1350 260 drag  # 末尾加 drag = 按住拖动:验证用量表可拖
+  ```
+- `resets_at` 给过去的时间 → 该窗口 0%、明细里无重置时刻;两个窗口都缺席或文件删除 → 用量表消失。
+- 真实通路走 status line:`echo '{"rate_limits":{...}}' | ~/.claude/red-green-usage.sh` 等价于 Claude Code 的一次重绘。
+
 ## 观察
 
 **叫声**:afplay 是短命进程,轮询抓参数(路径里的 `皮肤-状态.wav` 就是证据):
@@ -58,3 +80,9 @@ ppid 区分实例(dev = target/debug 的进程号)。dev 实例的资源解析�
 - app 启动前状态文件已是叫声状态 → 静默采纳,不补叫(首见不算转移)
 - 未知 state → 不叫、不崩、精灵回退 robot idle
 - 删状态文件 → 宠物离场
+- 写入 usage.json → 屏幕右上出现用量表(第一只宠物头顶、聊天窗口工具栏之下),圆心数字与文件的五小时比例一致;不叫、状态不变
+- 注入第二个会话 → 第二只宠物在第一只下方 SPACING(158)处
+- 光标移到圆上 → 展开两行明细,两个窗口的比例与重置时刻与文件一致;移出窗口 → 收回;进窗口但没碰到圆 → 不展开
+- 两个窗口的 `resets_at` 都在过去 → 用量表消失(视同无数据)
+- 删 usage.json → 用量表消失,宠物其余表现不变
+- 所有宠物离场 → 用量表也消失;宠物回来且 usage.json 仍在 → 用量表跟着回来

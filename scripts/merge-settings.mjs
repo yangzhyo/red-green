@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Merge red-green's hook configuration into ~/.claude/settings.json.
-// Idempotent: entries are recognized by the hook script path and replaced,
+// Merge red-green's Claude Code configuration into ~/.claude/settings.json:
+// the session-state hooks and the usage status line.
+// Idempotent: entries are recognized by the script path and replaced,
 // never duplicated. A timestamped backup is written before any change.
 
 import fs from "node:fs";
@@ -8,7 +9,8 @@ import path from "node:path";
 import os from "node:os";
 
 const SETTINGS = path.join(os.homedir(), ".claude", "settings.json");
-const SCRIPT = path.join(os.homedir(), ".claude", "hooks", "red-green-status.sh");
+const HOOK_SCRIPT = path.join(os.homedir(), ".claude", "hooks", "red-green-status.sh");
+const USAGE_SCRIPT = path.join(os.homedir(), ".claude", "red-green-usage.sh");
 
 // Which events feed the pets, and which matcher (if any) filters them.
 // Notification is filtered to genuine mid-turn blockage only. idle_prompt is
@@ -34,15 +36,33 @@ settings.hooks ??= {};
 for (const [event, matcher] of Object.entries(EVENTS)) {
   const entry = {
     ...(matcher ? { matcher } : {}),
-    hooks: [{ type: "command", command: SCRIPT, timeout: 10 }],
+    hooks: [{ type: "command", command: HOOK_SCRIPT, timeout: 10 }],
   };
   const existing = settings.hooks[event] ?? [];
   const others = existing.filter(
-    (e) => !(e.hooks ?? []).some((h) => h.command === SCRIPT)
+    (e) => !(e.hooks ?? []).some((h) => h.command === HOOK_SCRIPT)
   );
   settings.hooks[event] = [...others, entry];
 }
 
+// The status line is the only outlet for account usage (see docs/protocol.md),
+// but it has a single slot: a status line the user already configured is left
+// untouched, with a hint on how to chain ours in.
+const current = settings.statusLine;
+if (!current) {
+  settings.statusLine = { type: "command", command: USAGE_SCRIPT };
+  console.log("statusLine set to the red-green usage script");
+} else if (current.command === USAGE_SCRIPT) {
+  console.log("statusLine already points at the red-green usage script");
+} else {
+  console.log(
+    `statusLine is already taken (${current.command ?? JSON.stringify(current)}); left as is.`
+  );
+  console.log(
+    `to feed usage to the pets, have your status line script pipe its stdin JSON to ${USAGE_SCRIPT} as well (it prints nothing).`
+  );
+}
+
 fs.writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
-console.log(`hooks merged into ${SETTINGS}`);
+console.log(`settings merged into ${SETTINGS}`);
 console.log(`backup: ${backup}`);

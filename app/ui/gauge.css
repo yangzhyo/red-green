@@ -1,0 +1,107 @@
+/* 用量表：宠物列最上面的独立小窗。静置是一枚像素圆表（与灯灯同款壳体，两圈灯格 + 圆心数字），
+   悬停展开成两行明细。圆表由 gauge.js 用精灵管线画在 canvas 上，这里只管布局与卡片。 */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* stage 只包住内容本身：悬停判定以圆表 / 卡片的实际范围为准，不含窗口的透明区 */
+body {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 2px;
+  box-sizing: border-box;
+  cursor: grab; /* 整窗可拖：挡住东西时挪开 */
+}
+
+#stage {
+  display: flex;
+  justify-content: center;
+}
+
+/* 静置只见圆表，展开只见卡片 */
+#stage.expanded #ring,
+#stage:not(.expanded) #card {
+  display: none;
+}
+
+#ring {
+  position: relative;
+}
+
+#disc {
+  display: block;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25)); /* 与精灵同一投影 */
+}
+
+/* 圆心数字：壳体是深色，白字直接可读（颜色由 gauge.js 取调色板设置） */
+#num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+#num.wide {
+  font-size: 8px; /* 三位数（100%）收一号 */
+}
+
+/* ---- 展开的两行明细：与名牌同款胶囊，填充色（--fill）由 gauge.js 按灯色内联 ---- */
+#card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 108px;
+}
+
+/* 行的 display:flex 会压过 UA 的 [hidden]，显式补回（缺席的窗口不画行） */
+#card .row[hidden] {
+  display: none;
+}
+
+#card .row {
+  --fill: transparent;
+  --pct: 0%;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  height: 14px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  background: linear-gradient(
+    to right,
+    var(--fill) var(--pct),
+    rgba(0, 0, 0, 0.4) var(--pct)
+  );
+}
+
+#card .k {
+  opacity: 0.8;
+}
+
+#card .pct {
+  font-weight: 700;
+}
+
+#card .reset {
+  margin-left: auto;
+  opacity: 0.9;
+}

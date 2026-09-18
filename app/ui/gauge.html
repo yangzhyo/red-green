@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>red-green usage gauge</title>
+    <link rel="stylesheet" href="gauge.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <!-- 静置：一枚像素圆表。与灯灯同款壳体，外圈 = 五小时窗口，内圈 = 七天窗口，圆心 = 五小时的数字 -->
+      <div id="ring">
+        <canvas id="disc"></canvas>
+        <div id="num"></div>
+      </div>
+      <!-- 悬停：展开成两行明细 -->
+      <div id="card">
+        <div class="row" data-window="five_hour">
+          <span class="k">5h</span><span class="pct"></span><span class="reset"></span>
+        </div>
+        <div class="row" data-window="seven_day">
+          <span class="k">7d</span><span class="pct"></span><span class="reset"></span>
+        </div>
+      </div>
+    </div>
+    <script src="sprites.js"></script>
+    <script src="drag.js"></script>
+    <script src="gauge.js"></script>
+  </body>
+</html>

@@ -1,5 +1,5 @@
-// 逻辑中枢：监听状态快照，管理宠物窗口的生死、叫声和已阅。
-// 宠物窗口是哑渲染器，一切决策都在这里。
+// 逻辑中枢：监听状态快照，管理宠物窗口与用量表窗口的生死、叫声和已阅。
+// 宠物窗口与用量表都是哑渲染器，一切决策都在这里。
 const { invoke } = window.__TAURI__.core;
 const { listen, emitTo } = window.__TAURI__.event;
 
@@ -21,6 +21,56 @@ function allocSlot() {
 // 由 Rust 心跳（front-tick）更新；隐藏窗口的 JS 定时器会被 WebKit 挂起，
 // 所以 manager 只做事件响应，自己不跑 setInterval
 let lastFront = null;
+
+// 用量文件的原始内容（usage.json，见 docs/protocol.md）；null = 没有数据
+let lastUsage = null;
+
+// 用量属于账号，不属于会话：只有一份视图，交给用量表。
+// 重置时刻已过的窗口已清零，下一次响应前没有新值——显示为 0%、重置未知，而不是沿用旧数；
+// 所有窗口都已过重置时刻则视同无数据（用量表消失）：文件是旧的，不代表现在还有用量可显示
+function usageView(raw, now) {
+  if (!raw || typeof raw !== "object") return null;
+  const view = {};
+  let live = 0;
+  for (const key of ["five_hour", "seven_day"]) {
+    const w = raw[key];
+    if (!w || typeof w.used_percentage !== "number") continue;
+    const resetsAt = typeof w.resets_at === "number" ? w.resets_at : null;
+    const expired = resetsAt !== null && resetsAt * 1000 <= now;
+    if (!expired) live++;
+    view[key] = expired
+      ? { used_percentage: 0, resets_at: null }
+      : { used_percentage: w.used_percentage, resets_at: resetsAt };
+  }
+  return live ? view : null;
+}
+
+// 哑渲染器只认模型：所有推送都经这里，pet-ready 的补发也走同一份
+function pushModel(sid, pet, model) {
+  pet.model = model;
+  emitTo(`pet-${sid}`, "pet-update", model);
+}
+
+// 用量表：有宠物在场且有用量数据才出现——它是这群宠物共用的物件，最后一只离场它也走。
+// 生死操作串行化：心跳与 usage-changed 可能同时触发，remove 与 ensure 交错会留下"以为在、其实没了"的窗口
+let gaugeShown = false;
+let gaugeQueue = Promise.resolve();
+
+function syncGauge() {
+  gaugeQueue = gaugeQueue.then(async () => {
+    const usage = usageView(lastUsage, Date.now());
+    const want = pets.size > 0 && usage !== null;
+    if (want && !gaugeShown) {
+      gaugeShown = true;
+      await invoke("ensure_gauge").catch(console.error);
+    } else if (!want && gaugeShown) {
+      gaugeShown = false;
+      await invoke("remove_gauge").catch(console.error);
+    }
+    if (want) emitTo("usage-gauge", "usage-update", usage);
+  });
+  return gaugeQueue;
+}
 
 async function reconcile(sessions) {
   const seen = new Set();
@@ -58,8 +108,7 @@ async function reconcile(sessions) {
     pet.prevState = effective;
 
     // 皮肤在这里定：pet 是哑渲染器，模型给什么画什么
-    pet.model = { ...s, state: effective, skin: SKINS.pick(s.project) };
-    emitTo(`pet-${s.session_id}`, "pet-update", pet.model);
+    pushModel(s.session_id, pet, { ...s, state: effective, skin: SKINS.pick(s.project) });
   }
 
   for (const [sid, pet] of pets) {
@@ -68,6 +117,8 @@ async function reconcile(sessions) {
       invoke("remove_pet", { sid }).catch(console.error);
     }
   }
+
+  await syncGauge();
 }
 
 async function tick() {
@@ -90,9 +141,25 @@ listen("front-tick", (e) => {
   lastFront = e.payload ?? null;
   tick();
 });
+// 目录里任何文件变化都会带来一次 usage-changed（Rust 侧不区分是哪个文件），这里按内容去重
+listen("usage-changed", (e) => {
+  const raw = e.payload ?? null;
+  if (JSON.stringify(raw) === JSON.stringify(lastUsage)) return;
+  lastUsage = raw;
+  syncGauge();
+});
+// 用量表就绪后同样自报家门，补发当前视图
+listen("gauge-ready", () => {
+  syncGauge();
+});
 // 窗口刚创建时 emitTo 可能先于 pet 的监听器就绪；pet 就绪后自报家门，这里补发最新模型
 listen("pet-ready", (e) => {
   const pet = pets.get(e.payload);
-  if (pet?.model) emitTo(`pet-${e.payload}`, "pet-update", pet.model);
+  if (pet?.model) pushModel(e.payload, pet, pet.model);
 });
-refreshFront().then(tick);
+
+(async () => {
+  lastUsage = (await invoke("get_usage").catch(() => null)) ?? null;
+  await refreshFront();
+  await tick();
+})();
