@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>red-green usage gauge</title>
+    <link rel="stylesheet" href="gauge.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <!-- 静置：一个圆。外环 = 五小时窗口，内环 = 七天窗口，圆心 = 五小时的数字 -->
+      <svg id="ring" viewBox="0 0 44 44" width="44" height="44">
+        <circle class="disc" cx="22" cy="22" r="22" />
+        <circle class="track" cx="22" cy="22" r="17.5" />
+        <circle id="arc-five-hour" class="arc" cx="22" cy="22" r="17.5" />
+        <circle class="track inner" cx="22" cy="22" r="12" />
+        <circle id="arc-seven-day" class="arc inner" cx="22" cy="22" r="12" />
+        <text id="num" x="22" y="22"></text>
+      </svg>
+      <!-- 悬停：展开成两行明细 -->
+      <div id="card">
+        <div class="row" data-window="five_hour">
+          <span class="k">5h</span><span class="pct"></span><span class="reset"></span>
+        </div>
+        <div class="row" data-window="seven_day">
+          <span class="k">7d</span><span class="pct"></span><span class="reset"></span>
+        </div>
+      </div>
+    </div>
+    <script src="gauge.js"></script>
+  </body>
+</html>

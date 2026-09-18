@@ -26,54 +26,6 @@ let verbTimer = null;
 let spriteTimer = null;
 let skin = null;
 
-// 用量：名牌下方两行——五小时窗口 / 七天窗口。视图由 manager 裁决（含"重置已过即 0%"），
-// 这里只负责格式与配色；没有数据时不显示用量，而不是画成 0%
-const WINDOW_ZH = { five_hour: "五小时窗口", seven_day: "七天窗口" };
-const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
-// 重置时刻的两种说法：胶囊里的缩写与 tooltip 里的中文。
-// 五小时窗口只给时分（5 小时内不会跨到歧义的日期）；七天窗口带星期
-function resetLabels(ts, key) {
-  if (!ts) return { short: "", zh: "重置时刻未知" };
-  const d = new Date(ts * 1000);
-  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (key === "five_hour") return { short: hm, zh: `${hm} 重置` };
-  return { short: `${WEEKDAY[d.getDay()]} ${hm}`, zh: `${WEEKDAY_ZH[d.getDay()]} ${hm} 重置` };
-}
-
-// 配色随用量升温：绿 → 琥珀 → 红（red-green 本色）
-function usageLevel(pct) {
-  if (pct >= 85) return "hot";
-  if (pct >= 60) return "warn";
-  return "ok";
-}
-
-function renderUsage(usage) {
-  const box = document.getElementById("usage");
-  if (!usage) {
-    box.hidden = true;
-    return;
-  }
-  const tips = [];
-  for (const row of box.querySelectorAll(".row")) {
-    const key = row.dataset.window;
-    const w = usage[key];
-    row.hidden = !w;
-    if (!w) continue;
-    const pct = Math.round(w.used_percentage);
-    row.dataset.level = usageLevel(pct);
-    row.style.setProperty("--pct", `${pct}%`);
-    row.querySelector(".pct").textContent = `${pct}%`;
-    const reset = resetLabels(w.resets_at, key);
-    row.querySelector(".reset").textContent = reset.short;
-    tips.push(`${WINDOW_ZH[key]}已用 ${pct}% · ${reset.zh}`);
-  }
-  box.hidden = false;
-  // 胶囊里只放得下缩写；全称与重置时刻的完整说法在 tooltip
-  box.title = tips.join("\n");
-}
-
 function pickVerb() {
   return VERBS[Math.floor(Math.random() * VERBS.length)] + "…";
 }
@@ -129,8 +81,6 @@ function render(m) {
   tag.textContent = project;
   // 名字截断后窗口内唯一能看全名的地方是这里：全名与近况合并进 tooltip
   tag.title = m.detail ? `${project} — ${m.detail}` : project;
-
-  renderUsage(m.usage ?? null);
 }
 
 listen("pet-update", (e) => {

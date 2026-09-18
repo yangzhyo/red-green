@@ -43,8 +43,14 @@ app 监听 `~/.claude/session-status/*.json`(hooks 契约见 docs/protocol.md),�
  "seven_day":{"used_percentage":41,"resets_at":<未来Unix秒>},"updated_at":"<ISO时间>"}
 ```
 
-- 至少要有一只宠物在场(用量挂在名牌下方,没有宠物就没有窗口)。
-- `resets_at` 给过去的时间 → 该窗口显示 0%、无重置时刻;两个窗口都缺席或文件删除 → 用量整个消失。
+- 至少要有一只宠物在场(用量表挂在宠物列脚下,没有宠物就没有用量表)。
+- 用量表静置是一个圆(外环五小时、内环七天、圆心五小时数字),悬停才展开两行明细。悬停由 Rust 轮询光标位置驱动,可用 `scripts/mousemove.swift` 模拟(本机实测不需要额外授权):
+
+  ```bash
+  swiftc -O scripts/mousemove.swift -o /tmp/mousemove
+  /tmp/mousemove 1250 818 1450 818     # 逻辑坐标,从起点分步移到终点;圆心 ≈ (工作区右缘-62, 工作区下缘-108)
+  ```
+- `resets_at` 给过去的时间 → 该窗口 0%、明细里无重置时刻;两个窗口都缺席或文件删除 → 用量表消失。
 - 真实通路走 status line:`echo '{"rate_limits":{...}}' | ~/.claude/red-green-usage.sh` 等价于 Claude Code 的一次重绘。
 
 ## 观察
@@ -71,5 +77,6 @@ ppid 区分实例(dev = target/debug 的进程号)。dev 实例的资源解析�
 - app 启动前状态文件已是叫声状态 → 静默采纳,不补叫(首见不算转移)
 - 未知 state → 不叫、不崩、精灵回退 robot idle
 - 删状态文件 → 宠物离场
-- 写入 usage.json → 每只宠物名牌下出现两行用量,数值与文件一致;不叫、状态不变
-- 删 usage.json → 用量消失,宠物其余表现不变
+- 写入 usage.json → 最下面那只宠物脚下出现用量表,圆心数字与文件的五小时比例一致;不叫、状态不变
+- 删 usage.json → 用量表消失,宠物其余表现不变
+- 所有宠物离场 → 用量表也消失;宠物回来且 usage.json 仍在 → 用量表跟着回来

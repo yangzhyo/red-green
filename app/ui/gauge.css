@@ -1,0 +1,131 @@
+/* 用量表：宠物列脚下的独立小窗。静置是一个圆（双环 + 圆心数字），悬停展开成两行明细。
+   与名牌同一色系（半透明深底、白字）；不做像素风——它是仪表，不是生物。 */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* stage 只包住内容本身：悬停判定以圆 / 卡片的实际范围为准，不含窗口的透明区 */
+body {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 2px;
+  box-sizing: border-box;
+}
+
+#stage {
+  display: flex;
+  justify-content: center;
+}
+
+/* 静置只见圆，展开只见卡片。用 class 切换而不是 hidden 属性：SVG 元素没有 hidden */
+#stage.expanded #ring,
+#stage:not(.expanded) #card {
+  display: none;
+}
+
+#ring {
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+}
+
+#ring .disc {
+  fill: rgba(0, 0, 0, 0.4);
+}
+
+#ring .track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 4;
+}
+#ring .track.inner {
+  stroke-width: 3;
+}
+
+/* 圆弧从 12 点起顺时针；长度由 gauge.js 按比例设 stroke-dasharray */
+#ring .arc {
+  --fill: rgba(255, 255, 255, 0.92);
+  fill: none;
+  stroke: var(--fill);
+  stroke-width: 4;
+  stroke-linecap: butt;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+#ring .arc.inner {
+  stroke-width: 3;
+}
+
+/* 颜色随用量升温：平时白色，只在快用完时刺眼 */
+#ring .arc[data-level="warn"],
+#card .row[data-level="warn"] {
+  --fill: rgba(240, 173, 40, 0.92);
+}
+#ring .arc[data-level="hot"],
+#card .row[data-level="hot"] {
+  --fill: rgba(230, 70, 70, 0.92);
+}
+
+#ring #num {
+  fill: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+/* ---- 展开的两行明细 ---- */
+#card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 108px;
+}
+
+/* 行的 display:flex 会压过 UA 的 [hidden]，显式补回（缺席的窗口不画行） */
+#card .row[hidden] {
+  display: none;
+}
+
+#card .row {
+  --fill: rgba(255, 255, 255, 0.85);
+  --pct: 0%;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  height: 14px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  background: linear-gradient(
+    to right,
+    var(--fill) var(--pct),
+    rgba(0, 0, 0, 0.4) var(--pct)
+  );
+}
+
+#card .k {
+  opacity: 0.8;
+}
+
+#card .pct {
+  font-weight: 700;
+}
+
+#card .reset {
+  margin-left: auto;
+  opacity: 0.9;
+}

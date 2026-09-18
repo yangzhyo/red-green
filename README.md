@@ -51,11 +51,11 @@ hooks/session-status.sh    # Claude Code hook：把会话状态写进 ~/.claude/
 statusline/usage.sh        # Claude Code status line：把账号用量写进同一目录（hooks 拿不到用量）
 scripts/merge-settings.mjs # 把 hook 与 status line 配置幂等合并进 ~/.claude/settings.json（先备份）
 app/
-  ui/          manager（隐藏的逻辑中枢）+ pet（哑渲染器）+ sprites/skins/calls
+  ui/          manager（隐藏的逻辑中枢）+ pet / gauge（哑渲染器）+ sprites/skins/calls
   src-tauri/   Rust：文件 watcher + 命令（快照 / 窗口 / 聚焦 / 前台 tty / 叫声）
 ```
 
-一句话链路：**hook 在回合边界写状态文件 → Rust watcher 感知变化 → manager 裁决皮肤 / 已阅 / 该不该叫 → 每只 pet 窗口哑渲染**。账号用量走旁路：status line 脚本写同目录的 usage.json，每只宠物在名牌下方显示同一份。hooks 与 app 之间的契约见 [docs/protocol.md](docs/protocol.md)，关键架构决策见 [docs/adr/](docs/adr/)。
+一句话链路：**hook 在回合边界写状态文件 → Rust watcher 感知变化 → manager 裁决皮肤 / 已阅 / 该不该叫 → 每只 pet 窗口哑渲染**。账号用量走旁路：status line 脚本写同目录的 usage.json，宠物列脚下的用量表显示一份（悬停展开明细）。hooks 与 app 之间的契约见 [docs/protocol.md](docs/protocol.md)，关键架构决策见 [docs/adr/](docs/adr/)。
 
 宠物形象与叫声都是预渲染、可重跑的：改皮肤看 `app/ui/sprites.js`，改叫声重跑 `scripts/gen-calls.mjs`，顶部这两张图重跑 `scripts/gen-readme-art.sh`。
 

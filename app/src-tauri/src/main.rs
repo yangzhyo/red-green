@@ -60,58 +60,103 @@ fn get_usage() -> Value {
     read_usage()
 }
 
+// ---- 宠物列的几何 ----
+const PET_W: f64 = 116.0;
+// 高度 = 内容 ~134 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
+const PET_H: f64 = 152.0;
+// 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
+const MARGIN_X: f64 = 4.0;
+const MARGIN_Y: f64 = 132.0;
+// 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
+const SPACING: f64 = 158.0;
+// 用量表：与宠物同宽、同一条纵轴，挂在最下面那只宠物脚下、MARGIN_Y 留出的空白里
+const GAUGE_W: f64 = PET_W;
+const GAUGE_H: f64 = 56.0;
+const GAUGE_LABEL: &str = "usage-gauge";
+
+// 宠物列的锚点：主显示器工作区（不含 Dock 与菜单栏）的右下角，逻辑坐标；
+// 显示器并排摆放时工作区原点不为零，所以要带上 position。取不到显示器时用固定点
+fn column_anchor(app: &AppHandle) -> (f64, f64) {
+    match app.primary_monitor() {
+        Ok(Some(m)) => {
+            let scale = m.scale_factor();
+            let wa = m.work_area();
+            let pos = wa.position.to_logical::<f64>(scale);
+            let size = wa.size.to_logical::<f64>(scale);
+            (pos.x + size.width, pos.y + size.height)
+        }
+        _ => (720.0, 884.0),
+    }
+}
+
+fn ambient_window(
+    app: &AppHandle,
+    label: &str,
+    url: String,
+    title: &str,
+    size: (f64, f64),
+    pos: (f64, f64),
+) -> Result<(), String> {
+    tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(size.0, size.1)
+        .position(pos.0, pos.1)
+        .transparent(true)
+        .decorations(false)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .accept_first_mouse(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     let label = format!("pet-{sid}");
     if app.get_webview_window(&label).is_some() {
         return Ok(());
     }
-    const PET_W: f64 = 116.0;
-    // 高度 = 内容 ~171（气泡/精灵/名牌 ~134 + 名牌下方两行用量 ~37）+ 跳跃动画净空（振幅 18px）；
-    // 再高只是死空间，会虚增视觉间距
-    const PET_H: f64 = 190.0;
-    // 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
-    const MARGIN_X: f64 = 4.0;
-    const MARGIN_Y: f64 = 132.0;
-    // 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
-    const SPACING: f64 = 196.0;
-
-    // pets stack vertically along the right edge of the primary monitor's
-    // work area (excludes the Dock and menu bar), growing bottom-up from
-    // the bottom-right corner; monitor origin matters when displays are
-    // arranged side by side
-    let (x, y) = match app.primary_monitor() {
-        Ok(Some(m)) => {
-            let scale = m.scale_factor();
-            let wa = m.work_area();
-            let pos = wa.position.to_logical::<f64>(scale);
-            let size = wa.size.to_logical::<f64>(scale);
-            (
-                pos.x + size.width - MARGIN_X - PET_W,
-                pos.y + size.height - PET_H - MARGIN_Y - slot as f64 * SPACING,
-            )
-        }
-        _ => (600.0, 600.0 - slot as f64 * SPACING),
-    };
-
-    tauri::WebviewWindowBuilder::new(
+    // pets stack vertically along the right edge, growing bottom-up
+    let (right, bottom) = column_anchor(&app);
+    let x = right - MARGIN_X - PET_W;
+    let y = bottom - PET_H - MARGIN_Y - slot as f64 * SPACING;
+    ambient_window(
         &app,
         &label,
-        tauri::WebviewUrl::App(format!("pet.html?sid={sid}").into()),
+        format!("pet.html?sid={sid}"),
+        "red-green pet",
+        (PET_W, PET_H),
+        (x, y),
     )
-    .title("red-green pet")
-    .inner_size(PET_W, PET_H)
-    .position(x, y)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .resizable(false)
-    .always_on_top(true)
-    .visible_on_all_workspaces(true)
-    .accept_first_mouse(true)
-    .build()
-    .map_err(|e| e.to_string())?;
-    Ok(())
+}
+
+// 用量表只有一个：紧贴 slot 0 宠物窗口的下缘
+#[tauri::command]
+fn ensure_gauge(app: AppHandle) -> Result<(), String> {
+    if app.get_webview_window(GAUGE_LABEL).is_some() {
+        return Ok(());
+    }
+    let (right, bottom) = column_anchor(&app);
+    let x = right - MARGIN_X - GAUGE_W;
+    let y = bottom - MARGIN_Y;
+    ambient_window(
+        &app,
+        GAUGE_LABEL,
+        "gauge.html".to_string(),
+        "red-green usage gauge",
+        (GAUGE_W, GAUGE_H),
+        (x, y),
+    )
+}
+
+#[tauri::command]
+fn remove_gauge(app: AppHandle) {
+    if let Some(w) = app.get_webview_window(GAUGE_LABEL) {
+        let _ = w.close();
+    }
 }
 
 #[tauri::command]
@@ -306,6 +351,8 @@ fn main() {
             get_usage,
             ensure_pet,
             remove_pet,
+            ensure_gauge,
+            remove_gauge,
             focus_terminal,
             frontmost_tty,
             play_call
@@ -338,6 +385,36 @@ fn main() {
                     let _ = handle.emit("sessions-changed", read_snapshot());
                     // 用量文件与会话文件同目录：每次目录变化都顺带推一次，manager 侧去重
                     let _ = handle.emit("usage-changed", read_usage());
+                }
+            });
+
+            // 用量表的悬停也在 Rust 侧：非焦点窗口收不到 WebKit 的 mousemove，
+            // 只能轮询光标位置。进入窗口后持续推送窗口内的逻辑坐标（页面自己判定
+            // 是否落在圆上），离开推一次 null；用量表不存在时什么都不做
+            let hover = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut inside = false;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    let Some(w) = hover.get_webview_window(GAUGE_LABEL) else {
+                        inside = false;
+                        continue;
+                    };
+                    let local = (|| {
+                        let c = hover.cursor_position().ok()?;
+                        let p = w.outer_position().ok()?;
+                        let s = w.outer_size().ok()?;
+                        let (dx, dy) = (c.x - p.x as f64, c.y - p.y as f64);
+                        if dx < 0.0 || dy < 0.0 || dx >= s.width as f64 || dy >= s.height as f64 {
+                            return None;
+                        }
+                        let scale = w.scale_factor().ok()?;
+                        Some(serde_json::json!({ "x": dx / scale, "y": dy / scale }))
+                    })();
+                    if local.is_some() || inside {
+                        inside = local.is_some();
+                        let _ = hover.emit_to(GAUGE_LABEL, "gauge-hover", local);
+                    }
                 }
             });
 
