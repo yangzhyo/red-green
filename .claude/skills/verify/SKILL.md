@@ -1,6 +1,6 @@
 ---
 name: verify
-description: 驱动 red-green 桌面宠物 app 做端到端验证——注入假会话状态文件、观察叫声(afplay 进程参数)与宠物窗口渲染。
+description: 驱动 red-green 桌面宠物 app 做端到端验证——注入假会话状态文件与假用量文件、观察叫声(afplay 进程参数)、宠物窗口与用量表的渲染(含模拟光标悬停/拖动)。
 ---
 
 # 验证 red-green 的改动
