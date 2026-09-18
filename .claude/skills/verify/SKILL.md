@@ -44,7 +44,7 @@ app 监听 `~/.claude/session-status/*.json`(hooks 契约见 docs/protocol.md),�
 ```
 
 - 至少要有一只宠物在场(用量挂在名牌下方,没有宠物就没有窗口)。
-- `resets_at` 给过去的时间 → 该窗口显示 0%、无重置时刻;两个窗口都缺席或文件删除 → 整块消失。
+- `resets_at` 给过去的时间 → 该窗口显示 0%、无重置时刻;两个窗口都缺席或文件删除 → 用量整个消失。
 - 真实通路走 status line:`echo '{"rate_limits":{...}}' | ~/.claude/red-green-usage.sh` 等价于 Claude Code 的一次重绘。
 
 ## 观察
@@ -72,4 +72,4 @@ ppid 区分实例(dev = target/debug 的进程号)。dev 实例的资源解析�
 - 未知 state → 不叫、不崩、精灵回退 robot idle
 - 删状态文件 → 宠物离场
 - 写入 usage.json → 每只宠物名牌下出现两行用量,数值与文件一致;不叫、状态不变
-- 删 usage.json → 用量块消失,宠物其余表现不变
+- 删 usage.json → 用量消失,宠物其余表现不变

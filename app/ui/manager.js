@@ -42,6 +42,12 @@ function usageView(raw, now) {
   return Object.keys(view).length ? view : null;
 }
 
+// 哑渲染器只认模型：所有推送都经这里，pet-ready 的补发也走同一份
+function pushModel(sid, pet, model) {
+  pet.model = model;
+  emitTo(`pet-${sid}`, "pet-update", model);
+}
+
 async function reconcile(sessions) {
   const seen = new Set();
   const front = lastFront;
@@ -79,8 +85,7 @@ async function reconcile(sessions) {
     pet.prevState = effective;
 
     // 皮肤在这里定：pet 是哑渲染器，模型给什么画什么
-    pet.model = { ...s, state: effective, skin: SKINS.pick(s.project), usage };
-    emitTo(`pet-${s.session_id}`, "pet-update", pet.model);
+    pushModel(s.session_id, pet, { ...s, state: effective, skin: SKINS.pick(s.project), usage });
   }
 
   for (const [sid, pet] of pets) {
@@ -95,9 +100,7 @@ async function reconcile(sessions) {
 function pushUsage() {
   const usage = usageView(lastUsage, Date.now());
   for (const [sid, pet] of pets) {
-    if (!pet.model) continue;
-    pet.model = { ...pet.model, usage };
-    emitTo(`pet-${sid}`, "pet-update", pet.model);
+    if (pet.model) pushModel(sid, pet, { ...pet.model, usage });
   }
 }
 
@@ -131,7 +134,7 @@ listen("usage-changed", (e) => {
 // 窗口刚创建时 emitTo 可能先于 pet 的监听器就绪；pet 就绪后自报家门，这里补发最新模型
 listen("pet-ready", (e) => {
   const pet = pets.get(e.payload);
-  if (pet?.model) emitTo(`pet-${e.payload}`, "pet-update", pet.model);
+  if (pet?.model) pushModel(e.payload, pet, pet.model);
 });
 
 (async () => {
