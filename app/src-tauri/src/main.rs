@@ -60,20 +60,22 @@ fn get_usage() -> Value {
     read_usage()
 }
 
-// ---- 宠物列的几何 ----
+// ---- 宠物列的几何：用量表贴在工作区右下角，宠物从它上面依次往上叠 ----
 const PET_W: f64 = 116.0;
 // 高度 = 内容 ~134 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
 const PET_H: f64 = 152.0;
 // 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
 const MARGIN_X: f64 = 4.0;
-const MARGIN_Y: f64 = 132.0;
+const MARGIN_BOTTOM: f64 = 4.0;
 // 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
 const SPACING: f64 = 158.0;
-// 用量表：与宠物同宽、同一条纵轴，挂在最下面那只宠物脚下、MARGIN_Y 留出的空白里
+// 用量表：与宠物同宽、同一条纵轴
 const GAUGE_W: f64 = PET_W;
 // 高度 = 像素圆表 60（15 格 × 4px）+ 顶部 2px + 底部投影 6px
 const GAUGE_H: f64 = 68.0;
 const GAUGE_LABEL: &str = "usage-gauge";
+// 宠物列底边距工作区下缘的距离：给用量表留位，没有用量表时这块也空着，宠物位置不因它来去而变
+const MARGIN_Y: f64 = MARGIN_BOTTOM + GAUGE_H;
 
 // 宠物列的锚点：主显示器工作区（不含 Dock 与菜单栏）的右下角，逻辑坐标；
 // 显示器并排摆放时工作区原点不为零，所以要带上 position。取不到显示器时用固定点
@@ -86,8 +88,8 @@ fn column_anchor(app: &AppHandle) -> (f64, f64) {
             let size = wa.size.to_logical::<f64>(scale);
             (pos.x + size.width, pos.y + size.height)
         }
-        // 让 slot 0 落在原先的兜底位置 (600, 600)：720-4-116 = 600，884-152-132 = 600
-        _ => (720.0, 884.0),
+        // 让 slot 0 落在原先的兜底位置 (600, 600)：720-4-116 = 600，824-152-72 = 600
+        _ => (720.0, 824.0),
     }
 }
 
@@ -137,7 +139,7 @@ fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     )
 }
 
-// 用量表只有一个：紧贴 slot 0 宠物窗口的下缘
+// 用量表只有一个：贴工作区右下角，上缘正好是 slot 0 宠物窗口的下缘
 #[tauri::command]
 fn ensure_gauge(app: AppHandle) -> Result<(), String> {
     if app.get_webview_window(GAUGE_LABEL).is_some() {
@@ -145,7 +147,7 @@ fn ensure_gauge(app: AppHandle) -> Result<(), String> {
     }
     let (right, bottom) = column_anchor(&app);
     let x = right - MARGIN_X - GAUGE_W;
-    let y = bottom - MARGIN_Y;
+    let y = bottom - MARGIN_BOTTOM - GAUGE_H;
     ambient_window(
         &app,
         GAUGE_LABEL,
