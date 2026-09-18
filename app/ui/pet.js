@@ -36,8 +36,7 @@ function renderSprite(state) {
   const cv = document.getElementById("sprite");
   clearInterval(spriteTimer);
   spriteTimer = null;
-  // 内部 8px/格、CSS 4px/格（Retina 2x 整数倍，像素不糊）
-  const SCALE = 8;
+  const SCALE = window.SPRITES.SCALE;
   let i = 0;
   window.SPRITES.draw(cv, spec.frames[0], SCALE);
   if (spec.frames.length > 1) {
@@ -93,28 +92,7 @@ listen("pet-update", (e) => {
   emit("pet-ready", sid);
 });
 
-// 整只宠物既可点也可拖：按下后移动 >4px 进入窗口拖拽，原地松手视为点击聚焦。
-// （data-tauri-drag-region 会吞掉 click，无法两者兼得，故手动区分手势）
-const appWindow = window.__TAURI__.window.getCurrentWindow();
-let pressAt = null;
-
-document.addEventListener("mousedown", (e) => {
-  if (e.button !== 0) return;
-  pressAt = { x: e.screenX, y: e.screenY };
-});
-
-document.addEventListener("mousemove", (e) => {
-  if (!pressAt) return;
-  if (
-    Math.abs(e.screenX - pressAt.x) + Math.abs(e.screenY - pressAt.y) > 4
-  ) {
-    pressAt = null;
-    appWindow.startDragging();
-  }
-});
-
-document.addEventListener("mouseup", () => {
-  if (!pressAt) return;
-  pressAt = null;
+// 整只宠物既可点也可拖（手势在 drag.js）：原地松手即点击聚焦终端
+installDrag(() => {
   if (model?.tty) invoke("focus_terminal", { tty: model.tty });
 });

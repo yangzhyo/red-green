@@ -4,17 +4,15 @@ const { listen, emit } = window.__TAURI__.event;
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-// 灯色沿用精灵调色板：绿 = 已完成的灯、琥珀 = 运行中的灯、红 = 待确认的灯（sprites.js 的 C）
-const LAMP = { ok: "#52c41a", warn: "#ffc53d", hot: "#ff4d4f" };
-const HOUSING = "#2b2e33";
-const DIM = "#3a3e44";
+// 颜色全部取自精灵调色板：灯色绿 = 已完成的灯、琥珀 = 运行中的灯、红 = 待确认的灯
+const C = window.SPRITES.C;
+const LAMP = { ok: C.completed, warn: C.running, hot: C.awaiting };
 
-// 圆表网格：15×15 格，与精灵同一比例（内部 8px/格、CSS 4px/格）。
+// 圆表网格：15×15 格，与精灵同一比例。
 // 壳体是半径 ~7 格的像素圆盘；外圈灯格半径 6、内圈半径 3，各一格厚，中间留两格壳体分隔；
-// 圆心 5×5 格留给数字
+// 圆心 5×5 格留给数字。网格字符：H 壳体、D 未亮的灯格、O 外圈亮格、I 内圈亮格
 const SIZE = 15;
 const CENTER = 7;
-const SCALE = 8;
 
 function cells(pred) {
   const out = [];
@@ -67,7 +65,7 @@ function pctOf(key) {
 function renderRing() {
   const grid = Array.from({ length: SIZE }, () => Array(SIZE).fill("."));
   for (const [y, x] of DISC) grid[y][x] = "H";
-  const pal = { H: HOUSING, D: DIM };
+  const pal = { H: C.housing, D: C.dim };
   for (const [key, ring] of Object.entries(RINGS)) {
     // 缺席的窗口整圈不亮，圆表不因此缺一块
     const pct = pctOf(key) ?? 0;
@@ -77,7 +75,7 @@ function renderRing() {
     });
     pal[ring.ch] = LAMP[level(pct)];
   }
-  window.SPRITES.draw(document.getElementById("disc"), { g: grid, p: pal }, SCALE);
+  window.SPRITES.draw(document.getElementById("disc"), { g: grid, p: pal }, window.SPRITES.SCALE);
 
   // 圆心只放五小时窗口的数字：变得快、和"现在还能不能干活"直接相关
   const five = pctOf("five_hour");
@@ -92,7 +90,8 @@ function renderCard() {
     const pct = pctOf(key);
     row.hidden = pct === null;
     if (pct === null) continue;
-    row.dataset.level = level(pct);
+    // 填充色与圆表灯色同源，在这里内联而不在 CSS 里再抄一份
+    row.style.setProperty("--fill", `color-mix(in srgb, ${LAMP[level(pct)]} 85%, transparent)`);
     row.style.setProperty("--pct", `${pct}%`);
     row.querySelector(".pct").textContent = `${pct}%`;
     row.querySelector(".reset").textContent = fmtReset(view[key].resets_at, key);
@@ -100,6 +99,7 @@ function renderCard() {
 }
 
 const stage = document.getElementById("stage");
+document.getElementById("num").style.color = C.white;
 
 function render() {
   renderRing();
@@ -126,23 +126,5 @@ listen("usage-update", (e) => {
   emit("gauge-ready");
 });
 
-// 可拖：与宠物同一手势——按下后移动 >4px 进入窗口拖拽；原地松手不做任何事
-const appWindow = window.__TAURI__.window.getCurrentWindow();
-let pressAt = null;
-
-document.addEventListener("mousedown", (e) => {
-  if (e.button !== 0) return;
-  pressAt = { x: e.screenX, y: e.screenY };
-});
-
-document.addEventListener("mousemove", (e) => {
-  if (!pressAt) return;
-  if (Math.abs(e.screenX - pressAt.x) + Math.abs(e.screenY - pressAt.y) > 4) {
-    pressAt = null;
-    appWindow.startDragging();
-  }
-});
-
-document.addEventListener("mouseup", () => {
-  pressAt = null;
-});
+// 可拖（手势在 drag.js），挡住东西时挪开；原地松手不做任何事
+installDrag();

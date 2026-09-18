@@ -43,14 +43,13 @@ body {
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25)); /* 与精灵同一投影 */
 }
 
-/* 圆心数字：壳体是深色，白字直接可读 */
+/* 圆心数字：壳体是深色，白字直接可读（颜色由 gauge.js 取调色板设置） */
 #num {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #f5f6f8;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: -0.2px;
@@ -59,7 +58,7 @@ body {
   font-size: 8px; /* 三位数（100%）收一号 */
 }
 
-/* ---- 展开的两行明细：与名牌同款胶囊，填充色沿用灯色 ---- */
+/* ---- 展开的两行明细：与名牌同款胶囊，填充色（--fill）由 gauge.js 按灯色内联 ---- */
 #card {
   display: flex;
   flex-direction: column;
@@ -73,7 +72,7 @@ body {
 }
 
 #card .row {
-  --fill: rgba(82, 196, 26, 0.85);
+  --fill: transparent;
   --pct: 0%;
   display: flex;
   align-items: baseline;
@@ -92,14 +91,6 @@ body {
     var(--fill) var(--pct),
     rgba(0, 0, 0, 0.4) var(--pct)
   );
-}
-
-#card .row[data-level="warn"] {
-  --fill: rgba(255, 197, 61, 0.9);
-}
-
-#card .row[data-level="hot"] {
-  --fill: rgba(255, 77, 79, 0.9);
 }
 
 #card .k {

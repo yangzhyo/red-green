@@ -71,8 +71,8 @@ const MARGIN_Y: f64 = 132.0;
 const SPACING: f64 = 158.0;
 // 用量表：与宠物同宽、同一条纵轴，挂在最下面那只宠物脚下、MARGIN_Y 留出的空白里
 const GAUGE_W: f64 = PET_W;
-// 高度 = 像素圆表 60（15 格 × 4px）+ 上下各 2px
-const GAUGE_H: f64 = 64.0;
+// 高度 = 像素圆表 60（15 格 × 4px）+ 顶部 2px + 底部投影 6px
+const GAUGE_H: f64 = 68.0;
 const GAUGE_LABEL: &str = "usage-gauge";
 
 // 宠物列的锚点：主显示器工作区（不含 Dock 与菜单栏）的右下角，逻辑坐标；
@@ -164,17 +164,19 @@ fn remove_gauge(app: AppHandle) {
 }
 
 // 光标在用量表窗口内时给出窗口内的逻辑坐标，否则 None。
-// 物理坐标同基准：cursor_position 与 outer_position/outer_size 都按主显示器的缩放
+// 两边先各自化为逻辑坐标再比较：cursor_position 按主显示器的缩放给物理坐标，
+// outer_position / outer_size 按窗口所在显示器的缩放——用量表被拖到缩放不同的外接屏时两者基准不同
 fn gauge_cursor_local(app: &AppHandle, w: &tauri::WebviewWindow) -> Option<Value> {
-    let c = app.cursor_position().ok()?;
-    let p = w.outer_position().ok()?;
-    let s = w.outer_size().ok()?;
-    let (dx, dy) = (c.x - p.x as f64, c.y - p.y as f64);
-    if dx < 0.0 || dy < 0.0 || dx >= s.width as f64 || dy >= s.height as f64 {
+    let primary_scale = app.primary_monitor().ok()??.scale_factor();
+    let c = app.cursor_position().ok()?.to_logical::<f64>(primary_scale);
+    let scale = w.scale_factor().ok()?;
+    let p = w.outer_position().ok()?.to_logical::<f64>(scale);
+    let s = w.outer_size().ok()?.to_logical::<f64>(scale);
+    let (dx, dy) = (c.x - p.x, c.y - p.y);
+    if dx < 0.0 || dy < 0.0 || dx >= s.width || dy >= s.height {
         return None;
     }
-    let scale = w.scale_factor().ok()?;
-    Some(serde_json::json!({ "x": dx / scale, "y": dy / scale }))
+    Some(serde_json::json!({ "x": dx, "y": dy }))
 }
 
 #[tauri::command]
