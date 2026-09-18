@@ -85,14 +85,17 @@ fn column_anchor(app: &AppHandle) -> (f64, f64) {
             let size = wa.size.to_logical::<f64>(scale);
             (pos.x + size.width, pos.y + size.height)
         }
+        // 让 slot 0 落在原先的兜底位置 (600, 600)：720-4-116 = 600，884-152-132 = 600
         _ => (720.0, 884.0),
     }
 }
 
+// 宠物与用量表共用的窗口形态：透明、无边框、无阴影、置顶、跨所有桌面空间、
+// 首次点击即生效（不用先激活窗口）
 fn ambient_window(
     app: &AppHandle,
     label: &str,
-    url: String,
+    url: &str,
     title: &str,
     size: (f64, f64),
     pos: (f64, f64),
@@ -126,7 +129,7 @@ fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     ambient_window(
         &app,
         &label,
-        format!("pet.html?sid={sid}"),
+        &format!("pet.html?sid={sid}"),
         "red-green pet",
         (PET_W, PET_H),
         (x, y),
@@ -145,7 +148,7 @@ fn ensure_gauge(app: AppHandle) -> Result<(), String> {
     ambient_window(
         &app,
         GAUGE_LABEL,
-        "gauge.html".to_string(),
+        "gauge.html",
         "red-green usage gauge",
         (GAUGE_W, GAUGE_H),
         (x, y),
@@ -157,6 +160,20 @@ fn remove_gauge(app: AppHandle) {
     if let Some(w) = app.get_webview_window(GAUGE_LABEL) {
         let _ = w.close();
     }
+}
+
+// 光标在用量表窗口内时给出窗口内的逻辑坐标，否则 None。
+// 物理坐标同基准：cursor_position 与 outer_position/outer_size 都按主显示器的缩放
+fn gauge_cursor_local(app: &AppHandle, w: &tauri::WebviewWindow) -> Option<Value> {
+    let c = app.cursor_position().ok()?;
+    let p = w.outer_position().ok()?;
+    let s = w.outer_size().ok()?;
+    let (dx, dy) = (c.x - p.x as f64, c.y - p.y as f64);
+    if dx < 0.0 || dy < 0.0 || dx >= s.width as f64 || dy >= s.height as f64 {
+        return None;
+    }
+    let scale = w.scale_factor().ok()?;
+    Some(serde_json::json!({ "x": dx / scale, "y": dy / scale }))
 }
 
 #[tauri::command]
@@ -400,17 +417,7 @@ fn main() {
                         inside = false;
                         continue;
                     };
-                    let local = (|| {
-                        let c = hover.cursor_position().ok()?;
-                        let p = w.outer_position().ok()?;
-                        let s = w.outer_size().ok()?;
-                        let (dx, dy) = (c.x - p.x as f64, c.y - p.y as f64);
-                        if dx < 0.0 || dy < 0.0 || dx >= s.width as f64 || dy >= s.height as f64 {
-                            return None;
-                        }
-                        let scale = w.scale_factor().ok()?;
-                        Some(serde_json::json!({ "x": dx / scale, "y": dy / scale }))
-                    })();
+                    let local = gauge_cursor_local(&hover, &w);
                     if local.is_some() || inside {
                         inside = local.is_some();
                         let _ = hover.emit_to(GAUGE_LABEL, "gauge-hover", local);

@@ -3,7 +3,6 @@
 const { listen, emit } = window.__TAURI__.event;
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WINDOWS = ["five_hour", "seven_day"];
 
 let view = null;
 let expanded = false;
@@ -29,9 +28,8 @@ function pctOf(key) {
 }
 
 function renderRing() {
-  for (const key of WINDOWS) {
-    const arc = document.getElementById(`arc-${key.replace("_", "-")}`);
-    const pct = pctOf(key);
+  for (const arc of document.querySelectorAll("#ring .arc")) {
+    const pct = pctOf(arc.dataset.window);
     const r = Number(arc.getAttribute("r"));
     const c = 2 * Math.PI * r;
     // 缺席的窗口画成空环，圆不因此缺一块
@@ -46,14 +44,13 @@ function renderRing() {
 function renderCard() {
   for (const row of document.querySelectorAll("#card .row")) {
     const key = row.dataset.window;
-    const w = view?.[key];
-    row.hidden = !w;
-    if (!w) continue;
-    const pct = Math.round(w.used_percentage);
+    const pct = pctOf(key);
+    row.hidden = pct === null;
+    if (pct === null) continue;
     row.dataset.level = level(pct);
     row.style.setProperty("--pct", `${pct}%`);
     row.querySelector(".pct").textContent = `${pct}%`;
-    row.querySelector(".reset").textContent = fmtReset(w.resets_at, key);
+    row.querySelector(".reset").textContent = fmtReset(view[key].resets_at, key);
   }
 }
 

@@ -48,7 +48,8 @@ app 监听 `~/.claude/session-status/*.json`(hooks 契约见 docs/protocol.md),�
 
   ```bash
   swiftc -O scripts/mousemove.swift -o /tmp/mousemove
-  /tmp/mousemove 1250 818 1450 818     # 逻辑坐标,从起点分步移到终点;圆心 ≈ (工作区右缘-62, 工作区下缘-108)
+  /tmp/mousemove 1250 818 1450 818     # 逻辑坐标,从起点分步移到终点
+  # 圆心 = (工作区右缘 - MARGIN_X - GAUGE_W/2, 工作区下缘 - MARGIN_Y + 2 + 22),常量见 main.rs;当前 ≈ (右缘-62, 下缘-108)
   ```
 - `resets_at` 给过去的时间 → 该窗口 0%、明细里无重置时刻;两个窗口都缺席或文件删除 → 用量表消失。
 - 真实通路走 status line:`echo '{"rate_limits":{...}}' | ~/.claude/red-green-usage.sh` 等价于 Claude Code 的一次重绘。
@@ -78,5 +79,7 @@ ppid 区分实例(dev = target/debug 的进程号)。dev 实例的资源解析�
 - 未知 state → 不叫、不崩、精灵回退 robot idle
 - 删状态文件 → 宠物离场
 - 写入 usage.json → 最下面那只宠物脚下出现用量表,圆心数字与文件的五小时比例一致;不叫、状态不变
+- 光标移到圆上 → 展开两行明细,两个窗口的比例与重置时刻与文件一致;移出窗口 → 收回;进窗口但没碰到圆 → 不展开
+- 两个窗口的 `resets_at` 都在过去 → 用量表消失(视同无数据)
 - 删 usage.json → 用量表消失,宠物其余表现不变
 - 所有宠物离场 → 用量表也消失;宠物回来且 usage.json 仍在 → 用量表跟着回来
