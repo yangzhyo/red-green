@@ -26,6 +26,53 @@ let verbTimer = null;
 let spriteTimer = null;
 let skin = null;
 
+// 用量：名牌下方两行——五小时窗口 / 七天窗口。视图由 manager 裁决（含"重置已过即 0%"），
+// 这里只负责格式与配色；没有数据时整块不显示，而不是画成 0%
+const WINDOW_ZH = { five_hour: "五小时窗口", seven_day: "七天窗口" };
+const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+// 五小时窗口只给时分（5 小时内不会跨到歧义的日期）；七天窗口带星期
+function fmtReset(ts, key, zh) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (key === "five_hour") return hm;
+  return `${(zh ? WEEKDAY_ZH : WEEKDAY)[d.getDay()]} ${hm}`;
+}
+
+// 配色随用量升温：绿 → 琥珀 → 红（red-green 本色）
+function usageLevel(pct) {
+  if (pct >= 85) return "hot";
+  if (pct >= 60) return "warn";
+  return "ok";
+}
+
+function renderUsage(usage) {
+  const box = document.getElementById("usage");
+  if (!usage) {
+    box.hidden = true;
+    return;
+  }
+  const tips = [];
+  for (const row of box.querySelectorAll(".row")) {
+    const key = row.dataset.window;
+    const w = usage[key];
+    row.hidden = !w;
+    if (!w) continue;
+    const pct = Math.round(w.used_percentage);
+    row.dataset.level = usageLevel(pct);
+    row.style.setProperty("--pct", `${pct}%`);
+    row.querySelector(".pct").textContent = `${pct}%`;
+    row.querySelector(".reset").textContent = fmtReset(w.resets_at, key, false);
+    const reset = w.resets_at ? `${fmtReset(w.resets_at, key, true)} 重置` : "窗口已重置";
+    tips.push(`${WINDOW_ZH[key]}已用 ${pct}% · ${reset}`);
+  }
+  box.hidden = false;
+  // 胶囊里只放得下缩写；全称与重置时刻的完整说法在 tooltip
+  box.title = tips.join("\n");
+}
+
 function pickVerb() {
   return VERBS[Math.floor(Math.random() * VERBS.length)] + "…";
 }
@@ -81,6 +128,8 @@ function render(m) {
   tag.textContent = project;
   // 名字截断后窗口内唯一能看全名的地方是这里：全名与近况合并进 tooltip
   tag.title = m.detail ? `${project} — ${m.detail}` : project;
+
+  renderUsage(m.usage ?? null);
 }
 
 listen("pet-update", (e) => {

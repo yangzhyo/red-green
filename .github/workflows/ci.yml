@@ -32,5 +32,5 @@ jobs:
           done < <(find app/ui hooks scripts \( -name '*.js' -o -name '*.mjs' \) -print0)
           while IFS= read -r -d '' f; do
             bash -n "$f" || fail=1
-          done < <(find . hooks scripts -maxdepth 1 -name '*.sh' -print0)
+          done < <(find . hooks scripts statusline -maxdepth 1 -name '*.sh' -print0)
           exit $fail

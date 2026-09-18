@@ -34,6 +34,19 @@ app 监听 `~/.claude/session-status/*.json`(hooks 契约见 docs/protocol.md),�
   `node -e 'await import("./app/ui/skins.js");console.log(SKINS.pick("名字"))' --input-type=module` 现算)。
 - 状态转移 = 改 `state` 重写文件;删文件 = 宠物离场。文件监听秒级生效,留 2s 余量。
 
+## 驱动:注入假用量
+
+用量是账号级的,同目录的 `usage.json`(协议见 docs/protocol.md「用量文件」),写文件即驱动、删文件即消失:
+
+```json
+{"five_hour":{"used_percentage":87,"resets_at":<未来Unix秒>},
+ "seven_day":{"used_percentage":41,"resets_at":<未来Unix秒>},"updated_at":"<ISO时间>"}
+```
+
+- 至少要有一只宠物在场(用量挂在名牌下方,没有宠物就没有窗口)。
+- `resets_at` 给过去的时间 → 该窗口显示 0%、无重置时刻;两个窗口都缺席或文件删除 → 整块消失。
+- 真实通路走 status line:`echo '{"rate_limits":{...}}' | ~/.claude/red-green-usage.sh` 等价于 Claude Code 的一次重绘。
+
 ## 观察
 
 **叫声**:afplay 是短命进程,轮询抓参数(路径里的 `皮肤-状态.wav` 就是证据):
@@ -58,3 +71,5 @@ ppid 区分实例(dev = target/debug 的进程号)。dev 实例的资源解析�
 - app 启动前状态文件已是叫声状态 → 静默采纳,不补叫(首见不算转移)
 - 未知 state → 不叫、不崩、精灵回退 robot idle
 - 删状态文件 → 宠物离场
+- 写入 usage.json → 每只宠物名牌下出现两行用量,数值与文件一致;不叫、状态不变
+- 删 usage.json → 用量块消失,宠物其余表现不变

@@ -1,4 +1,4 @@
-// 逻辑中枢：监听状态快照，管理宠物窗口的生死、叫声和已阅。
+// 逻辑中枢：监听状态快照，管理宠物窗口的生死、叫声和已阅；把账号级用量并进每只宠物的模型。
 // 宠物窗口是哑渲染器，一切决策都在这里。
 const { invoke } = window.__TAURI__.core;
 const { listen, emitTo } = window.__TAURI__.event;
@@ -22,9 +22,30 @@ function allocSlot() {
 // 所以 manager 只做事件响应，自己不跑 setInterval
 let lastFront = null;
 
+// 用量文件的原始内容（usage.json，见 docs/protocol.md）；null = 没有数据
+let lastUsage = null;
+
+// 用量属于账号，不属于会话：每只宠物拿到的是同一份视图。
+// 重置时刻已过的窗口已清零，下一次响应前没有新值——显示为 0%、重置未知，而不是沿用旧数
+function usageView(raw, now) {
+  if (!raw || typeof raw !== "object") return null;
+  const view = {};
+  for (const key of ["five_hour", "seven_day"]) {
+    const w = raw[key];
+    if (!w || typeof w.used_percentage !== "number") continue;
+    const resetsAt = typeof w.resets_at === "number" ? w.resets_at : null;
+    view[key] =
+      resetsAt !== null && resetsAt * 1000 <= now
+        ? { used_percentage: 0, resets_at: null }
+        : { used_percentage: w.used_percentage, resets_at: resetsAt };
+  }
+  return Object.keys(view).length ? view : null;
+}
+
 async function reconcile(sessions) {
   const seen = new Set();
   const front = lastFront;
+  const usage = usageView(lastUsage, Date.now());
 
   for (const s of sessions) {
     seen.add(s.session_id);
@@ -58,7 +79,7 @@ async function reconcile(sessions) {
     pet.prevState = effective;
 
     // 皮肤在这里定：pet 是哑渲染器，模型给什么画什么
-    pet.model = { ...s, state: effective, skin: SKINS.pick(s.project) };
+    pet.model = { ...s, state: effective, skin: SKINS.pick(s.project), usage };
     emitTo(`pet-${s.session_id}`, "pet-update", pet.model);
   }
 
@@ -67,6 +88,16 @@ async function reconcile(sessions) {
       pets.delete(sid);
       invoke("remove_pet", { sid }).catch(console.error);
     }
+  }
+}
+
+// 用量变化不等心跳：立刻把新视图推给每只已有模型的宠物
+function pushUsage() {
+  const usage = usageView(lastUsage, Date.now());
+  for (const [sid, pet] of pets) {
+    if (!pet.model) continue;
+    pet.model = { ...pet.model, usage };
+    emitTo(`pet-${sid}`, "pet-update", pet.model);
   }
 }
 
@@ -90,9 +121,21 @@ listen("front-tick", (e) => {
   lastFront = e.payload ?? null;
   tick();
 });
+// 目录里任何文件变化都会带来一次 usage-changed（Rust 侧不区分是哪个文件），这里按内容去重
+listen("usage-changed", (e) => {
+  const raw = e.payload ?? null;
+  if (JSON.stringify(raw) === JSON.stringify(lastUsage)) return;
+  lastUsage = raw;
+  pushUsage();
+});
 // 窗口刚创建时 emitTo 可能先于 pet 的监听器就绪；pet 就绪后自报家门，这里补发最新模型
 listen("pet-ready", (e) => {
   const pet = pets.get(e.payload);
   if (pet?.model) emitTo(`pet-${e.payload}`, "pet-update", pet.model);
 });
-refreshFront().then(tick);
+
+(async () => {
+  lastUsage = (await invoke("get_usage").catch(() => null)) ?? null;
+  await refreshFront();
+  await tick();
+})();

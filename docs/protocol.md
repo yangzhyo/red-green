@@ -34,6 +34,30 @@ hooks 与宠物 app 之间的唯一契约。领域词汇见根目录 [CONTEXT.md
 
 文件另带 `event` 字段（产生当前状态的 hook 事件名），配合同目录 `.events.log`（滚动事件日志，每行 `时间 会话前缀 事件 -> 状态`）用于诊断"宠物状态与体感不符"。
 
+## 用量文件
+
+账号级用量与会话文件同目录、共用一个 watcher，靠文件名区分：
+
+```
+~/.claude/session-status/usage.json
+```
+
+写入方是 status line 脚本 `statusline/usage.sh`（装为 `~/.claude/red-green-usage.sh`，由 settings.json 的 `statusLine` 调用，不打印任何内容）。Claude Code 只在交给 status line 的 JSON 里给出 `rate_limits`，hooks 事件里没有，所以它是 hooks 之外唯一的写入通路。app 只读。
+
+```json
+{
+  "five_hour": { "used_percentage": 23.5, "resets_at": 1738425600 },
+  "seven_day": { "used_percentage": 41.2, "resets_at": 1738857600 },
+  "updated_at": "2026-09-18T08:00:00Z"
+}
+```
+
+- 两个窗口各含已用比例（0–100）与重置时刻（Unix 秒）；哪个窗口缺席就不写哪个键。
+- 所有会话的 status line 都写这同一个文件（用量属于账号）；值没变不重写，避免每次重绘都触发 watcher。
+- `rate_limits` 缺席（API 计费、会话首次响应之前）时不动现有文件——缺席不代表归零。
+- app 侧：重置时刻已过的窗口显示为 0%、重置时刻未知（窗口已清零，下一次响应前没有新值）；文件不存在或无法解析则整块不显示。用量不引入叫声，不进状态机。
+- app 靠文件名跳过 `usage.json`，目录下其他 `*.json` 仍按会话文件处理。
+
 ## 已知盲区：纯思考期
 
 `UserPromptSubmit` 与第一次工具调用之间若 Claude 长时间思考/生成文本，期间没有任何 hook 事件。若此前状态是 `idle`（如会话刚重启），宠物会睡到第一次工具调用才醒。事件流层面无解，属已接受的限制。

@@ -11,12 +11,19 @@ fn status_dir() -> PathBuf {
         .join("session-status")
 }
 
+// 账号级用量文件：由 status line 脚本写入，与会话文件同目录、共用一个 watcher，
+// 靠文件名区分（见 docs/protocol.md「用量文件」）
+const USAGE_FILE: &str = "usage.json";
+
 fn read_snapshot() -> Vec<Value> {
     let mut sessions = Vec::new();
     if let Ok(entries) = std::fs::read_dir(status_dir()) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some(USAGE_FILE) {
                 continue;
             }
             if let Ok(text) = std::fs::read_to_string(&path) {
@@ -40,6 +47,19 @@ fn get_sessions() -> Vec<Value> {
     read_snapshot()
 }
 
+// 文件不存在或不是合法 JSON 都返回 Null：前端据此整块不显示用量
+fn read_usage() -> Value {
+    std::fs::read_to_string(status_dir().join(USAGE_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+#[tauri::command]
+fn get_usage() -> Value {
+    read_usage()
+}
+
 #[tauri::command]
 fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     let label = format!("pet-{sid}");
@@ -47,13 +67,14 @@ fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
         return Ok(());
     }
     const PET_W: f64 = 116.0;
-    // 高度 = 内容 ~134 + 跳跃动画净空（振幅 18px）；再高只是死空间，会虚增视觉间距
-    const PET_H: f64 = 152.0;
+    // 高度 = 内容 ~171（气泡/精灵/名牌 ~134 + 名牌下方两行用量 ~37）+ 跳跃动画净空（振幅 18px）；
+    // 再高只是死空间，会虚增视觉间距
+    const PET_H: f64 = 190.0;
     // 内容在窗口内居中，精灵两侧留白约 22-27px，加上窗口边距视觉距右缘约 30px
     const MARGIN_X: f64 = 4.0;
     const MARGIN_Y: f64 = 132.0;
     // 窗口间距 > 窗口高度：透明区重叠会抢走相邻宠物的点击
-    const SPACING: f64 = 158.0;
+    const SPACING: f64 = 196.0;
 
     // pets stack vertically along the right edge of the primary monitor's
     // work area (excludes the Dock and menu bar), growing bottom-up from
@@ -282,6 +303,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_sessions,
+            get_usage,
             ensure_pet,
             remove_pet,
             focus_terminal,
@@ -314,6 +336,8 @@ fn main() {
                         .is_ok()
                     {}
                     let _ = handle.emit("sessions-changed", read_snapshot());
+                    // 用量文件与会话文件同目录：每次目录变化都顺带推一次，manager 侧去重
+                    let _ = handle.emit("usage-changed", read_usage());
                 }
             });
 
