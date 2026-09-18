@@ -1,8 +1,45 @@
-// 用量表：哑渲染器，把 manager 发来的用量视图画成一个圆；悬停展开成两行明细。
+// 用量表：哑渲染器，把 manager 发来的用量视图画成一枚像素圆表；悬停展开成两行明细；可拖动。
 // 视图由 manager 裁决（含"重置已过即 0%"），这里只负责几何、格式与配色。
 const { listen, emit } = window.__TAURI__.event;
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// 灯色沿用精灵调色板：绿 = 已完成的灯、琥珀 = 运行中的灯、红 = 待确认的灯（sprites.js 的 C）
+const LAMP = { ok: "#52c41a", warn: "#ffc53d", hot: "#ff4d4f" };
+const HOUSING = "#2b2e33";
+const DIM = "#3a3e44";
+
+// 圆表网格：15×15 格，与精灵同一比例（内部 8px/格、CSS 4px/格）。
+// 壳体是半径 ~7 格的像素圆盘；外圈灯格半径 6、内圈半径 3，各一格厚，中间留两格壳体分隔；
+// 圆心 5×5 格留给数字
+const SIZE = 15;
+const CENTER = 7;
+const SCALE = 8;
+
+function cells(pred) {
+  const out = [];
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const dx = x - CENTER;
+      const dy = y - CENTER;
+      if (pred(Math.sqrt(dx * dx + dy * dy))) out.push([y, x]);
+    }
+  }
+  return out;
+}
+
+// 灯格从 12 点起顺时针点亮：按与正上方的顺时针夹角 [0, 2π) 排序
+function clockwise(list) {
+  const angle = ([y, x]) =>
+    (Math.atan2(x - CENTER, CENTER - y) + 2 * Math.PI) % (2 * Math.PI);
+  return list.slice().sort((a, b) => angle(a) - angle(b));
+}
+
+const DISC = cells((d) => d <= 7.3);
+const RINGS = {
+  five_hour: { ch: "O", cells: clockwise(cells((d) => d >= 5.5 && d < 6.5)) },
+  seven_day: { ch: "I", cells: clockwise(cells((d) => d >= 2.5 && d < 3.5)) },
+};
 
 let view = null;
 let expanded = false;
@@ -15,7 +52,7 @@ function fmtReset(ts, key) {
   return key === "five_hour" ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
 }
 
-// 颜色随用量升温：平时白色，60% 起琥珀，85% 起红
+// 颜色随用量升温：60% 起琥珀，85% 起红
 function level(pct) {
   if (pct >= 85) return "hot";
   if (pct >= 60) return "warn";
@@ -28,17 +65,25 @@ function pctOf(key) {
 }
 
 function renderRing() {
-  for (const arc of document.querySelectorAll("#ring .arc")) {
-    const pct = pctOf(arc.dataset.window);
-    const r = Number(arc.getAttribute("r"));
-    const c = 2 * Math.PI * r;
-    // 缺席的窗口画成空环，圆不因此缺一块
-    arc.setAttribute("stroke-dasharray", `${(c * (pct ?? 0)) / 100} ${c}`);
-    arc.dataset.level = level(pct ?? 0);
+  const grid = Array.from({ length: SIZE }, () => Array(SIZE).fill("."));
+  for (const [y, x] of DISC) grid[y][x] = "H";
+  const pal = { H: HOUSING, D: DIM };
+  for (const [key, ring] of Object.entries(RINGS)) {
+    // 缺席的窗口整圈不亮，圆表不因此缺一块
+    const pct = pctOf(key) ?? 0;
+    const lit = Math.round((ring.cells.length * pct) / 100);
+    ring.cells.forEach(([y, x], i) => {
+      grid[y][x] = i < lit ? ring.ch : "D";
+    });
+    pal[ring.ch] = LAMP[level(pct)];
   }
+  window.SPRITES.draw(document.getElementById("disc"), { g: grid, p: pal }, SCALE);
+
   // 圆心只放五小时窗口的数字：变得快、和"现在还能不能干活"直接相关
   const five = pctOf("five_hour");
-  document.getElementById("num").textContent = five === null ? "" : `${five}%`;
+  const num = document.getElementById("num");
+  num.textContent = five === null ? "" : `${five}%`;
+  num.classList.toggle("wide", five !== null && five >= 100);
 }
 
 function renderCard() {
@@ -62,8 +107,8 @@ function render() {
   stage.classList.toggle("expanded", expanded);
 }
 
-// 悬停由 Rust 轮询光标推来（非焦点窗口收不到 mousemove）：进入要真的落在圆 / 卡片上，
-// 展开后只要还在窗口内就保持，避免圆与卡片形状不同导致的反复开合
+// 悬停由 Rust 轮询光标推来（非焦点窗口收不到 mousemove）：进入要真的落在圆表 / 卡片上，
+// 展开后只要还在窗口内就保持，避免圆表与卡片形状不同导致的反复开合
 listen("gauge-hover", (e) => {
   const p = e.payload;
   const hit = p ? stage.contains(document.elementFromPoint(p.x, p.y)) : false;
@@ -79,4 +124,25 @@ listen("usage-update", (e) => {
 }).then(() => {
   // 首帧握手：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪，就绪后请 manager 补发
   emit("gauge-ready");
+});
+
+// 可拖：与宠物同一手势——按下后移动 >4px 进入窗口拖拽；原地松手不做任何事
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+let pressAt = null;
+
+document.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  pressAt = { x: e.screenX, y: e.screenY };
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!pressAt) return;
+  if (Math.abs(e.screenX - pressAt.x) + Math.abs(e.screenY - pressAt.y) > 4) {
+    pressAt = null;
+    appWindow.startDragging();
+  }
+});
+
+document.addEventListener("mouseup", () => {
+  pressAt = null;
 });

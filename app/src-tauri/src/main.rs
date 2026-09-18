@@ -71,7 +71,8 @@ const MARGIN_Y: f64 = 132.0;
 const SPACING: f64 = 158.0;
 // 用量表：与宠物同宽、同一条纵轴，挂在最下面那只宠物脚下、MARGIN_Y 留出的空白里
 const GAUGE_W: f64 = PET_W;
-const GAUGE_H: f64 = 56.0;
+// 高度 = 像素圆表 60（15 格 × 4px）+ 上下各 2px
+const GAUGE_H: f64 = 64.0;
 const GAUGE_LABEL: &str = "usage-gauge";
 
 // 宠物列的锚点：主显示器工作区（不含 Dock 与菜单栏）的右下角，逻辑坐标；

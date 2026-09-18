@@ -7,15 +7,11 @@
   </head>
   <body>
     <div id="stage">
-      <!-- 静置：一个圆。外环 = 五小时窗口，内环 = 七天窗口，圆心 = 五小时的数字 -->
-      <svg id="ring" viewBox="0 0 44 44" width="44" height="44">
-        <circle class="disc" cx="22" cy="22" r="22" />
-        <circle class="track" cx="22" cy="22" r="17.5" />
-        <circle class="arc" data-window="five_hour" cx="22" cy="22" r="17.5" />
-        <circle class="track inner" cx="22" cy="22" r="12" />
-        <circle class="arc inner" data-window="seven_day" cx="22" cy="22" r="12" />
-        <text id="num" x="22" y="22"></text>
-      </svg>
+      <!-- 静置：一枚像素圆表。与灯灯同款壳体，外圈 = 五小时窗口，内圈 = 七天窗口，圆心 = 五小时的数字 -->
+      <div id="ring">
+        <canvas id="disc"></canvas>
+        <div id="num"></div>
+      </div>
       <!-- 悬停：展开成两行明细 -->
       <div id="card">
         <div class="row" data-window="five_hour">
@@ -26,6 +22,7 @@
         </div>
       </div>
     </div>
+    <script src="sprites.js"></script>
     <script src="gauge.js"></script>
   </body>
 </html>

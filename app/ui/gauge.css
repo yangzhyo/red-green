@@ -1,5 +1,5 @@
-/* 用量表：宠物列脚下的独立小窗。静置是一个圆（双环 + 圆心数字），悬停展开成两行明细。
-   与名牌同一色系（半透明深底、白字）；不做像素风——它是表，不是生物。 */
+/* 用量表：宠物列脚下的独立小窗。静置是一枚像素圆表（与灯灯同款壳体，两圈灯格 + 圆心数字），
+   悬停展开成两行明细。圆表由 gauge.js 用精灵管线画在 canvas 上，这里只管布局与卡片。 */
 
 html,
 body {
@@ -12,13 +12,14 @@ body {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-/* stage 只包住内容本身：悬停判定以圆 / 卡片的实际范围为准，不含窗口的透明区 */
+/* stage 只包住内容本身：悬停判定以圆表 / 卡片的实际范围为准，不含窗口的透明区 */
 body {
   display: flex;
   justify-content: center;
   align-items: flex-start;
   padding-top: 2px;
   box-sizing: border-box;
+  cursor: grab; /* 整窗可拖：挡住东西时挪开 */
 }
 
 #stage {
@@ -26,63 +27,39 @@ body {
   justify-content: center;
 }
 
-/* 静置只见圆，展开只见卡片。用 class 切换而不是 hidden 属性：SVG 元素没有 hidden */
+/* 静置只见圆表，展开只见卡片 */
 #stage.expanded #ring,
 #stage:not(.expanded) #card {
   display: none;
 }
 
 #ring {
+  position: relative;
+}
+
+#disc {
   display: block;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+  image-rendering: pixelated;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25)); /* 与精灵同一投影 */
 }
 
-#ring .disc {
-  fill: rgba(0, 0, 0, 0.4);
-}
-
-#ring .track {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.18);
-  stroke-width: 4;
-}
-#ring .track.inner {
-  stroke-width: 3;
-}
-
-/* 圆弧从 12 点起顺时针；长度由 gauge.js 按比例设 stroke-dasharray */
-#ring .arc {
-  --fill: rgba(255, 255, 255, 0.92);
-  fill: none;
-  stroke: var(--fill);
-  stroke-width: 4;
-  stroke-linecap: butt;
-  transform: rotate(-90deg);
-  transform-origin: 50% 50%;
-}
-#ring .arc.inner {
-  stroke-width: 3;
-}
-
-/* 颜色随用量升温：平时白色，只在快用完时刺眼 */
-#ring .arc[data-level="warn"],
-#card .row[data-level="warn"] {
-  --fill: rgba(240, 173, 40, 0.92);
-}
-#ring .arc[data-level="hot"],
-#card .row[data-level="hot"] {
-  --fill: rgba(230, 70, 70, 0.92);
-}
-
-#ring #num {
-  fill: #fff;
-  font-size: 8px;
+/* 圆心数字：壳体是深色，白字直接可读 */
+#num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f5f6f8;
+  font-size: 9px;
   font-weight: 700;
-  text-anchor: middle;
-  dominant-baseline: central;
+  letter-spacing: -0.2px;
+}
+#num.wide {
+  font-size: 8px; /* 三位数（100%）收一号 */
 }
 
-/* ---- 展开的两行明细 ---- */
+/* ---- 展开的两行明细：与名牌同款胶囊，填充色沿用灯色 ---- */
 #card {
   display: flex;
   flex-direction: column;
@@ -96,7 +73,7 @@ body {
 }
 
 #card .row {
-  --fill: rgba(255, 255, 255, 0.85);
+  --fill: rgba(82, 196, 26, 0.85);
   --pct: 0%;
   display: flex;
   align-items: baseline;
@@ -115,6 +92,14 @@ body {
     var(--fill) var(--pct),
     rgba(0, 0, 0, 0.4) var(--pct)
   );
+}
+
+#card .row[data-level="warn"] {
+  --fill: rgba(255, 197, 61, 0.9);
+}
+
+#card .row[data-level="hot"] {
+  --fill: rgba(255, 77, 79, 0.9);
 }
 
 #card .k {

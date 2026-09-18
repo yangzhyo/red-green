@@ -44,12 +44,13 @@ app 监听 `~/.claude/session-status/*.json`(hooks 契约见 docs/protocol.md),�
 ```
 
 - 至少要有一只宠物在场(用量表挂在宠物列脚下,没有宠物就没有用量表)。
-- 用量表静置是一个圆(外环五小时、内环七天、圆心五小时数字),悬停才展开两行明细。悬停由 Rust 轮询光标位置驱动,可用 `scripts/mousemove.swift` 模拟(本机实测不需要额外授权):
+- 用量表静置是一枚像素圆表(外圈五小时、内圈七天、圆心五小时数字),悬停才展开两行明细。悬停由 Rust 轮询光标位置驱动,可用 `scripts/mousemove.swift` 模拟(本机实测不需要额外授权):
 
   ```bash
   swiftc -O scripts/mousemove.swift -o /tmp/mousemove
   /tmp/mousemove 1250 818 1450 818     # 逻辑坐标,从起点分步移到终点
-  # 圆心 = (工作区右缘 - MARGIN_X - GAUGE_W/2, 工作区下缘 - MARGIN_Y + 2 + 22),常量见 main.rs;当前 ≈ (右缘-62, 下缘-108)
+  # 圆心 = (工作区右缘 - MARGIN_X - GAUGE_W/2, 工作区下缘 - MARGIN_Y + 2 + 30),常量见 main.rs;当前 ≈ (右缘-62, 下缘-100)
+  /tmp/mousemove 1450 810 1450 700 drag  # 末尾加 drag = 按住拖动:验证用量表可拖
   ```
 - `resets_at` 给过去的时间 → 该窗口 0%、明细里无重置时刻;两个窗口都缺席或文件删除 → 用量表消失。
 - 真实通路走 status line:`echo '{"rate_limits":{...}}' | ~/.claude/red-green-usage.sh` 等价于 Claude Code 的一次重绘。
