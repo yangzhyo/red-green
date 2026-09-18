@@ -94,6 +94,7 @@ fn column_anchor(app: &AppHandle) -> (f64, f64) {
             let size = wa.size.to_logical::<f64>(scale);
             (pos.x + size.width, pos.y)
         }
+        // 让 slot 0 落在 (600, 194)：720-4-116 = 600，0+194 = 194
         _ => (720.0, 0.0),
     }
 }
