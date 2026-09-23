@@ -32,7 +32,7 @@ hooks、status line 脚本与宠物 app 之间的唯一契约：会话文件由 
 
 **终端**：会话跑在哪个终端 app 里由 app 按 tty 现场判定——终端为每个标签页在 tty 上起一个 login，login 的父进程就是终端 app。Terminal.app 的 AppleScript 直接按 tty 匹配标签页。Ghostty（1.3 起有 AppleScript）的 terminal 不带 tty，app 往 tty 写一条带记号的 OSC 7、看哪个 terminal 的工作目录变成了记号，由此对上 terminal id 并缓存，认出后把原目录写回（见 [ADR 0005](adr/0005-ghostty-osc7-probe.md)）。其他终端不支持：点击什么都不做，也不会去启动 Terminal。
 
-**tmux**：pane 里的会话记录的是 pane 的 tty，它不在终端的任何 tab 上。app 在点击聚焦时动态解析：pane tty → tmux 目标（session:window.pane，让 tmux 切过去）→ 挂载客户端的 tty → 真正的终端 tab。反向地，已阅检测发现前台 tab 是 tmux 客户端时，取其 session 活动 pane 的 tty 作为"用户实际在看"的 tty。解析放在点击/检测时而非记录时，因为 tmux 客户端可以随时换地方 re-attach。
+**tmux**：pane 里的会话记录的是 pane 的 tty，它不在终端的任何标签页上。app 在点击聚焦时动态解析：pane tty → tmux 目标（session:window.pane，让 tmux 切过去）→ 挂载客户端的 tty → 真正的终端标签页。反向地，已阅检测发现前台标签页是 tmux 客户端时，取其 session 活动 pane 的 tty 作为"用户实际在看"的 tty。解析放在点击/检测时而非记录时，因为 tmux 客户端可以随时换地方 re-attach。
 
 文件另带 `event` 字段（产生当前状态的 hook 事件名），配合同目录 `.events.log`（滚动事件日志，每行 `时间 会话前缀 事件 -> 状态`）用于诊断"宠物状态与体感不符"。
 

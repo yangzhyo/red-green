@@ -237,8 +237,8 @@ fn tmux_clients() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-// pane tty -> (tmux 目标 "session:window.pane", 挂载客户端的 tty)
-fn tmux_locate(pane_tty: &str) -> Option<(String, Option<String>)> {
+// pane tty -> (tmux 目标 "session:window.pane", 挂在该 session 上的所有客户端 tty)
+fn tmux_locate(pane_tty: &str) -> Option<(String, Vec<String>)> {
     // 分隔符用空格：tmux 会把输出中的控制字符（含制表符）消毒成 "_"
     let panes = tmux(&[
         "list-panes",
@@ -259,14 +259,14 @@ fn tmux_locate(pane_tty: &str) -> Option<(String, Option<String>)> {
         }
     };
     let session = target.split(':').next().unwrap_or_default().to_string();
-    let clients = tmux_clients();
-    let client = clients
-        .iter()
-        .find_map(|(ctty, csess)| (*csess == session).then(|| ctty.clone()));
+    let clients: Vec<String> = tmux_clients()
+        .into_iter()
+        .filter_map(|(ctty, csess)| (csess == session).then_some(ctty))
+        .collect();
     dbg_log(&format!(
-        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients:?} client={client:?}"
+        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients:?}"
     ));
-    Some((target, client))
+    Some((target, clients))
 }
 
 // 前台 tab 挂着 tmux 客户端时，用户实际看到的是该 session 当前窗口的活动 pane
@@ -291,14 +291,31 @@ fn osascript(script: &str) -> Result<String, String> {
     }
 }
 
-const TERMINAL_BUNDLE_ID: &str = "com.apple.Terminal";
-
 // 承载会话的终端 app。只认这两种：对不认识的终端什么都不做，
 // 尤其不能去 tell Terminal——tell 一个没在跑的 app 会把它启动起来
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Host {
-    Terminal,
+    AppleTerminal,
     Ghostty,
+}
+
+impl Host {
+    const ALL: [Host; 2] = [Host::AppleTerminal, Host::Ghostty];
+
+    fn bundle_id(self) -> &'static str {
+        match self {
+            Host::AppleTerminal => "com.apple.Terminal",
+            Host::Ghostty => "com.mitchellh.ghostty",
+        }
+    }
+
+    // 可执行文件路径里的 .app 目录
+    fn app_dir(self) -> &'static str {
+        match self {
+            Host::AppleTerminal => "/Terminal.app/",
+            Host::Ghostty => "/Ghostty.app/",
+        }
+    }
 }
 
 // 终端 app 为每个标签页在它的 tty 上起一个 login：该 tty 上父进程不在这个 tty 上的
@@ -325,18 +342,12 @@ fn tty_host(tty: &str) -> Option<Host> {
         .output()
         .ok()?;
     let exe = String::from_utf8_lossy(&out.stdout);
-    if exe.contains("/Terminal.app/") {
-        Some(Host::Terminal)
-    } else if exe.contains("/Ghostty.app/") {
-        Some(Host::Ghostty)
-    } else {
-        None
-    }
+    Host::ALL.into_iter().find(|h| exe.contains(h.app_dir()))
 }
 
 // set frontmost 比 set index 可靠；activate 必须在命中之后——
 // 放在最前会在找不到 tab 时把 Terminal 连同错误的窗口带到前台
-fn focus_terminal_app(tab_tty: &str) -> String {
+fn focus_apple_terminal(tab_tty: &str) -> String {
     let script = format!(
         r#"tell application "Terminal"
     repeat with w in windows
@@ -365,7 +376,7 @@ fn focus_terminal(tty: String) {
     // tmux pane 里的会话：先让 tmux 切到对应 session/window/pane，
     // 再把「找 tab」的目标换成挂着 tmux 客户端的真实 tty
     let mut tab_tty = tty.clone();
-    if let Some((target, client_tty)) = tmux_locate(&tty) {
+    if let Some((target, clients)) = tmux_locate(&tty) {
         let session = target.split(':').next().unwrap_or_default().to_string();
         let window = target
             .rsplit_once('.')
@@ -374,12 +385,12 @@ fn focus_terminal(tty: String) {
         let _ = tmux(&["switch-client", "-t", &session]);
         let _ = tmux(&["select-window", "-t", &window]);
         let _ = tmux(&["select-pane", "-t", &target]);
-        if let Some(ct) = client_tty {
+        if let Some(ct) = clients.into_iter().next() {
             tab_tty = ct;
         }
     }
     let msg = match tty_host(&tab_tty) {
-        Some(Host::Terminal) => focus_terminal_app(&tab_tty),
+        Some(Host::AppleTerminal) => focus_apple_terminal(&tab_tty),
         Some(Host::Ghostty) => ghostty::focus(&tab_tty),
         None => "host=unknown".to_string(),
     };
@@ -388,12 +399,25 @@ fn focus_terminal(tty: String) {
     dbg_log(&format!("focus_terminal tty={tty} tab_tty={tab_tty} {msg}"));
 }
 
-// 会话 tty 跑在 Ghostty 里时给出宿主 tty（tmux pane 换成挂着客户端的 tty），否则 None
-fn ghostty_host_tty(tty: &str) -> Option<String> {
-    let host = tmux_locate(tty)
-        .and_then(|(_, client)| client)
-        .unwrap_or_else(|| tty.to_string());
-    (tty_host(&host) == Some(Host::Ghostty)).then_some(host)
+fn session_ttys() -> Vec<String> {
+    read_snapshot()
+        .iter()
+        .filter_map(|s| s["tty"].as_str())
+        .filter(|t| t.starts_with("/dev/tty"))
+        .map(String::from)
+        .collect()
+}
+
+// 会话所在的 Ghostty 标签页 tty：tmux pane 换成挂在它 session 上的客户端 tty——
+// 同一个 session 可以同时挂在几个标签页上，每个都算；不在 Ghostty 里的不算
+fn ghostty_tab_ttys(tty: &str) -> Vec<String> {
+    let tabs = match tmux_locate(tty) {
+        Some((_, clients)) => clients,
+        None => vec![tty.to_string()],
+    };
+    tabs.into_iter()
+        .filter(|t| tty_host(t) == Some(Host::Ghostty))
+        .collect()
 }
 
 fn frontmost_tty_impl() -> Option<String> {
@@ -402,21 +426,16 @@ fn frontmost_tty_impl() -> Option<String> {
     )
     .ok()?;
     // 各终端分开问：一段脚本里写 tell application "Ghostty"，没装 Ghostty 的机器上整段编译失败
-    let s = match front.as_str() {
-        TERMINAL_BUNDLE_ID => osascript(
+    let s = match Host::ALL.into_iter().find(|h| h.bundle_id() == front)? {
+        Host::AppleTerminal => osascript(
             r#"tell application "Terminal" to return tty of selected tab of front window"#,
         )
         .ok(),
-        ghostty::BUNDLE_ID => {
-            let sessions = read_snapshot()
-                .iter()
-                .filter_map(|s| s["tty"].as_str())
-                .filter(|t| t.starts_with("/dev/tty"))
-                .map(String::from)
-                .collect();
-            ghostty::front_tty(sessions, ghostty_host_tty)
-        }
-        _ => None,
+        // tmux 客户端算进现状：在已登记过的标签页里 attach，也要重新发现
+        Host::Ghostty => ghostty::front_tty(
+            || format!("{:?} {:?}", session_ttys(), tmux_clients()),
+            || session_ttys().iter().flat_map(|t| ghostty_tab_ttys(t)).collect(),
+        ),
     }
     .filter(|s| !s.is_empty())?;
     if let Some(pane) = tmux_client_active_pane(&s) {
