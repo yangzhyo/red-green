@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager};
 
+mod ghostty;
+
 fn status_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME not set"))
         .join(".claude")
@@ -275,6 +277,86 @@ fn tmux_client_active_pane(client_tty: &str) -> Option<String> {
     tmux(&["display-message", "-p", "-t", &session, "#{pane_tty}"])
 }
 
+// 成功给 stdout（去掉末尾换行），失败给 stderr
+fn osascript(script: &str) -> Result<String, String> {
+    let out = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+const TERMINAL_BUNDLE_ID: &str = "com.apple.Terminal";
+
+// 承载会话的终端 app。只认这两种：对不认识的终端什么都不做，
+// 尤其不能去 tell Terminal——tell 一个没在跑的 app 会把它启动起来
+#[derive(PartialEq)]
+enum Host {
+    Terminal,
+    Ghostty,
+}
+
+// 终端 app 为每个标签页在它的 tty 上起一个 login：该 tty 上父进程不在这个 tty 上的
+// 那个进程就是 login，它的父进程就是终端 app，按可执行文件路径认
+fn tty_host(tty: &str) -> Option<Host> {
+    let name = tty.strip_prefix("/dev/")?;
+    let out = Command::new("ps")
+        .args(["-t", name, "-o", "pid=,ppid="])
+        .output()
+        .ok()?;
+    let procs: Vec<(u32, u32)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut cols = l.split_whitespace();
+            Some((cols.next()?.parse().ok()?, cols.next()?.parse().ok()?))
+        })
+        .collect();
+    let app = procs
+        .iter()
+        .map(|&(_, ppid)| ppid)
+        .find(|&ppid| ppid > 1 && !procs.iter().any(|&(pid, _)| pid == ppid))?;
+    let out = Command::new("ps")
+        .args(["-o", "comm=", "-p", &app.to_string()])
+        .output()
+        .ok()?;
+    let exe = String::from_utf8_lossy(&out.stdout);
+    if exe.contains("/Terminal.app/") {
+        Some(Host::Terminal)
+    } else if exe.contains("/Ghostty.app/") {
+        Some(Host::Ghostty)
+    } else {
+        None
+    }
+}
+
+// set frontmost 比 set index 可靠；activate 必须在命中之后——
+// 放在最前会在找不到 tab 时把 Terminal 连同错误的窗口带到前台
+fn focus_terminal_app(tab_tty: &str) -> String {
+    let script = format!(
+        r#"tell application "Terminal"
+    repeat with w in windows
+        repeat with t in tabs of w
+            if tty of t is "{tab_tty}" then
+                set selected of t to true
+                set frontmost of w to true
+                activate
+                return
+            end if
+        end repeat
+    end repeat
+end tell"#
+    );
+    match osascript(&script) {
+        Ok(_) => "terminal=ok".to_string(),
+        Err(e) => format!("terminal_err={e}"),
+    }
+}
+
 #[tauri::command]
 fn focus_terminal(tty: String) {
     if tty.is_empty() || !tty.starts_with("/dev/tty") {
@@ -296,52 +378,47 @@ fn focus_terminal(tty: String) {
             tab_tty = ct;
         }
     }
-    // set frontmost 比 set index 可靠；activate 必须在命中之后——
-    // 放在最前会在找不到 tab 时把 Terminal 连同错误的窗口带到前台
-    let script = format!(
-        r#"tell application "Terminal"
-    repeat with w in windows
-        repeat with t in tabs of w
-            if tty of t is "{tab_tty}" then
-                set selected of t to true
-                set frontmost of w to true
-                activate
-                return
-            end if
-        end repeat
-    end repeat
-end tell"#
-    );
-    let out = Command::new("osascript").arg("-e").arg(script).output();
-    // 现场日志：点击定位涉及 tmux 解析 + TCC 权限 + AppleScript 三层，
-    // 出问题时凭这行就能定位是哪层
-    let msg = match &out {
-        Ok(o) => format!(
-            "tty={} tab_tty={} osascript_ok={} err={}",
-            tty,
-            tab_tty,
-            o.status.success(),
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Err(e) => format!("tty={} tab_tty={} spawn_err={}", tty, tab_tty, e),
+    let msg = match tty_host(&tab_tty) {
+        Some(Host::Terminal) => focus_terminal_app(&tab_tty),
+        Some(Host::Ghostty) => ghostty::focus(&tab_tty),
+        None => "host=unknown".to_string(),
     };
-    dbg_log(&format!("focus_terminal {msg}"));
+    // 现场日志：点击定位涉及 tmux 解析 + 终端识别 + TCC 权限 + AppleScript 几层，
+    // 出问题时凭这行就能定位是哪层
+    dbg_log(&format!("focus_terminal tty={tty} tab_tty={tab_tty} {msg}"));
+}
+
+// 会话 tty 跑在 Ghostty 里时给出宿主 tty（tmux pane 换成挂着客户端的 tty），否则 None
+fn ghostty_host_tty(tty: &str) -> Option<String> {
+    let host = tmux_locate(tty)
+        .and_then(|(_, client)| client)
+        .unwrap_or_else(|| tty.to_string());
+    (tty_host(&host) == Some(Host::Ghostty)).then_some(host)
 }
 
 fn frontmost_tty_impl() -> Option<String> {
-    let script = r#"tell application "System Events"
-    set frontApp to bundle identifier of first process whose frontmost is true
-end tell
-if frontApp is "com.apple.Terminal" then
-    tell application "Terminal" to return tty of selected tab of front window
-else
-    return ""
-end if"#;
-    let out = Command::new("osascript").arg("-e").arg(script).output().ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        return None;
+    let front = osascript(
+        r#"tell application "System Events" to return bundle identifier of first process whose frontmost is true"#,
+    )
+    .ok()?;
+    // 各终端分开问：一段脚本里写 tell application "Ghostty"，没装 Ghostty 的机器上整段编译失败
+    let s = match front.as_str() {
+        TERMINAL_BUNDLE_ID => osascript(
+            r#"tell application "Terminal" to return tty of selected tab of front window"#,
+        )
+        .ok(),
+        ghostty::BUNDLE_ID => {
+            let sessions = read_snapshot()
+                .iter()
+                .filter_map(|s| s["tty"].as_str())
+                .filter(|t| t.starts_with("/dev/tty"))
+                .map(String::from)
+                .collect();
+            ghostty::front_tty(sessions, ghostty_host_tty)
+        }
+        _ => None,
     }
+    .filter(|s| !s.is_empty())?;
     if let Some(pane) = tmux_client_active_pane(&s) {
         return Some(pane);
     }

@@ -28,9 +28,11 @@ hooks、status line 脚本与宠物 app 之间的唯一契约：会话文件由 
 
 `state` 是英文标识符，与 CONTEXT.md 术语的对应：`idle`=空闲、`running`=运行中、`awaiting`=待确认、`your_turn`=轮到你、`completed`=已完成、`aborted`=异常中止。
 
-`tty` 用于点击聚焦（AppleScript 按 tty 匹配 Terminal 标签页）和已阅检测（前台标签页的 tty == 该会话 tty）。hook 进程自身没有 tty，脚本沿进程树向上找；找不到时保留上一次记录的值。
+`tty` 用于点击聚焦和已阅检测（前台标签页的 tty == 该会话 tty）。hook 进程自身没有 tty，脚本沿进程树向上找；找不到时保留上一次记录的值。
 
-**tmux**：pane 里的会话记录的是 pane 的 tty，它不在 Terminal 的任何 tab 上。app 在点击聚焦时动态解析：pane tty → tmux 目标（session:window.pane，让 tmux 切过去）→ 挂载客户端的 tty → 真正的 Terminal tab。反向地，已阅检测发现前台 tab 是 tmux 客户端时，取其 session 活动 pane 的 tty 作为"用户实际在看"的 tty。解析放在点击/检测时而非记录时，因为 tmux 客户端可以随时换地方 re-attach。
+**终端**：会话跑在哪个终端 app 里由 app 按 tty 现场判定——终端为每个标签页在 tty 上起一个 login，login 的父进程就是终端 app。Terminal.app 的 AppleScript 直接按 tty 匹配标签页。Ghostty（1.3 起有 AppleScript）的 terminal 不带 tty，app 往 tty 写一条带记号的 OSC 7、看哪个 terminal 的工作目录变成了记号，由此对上 terminal id 并缓存，认出后把原目录写回（见 [ADR 0005](adr/0005-ghostty-osc7-probe.md)）。其他终端不支持：点击什么都不做，也不会去启动 Terminal。
+
+**tmux**：pane 里的会话记录的是 pane 的 tty，它不在终端的任何 tab 上。app 在点击聚焦时动态解析：pane tty → tmux 目标（session:window.pane，让 tmux 切过去）→ 挂载客户端的 tty → 真正的终端 tab。反向地，已阅检测发现前台 tab 是 tmux 客户端时，取其 session 活动 pane 的 tty 作为"用户实际在看"的 tty。解析放在点击/检测时而非记录时，因为 tmux 客户端可以随时换地方 re-attach。
 
 文件另带 `event` 字段（产生当前状态的 hook 事件名），配合同目录 `.events.log`（滚动事件日志，每行 `时间 会话前缀 事件 -> 状态`）用于诊断"宠物状态与体感不符"。
 
@@ -107,7 +109,7 @@ hooks、status line 脚本与宠物 app 之间的唯一契约：会话文件由 
 
 ## 已阅（app 内存态，不写回文件）
 
-`completed` / `aborted` 的会话，当其 `tty` 成为前台 Terminal 标签页时视为已阅，app 内将其显示为空闲。`since` 变化（新事件）即重置已阅标记。不写回文件是为了保持"hooks 只写、app 只读"的单向数据流。
+`completed` / `aborted` 的会话，当其 `tty` 成为前台终端标签页时视为已阅，app 内将其显示为空闲。`since` 变化（新事件）即重置已阅标记。不写回文件是为了保持"hooks 只写、app 只读"的单向数据流。
 
 `your_turn` 不适用已阅：Claude 的问题没被回答前，"轮到你"持续成立，直到 `UserPromptSubmit`（用户作答）转回 `running`。
 
