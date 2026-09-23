@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager};
 
+mod ghostty;
+
 fn status_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME not set"))
         .join(".claude")
@@ -235,8 +237,8 @@ fn tmux_clients() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-// pane tty -> (tmux 目标 "session:window.pane", 挂载客户端的 tty)
-fn tmux_locate(pane_tty: &str) -> Option<(String, Option<String>)> {
+// pane tty -> (tmux 目标 "session:window.pane", 挂在该 session 上的所有客户端 tty)
+fn tmux_locate(pane_tty: &str) -> Option<(String, Vec<String>)> {
     // 分隔符用空格：tmux 会把输出中的控制字符（含制表符）消毒成 "_"
     let panes = tmux(&[
         "list-panes",
@@ -257,14 +259,14 @@ fn tmux_locate(pane_tty: &str) -> Option<(String, Option<String>)> {
         }
     };
     let session = target.split(':').next().unwrap_or_default().to_string();
-    let clients = tmux_clients();
-    let client = clients
-        .iter()
-        .find_map(|(ctty, csess)| (*csess == session).then(|| ctty.clone()));
+    let clients: Vec<String> = tmux_clients()
+        .into_iter()
+        .filter_map(|(ctty, csess)| (csess == session).then_some(ctty))
+        .collect();
     dbg_log(&format!(
-        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients:?} client={client:?}"
+        "tmux_locate pane={pane_tty} target={target} session={session} clients={clients:?}"
     ));
-    Some((target, client))
+    Some((target, clients))
 }
 
 // 前台 tab 挂着 tmux 客户端时，用户实际看到的是该 session 当前窗口的活动 pane
@@ -275,29 +277,77 @@ fn tmux_client_active_pane(client_tty: &str) -> Option<String> {
     tmux(&["display-message", "-p", "-t", &session, "#{pane_tty}"])
 }
 
-#[tauri::command]
-fn focus_terminal(tty: String) {
-    if tty.is_empty() || !tty.starts_with("/dev/tty") {
-        return;
+// 成功给 stdout（去掉末尾换行），失败给 stderr
+fn osascript(script: &str) -> Result<String, String> {
+    let out = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
-    // tmux pane 里的会话：先让 tmux 切到对应 session/window/pane，
-    // 再把「找 tab」的目标换成挂着 tmux 客户端的真实 tty
-    let mut tab_tty = tty.clone();
-    if let Some((target, client_tty)) = tmux_locate(&tty) {
-        let session = target.split(':').next().unwrap_or_default().to_string();
-        let window = target
-            .rsplit_once('.')
-            .map(|(w, _)| w.to_string())
-            .unwrap_or_else(|| target.clone());
-        let _ = tmux(&["switch-client", "-t", &session]);
-        let _ = tmux(&["select-window", "-t", &window]);
-        let _ = tmux(&["select-pane", "-t", &target]);
-        if let Some(ct) = client_tty {
-            tab_tty = ct;
+}
+
+// 承载会话的终端 app。只认这两种：对不认识的终端什么都不做，
+// 尤其不能去 tell Terminal——tell 一个没在跑的 app 会把它启动起来
+#[derive(Clone, Copy, PartialEq)]
+enum Host {
+    AppleTerminal,
+    Ghostty,
+}
+
+impl Host {
+    const ALL: [Host; 2] = [Host::AppleTerminal, Host::Ghostty];
+
+    fn bundle_id(self) -> &'static str {
+        match self {
+            Host::AppleTerminal => "com.apple.Terminal",
+            Host::Ghostty => "com.mitchellh.ghostty",
         }
     }
-    // set frontmost 比 set index 可靠；activate 必须在命中之后——
-    // 放在最前会在找不到 tab 时把 Terminal 连同错误的窗口带到前台
+
+    // 可执行文件路径里的 .app 目录
+    fn app_dir(self) -> &'static str {
+        match self {
+            Host::AppleTerminal => "/Terminal.app/",
+            Host::Ghostty => "/Ghostty.app/",
+        }
+    }
+}
+
+// 终端 app 为每个标签页在它的 tty 上起一个 login：该 tty 上父进程不在这个 tty 上的
+// 那个进程就是 login，它的父进程就是终端 app，按可执行文件路径认
+fn tty_host(tty: &str) -> Option<Host> {
+    let name = tty.strip_prefix("/dev/")?;
+    let out = Command::new("ps")
+        .args(["-t", name, "-o", "pid=,ppid="])
+        .output()
+        .ok()?;
+    let procs: Vec<(u32, u32)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut cols = l.split_whitespace();
+            Some((cols.next()?.parse().ok()?, cols.next()?.parse().ok()?))
+        })
+        .collect();
+    let app = procs
+        .iter()
+        .map(|&(_, ppid)| ppid)
+        .find(|&ppid| ppid > 1 && !procs.iter().any(|&(pid, _)| pid == ppid))?;
+    let out = Command::new("ps")
+        .args(["-o", "comm=", "-p", &app.to_string()])
+        .output()
+        .ok()?;
+    let exe = String::from_utf8_lossy(&out.stdout);
+    Host::ALL.into_iter().find(|h| exe.contains(h.app_dir()))
+}
+
+// set frontmost 比 set index 可靠；activate 必须在命中之后——
+// 放在最前会在找不到 tab 时把 Terminal 连同错误的窗口带到前台
+fn focus_apple_terminal(tab_tty: &str) -> String {
     let script = format!(
         r#"tell application "Terminal"
     repeat with w in windows
@@ -312,36 +362,82 @@ fn focus_terminal(tty: String) {
     end repeat
 end tell"#
     );
-    let out = Command::new("osascript").arg("-e").arg(script).output();
-    // 现场日志：点击定位涉及 tmux 解析 + TCC 权限 + AppleScript 三层，
-    // 出问题时凭这行就能定位是哪层
-    let msg = match &out {
-        Ok(o) => format!(
-            "tty={} tab_tty={} osascript_ok={} err={}",
-            tty,
-            tab_tty,
-            o.status.success(),
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Err(e) => format!("tty={} tab_tty={} spawn_err={}", tty, tab_tty, e),
+    match osascript(&script) {
+        Ok(_) => "terminal=ok".to_string(),
+        Err(e) => format!("terminal_err={e}"),
+    }
+}
+
+#[tauri::command]
+fn focus_terminal(tty: String) {
+    if tty.is_empty() || !tty.starts_with("/dev/tty") {
+        return;
+    }
+    // tmux pane 里的会话：先让 tmux 切到对应 session/window/pane，
+    // 再把「找 tab」的目标换成挂着 tmux 客户端的真实 tty
+    let mut tab_tty = tty.clone();
+    if let Some((target, clients)) = tmux_locate(&tty) {
+        let session = target.split(':').next().unwrap_or_default().to_string();
+        let window = target
+            .rsplit_once('.')
+            .map(|(w, _)| w.to_string())
+            .unwrap_or_else(|| target.clone());
+        let _ = tmux(&["switch-client", "-t", &session]);
+        let _ = tmux(&["select-window", "-t", &window]);
+        let _ = tmux(&["select-pane", "-t", &target]);
+        if let Some(ct) = clients.into_iter().next() {
+            tab_tty = ct;
+        }
+    }
+    let msg = match tty_host(&tab_tty) {
+        Some(Host::AppleTerminal) => focus_apple_terminal(&tab_tty),
+        Some(Host::Ghostty) => ghostty::focus(&tab_tty),
+        None => "host=unknown".to_string(),
     };
-    dbg_log(&format!("focus_terminal {msg}"));
+    // 现场日志：点击定位涉及 tmux 解析 + 终端识别 + TCC 权限 + AppleScript 几层，
+    // 出问题时凭这行就能定位是哪层
+    dbg_log(&format!("focus_terminal tty={tty} tab_tty={tab_tty} {msg}"));
+}
+
+fn session_ttys() -> Vec<String> {
+    read_snapshot()
+        .iter()
+        .filter_map(|s| s["tty"].as_str())
+        .filter(|t| t.starts_with("/dev/tty"))
+        .map(String::from)
+        .collect()
+}
+
+// 会话所在的 Ghostty 标签页 tty：tmux pane 换成挂在它 session 上的客户端 tty——
+// 同一个 session 可以同时挂在几个标签页上，每个都算；不在 Ghostty 里的不算
+fn ghostty_tab_ttys(tty: &str) -> Vec<String> {
+    let tabs = match tmux_locate(tty) {
+        Some((_, clients)) => clients,
+        None => vec![tty.to_string()],
+    };
+    tabs.into_iter()
+        .filter(|t| tty_host(t) == Some(Host::Ghostty))
+        .collect()
 }
 
 fn frontmost_tty_impl() -> Option<String> {
-    let script = r#"tell application "System Events"
-    set frontApp to bundle identifier of first process whose frontmost is true
-end tell
-if frontApp is "com.apple.Terminal" then
-    tell application "Terminal" to return tty of selected tab of front window
-else
-    return ""
-end if"#;
-    let out = Command::new("osascript").arg("-e").arg(script).output().ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        return None;
+    let front = osascript(
+        r#"tell application "System Events" to return bundle identifier of first process whose frontmost is true"#,
+    )
+    .ok()?;
+    // 各终端分开问：一段脚本里写 tell application "Ghostty"，没装 Ghostty 的机器上整段编译失败
+    let s = match Host::ALL.into_iter().find(|h| h.bundle_id() == front)? {
+        Host::AppleTerminal => osascript(
+            r#"tell application "Terminal" to return tty of selected tab of front window"#,
+        )
+        .ok(),
+        // tmux 客户端算进现状：在已登记过的标签页里 attach，也要重新发现
+        Host::Ghostty => ghostty::front_tty(
+            || format!("{:?} {:?}", session_ttys(), tmux_clients()),
+            || session_ttys().iter().flat_map(|t| ghostty_tab_ttys(t)).collect(),
+        ),
     }
+    .filter(|s| !s.is_empty())?;
     if let Some(pane) = tmux_client_active_pane(&s) {
         return Some(pane);
     }
