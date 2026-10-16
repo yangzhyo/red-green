@@ -1,4 +1,4 @@
-// 账号级视图：来源与额度桶独立，不随会话数量累加。
+// 账号级视图：来源与额度组独立，不随会话数量累加。
 globalThis.USAGE = (() => {
   const valid = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 100;
   function groups(raw, sources, now) {
@@ -12,14 +12,17 @@ globalThis.USAGE = (() => {
           return { ...w, used_percentage: known ? w.used_percentage : null, resets_at: known ? w.resets_at : null };
         }) });
       }
-      if (!result.length) result.push({id: "codex:unknown", source: "codex", label: "Codex", windows: [{key: "primary", used_percentage: null}]});
+      if (!result.length) result.push({id: "codex:unknown", source: "codex", label: "Codex", updated_at: data?.updated_at, windows: [{key: "primary", used_percentage: null}]});
     }
     if (sources.has("claude")) {
       const windows = [];
       let live = false;
       for (const [key, duration_minutes] of [["five_hour", 300], ["seven_day", 10080]]) {
         const w = raw?.claude?.[key];
-        if (!valid(w?.used_percentage)) continue;
+        if (!valid(w?.used_percentage)) {
+          if (key === "five_hour") windows.push({key, duration_minutes, used_percentage: null, resets_at: null});
+          continue;
+        }
         const resets_at = typeof w.resets_at === "number" ? w.resets_at : null;
         const expired = resets_at !== null && resets_at * 1000 <= now;
         live ||= !expired;

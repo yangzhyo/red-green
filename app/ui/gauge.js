@@ -1,4 +1,4 @@
-// 用量表：按来源和额度桶切换，外圈/圆心为首窗口、内圈为第二窗口。
+// 用量表：按来源和额度组切换，外圈/圆心为首窗口、内圈为第二窗口。
 const { listen, emit } = window.__TAURI__.event;
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -135,7 +135,7 @@ listen("usage-update", (e) => {
   emit("gauge-ready");
 });
 
-// 整窗可拖；原地点击在来源/额度桶之间轮换，选择在后续快照中保持。
+// 整窗可拖；原地点击在来源/额度组之间轮换，选择在后续快照中保持。
 function nextGroup() {
   if (groups.length < 2) return;
   view = groups[(groups.findIndex((g) => g.id === view?.id) + 1) % groups.length];

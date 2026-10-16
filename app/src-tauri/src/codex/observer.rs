@@ -85,9 +85,7 @@ impl Observer {
             }
         }
         if rpc.account_changed {
-            self.usage = Value::Null;
-            self.last_usage_read = None;
-            rpc.account_changed = false;
+            self.invalidate_account(rpc);
         }
         if !sessions.is_empty()
             && self
@@ -103,10 +101,20 @@ impl Observer {
                 self.usage = model::usage(&raw, now);
             }
         }
+        // 通知也可能在额度请求等待期间到达；不发布跨账号的旧响应。
+        if rpc.account_changed {
+            self.invalidate_account(rpc);
+        }
         Ok(Snapshot {
             sessions,
             usage: self.usage.clone(),
         })
+    }
+
+    fn invalidate_account(&mut self, rpc: &mut Rpc) {
+        self.usage = Value::Null;
+        self.last_usage_read = None;
+        rpc.account_changed = false;
     }
 }
 
@@ -128,6 +136,57 @@ fn project_name(cwd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_change_during_quota_read_never_publishes_old_account() {
+        let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut ws = tungstenite::accept(server).unwrap();
+            let mut quotas = 0;
+            while let Ok(message) = ws.read() {
+                let r: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                let result = match r["method"].as_str().unwrap() {
+                    "initialized" => continue,
+                    "initialize" => json!({}),
+                    "thread/loaded/list" => {
+                        json!({"data":["019a1234-1234-7123-8123-123456789abc"]})
+                    }
+                    "thread/read" => {
+                        json!({"thread":{"id":r["params"]["threadId"],"cwd":"/tmp/project","status":{"type":"idle"}}})
+                    }
+                    "thread/turns/list" => json!({"data":[]}),
+                    "account/rateLimits/read" => {
+                        quotas += 1;
+                        if quotas == 1 {
+                            ws.send(tungstenite::Message::text(
+                                json!({"method":"account/updated"}).to_string(),
+                            ))
+                            .unwrap();
+                        }
+                        json!({"accountId":format!("account-{quotas}"),"rateLimits":{"primary":{"usedPercent":23}}})
+                    }
+                    other => panic!("unexpected: {other}"),
+                };
+                ws.send(tungstenite::Message::text(
+                    json!({"id":r["id"],"result":result}).to_string(),
+                ))
+                .unwrap();
+            }
+        });
+        let mut rpc = Rpc::from_stream(client).unwrap();
+        let mut observer = Observer::default();
+        let bindings = BTreeMap::from([(
+            "019a1234-1234-7123-8123-123456789abc".into(),
+            "/dev/ttys001".into(),
+        )]);
+        assert!(observer.poll(&mut rpc, &bindings).unwrap().usage.is_null());
+        assert_eq!(
+            observer.poll(&mut rpc, &bindings).unwrap().usage["groups"][0]["account_id"],
+            "account-2"
+        );
+        drop(rpc);
+        worker.join().unwrap();
+    }
 
     #[test]
     fn two_clients_share_quota_and_account_change_invalidates_cache() {

@@ -24,9 +24,11 @@ test("Codex 过期、陈旧、缺失都未知，真实零值仍是零", () => {
   const data = codex();
   data.groups[0].windows[0].used_percentage = 0;
   assert.equal(USAGE.groups({codex: data}, new Set(["codex"]), now)[0].windows[0].used_percentage, 0);
+  const empty = USAGE.groups({codex: codex({groups: []})}, new Set(["codex"]), now)[0];
+  assert.equal(empty.updated_at, 990);
 });
 
-test("额度桶按原始时长展示，账号切换不会保留旧选择", () => {
+test("额度组按原始时长展示，账号切换不会保留旧选择", () => {
   assert.equal(USAGE.duration(300), "5h");
   assert.equal(USAGE.duration(10080), "7d");
   assert.equal(USAGE.duration(90), "90m");
@@ -42,4 +44,11 @@ test("Claude 保持原有重置规则，没有有效窗口则不出现", () => {
   const group = USAGE.groups(raw, new Set(["claude"]), now)[0];
   assert.equal(group.windows[0].used_percentage, 0);
   assert.equal(group.windows[0].resets_at, null);
+});
+
+test("Claude 缺失五小时窗口时，七天用量仍留在第二圈", () => {
+  const group = USAGE.groups({claude: {seven_day: {used_percentage: 45, resets_at: 1200}}}, new Set(["claude"]), now)[0];
+  assert.equal(group.windows[0].used_percentage, null);
+  assert.equal(group.windows[1].duration_minutes, 10080);
+  assert.equal(group.windows[1].used_percentage, 45);
 });

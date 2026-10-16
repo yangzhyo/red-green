@@ -176,15 +176,19 @@ pub fn usage(raw: &Value, now: u64) -> Value {
     };
     let mut groups = Vec::new();
     for (id, bucket) in buckets {
+        if !bucket.is_object() {
+            continue;
+        }
         let mut windows = Vec::new();
         for key in ["primary", "secondary"] {
             let w = &bucket[key];
-            let Some(pct) = w["usedPercent"]
-                .as_f64()
-                .filter(|v| v.is_finite() && (0.0..=100.0).contains(v))
-            else {
+            // 首窗口保留占位；第二窗口未提供时不虚构一个窗口。
+            if key == "secondary" && w.is_null() {
                 continue;
-            };
+            }
+            let pct = w["usedPercent"]
+                .as_f64()
+                .filter(|v| v.is_finite() && (0.0..=100.0).contains(v));
             windows.push(json!({"key":key,"used_percentage":pct,
                 "duration_minutes":w["windowDurationMins"].as_u64(), "resets_at":w["resetsAt"].as_u64()}));
         }
@@ -338,10 +342,20 @@ mod tests {
     #[test]
     fn missing_or_invalid_quota_stays_unknown() {
         let raw = json!({"rateLimits":{"primary":{"usedPercent":-2},"secondary":null}});
-        assert!(usage(&raw, 100)["groups"].as_array().unwrap().is_empty());
+        let data = usage(&raw, 100);
+        assert_eq!(data["groups"].as_array().unwrap().len(), 1);
+        assert!(data["groups"][0]["windows"][0]["used_percentage"].is_null());
         assert!(usage(&json!({}), 100)["groups"]
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn missing_primary_does_not_move_secondary_into_primary_ring() {
+        let raw = json!({"rateLimits":{"secondary":{"usedPercent":45,"windowDurationMins":10080,"resetsAt":1200}}});
+        let data = usage(&raw, 1000);
+        assert!(data["groups"][0]["windows"][0]["used_percentage"].is_null());
+        assert_eq!(data["groups"][0]["windows"][1]["key"], "secondary");
     }
 }
