@@ -14,6 +14,7 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 
 struct Registry {
     id_by_tty: BTreeMap<String, String>,
+    codex_retry: BTreeMap<String, Instant>,
     // 普通 shell 标签页停在前台时，心跳每 1.5s 都会碰到没登记的 terminal；
     // 现状没变就不再探，否则每次心跳都要往会话的 tty 里写探针
     last_scan: Option<Scan>,
@@ -28,6 +29,7 @@ struct Scan {
 
 static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
     id_by_tty: BTreeMap::new(),
+    codex_retry: BTreeMap::new(),
     last_scan: None,
 });
 
@@ -139,6 +141,41 @@ fn tty_of(reg: &Registry, id: &str) -> Option<String> {
     reg.id_by_tty
         .iter()
         .find_map(|(tty, i)| (i == id).then(|| tty.clone()))
+}
+
+// Codex 原生标题给 terminal id；复用现有探针补齐真实 tty。
+pub fn map_ttys(ttys: &[String]) -> BTreeMap<String, String> {
+    let mut reg = registry();
+    let Ok(before) = surfaces() else {
+        return BTreeMap::new();
+    };
+    reg.id_by_tty
+        .retain(|_, id| before.iter().any(|s| s.id == *id));
+    reg.codex_retry.retain(|tty, _| ttys.contains(tty));
+    let pending: Vec<_> = ttys
+        .iter()
+        .filter(|tty| !reg.id_by_tty.contains_key(*tty))
+        .filter(|tty| {
+            reg.codex_retry
+                .get(*tty)
+                .is_none_or(|at| Instant::now() >= *at)
+        })
+        .cloned()
+        .collect();
+    if !pending.is_empty() {
+        probe(&mut reg, &pending, &before);
+        for tty in pending {
+            if reg.id_by_tty.contains_key(&tty) {
+                reg.codex_retry.remove(&tty);
+            } else {
+                reg.codex_retry.insert(tty, Instant::now() + RETRY_AFTER);
+            }
+        }
+    }
+    reg.id_by_tty
+        .iter()
+        .map(|(tty, id)| (id.clone(), tty.clone()))
+        .collect()
 }
 
 // focus 会选中标签页、把窗口提到最前，但 Ghostty 自己激活自己可能被 macOS 拦下

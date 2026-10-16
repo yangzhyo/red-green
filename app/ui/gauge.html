@@ -7,23 +7,26 @@
   </head>
   <body>
     <div id="stage">
-      <!-- 静置：一枚像素圆表。与灯灯同款壳体，外圈 = 五小时窗口，内圈 = 七天窗口，圆心 = 五小时的数字 -->
+      <button id="source" aria-label="切换账号用量来源"></button>
+      <div id="bucket"></div>
+      <!-- 静置：一枚像素圆表。与灯灯同款壳体，外圈/圆心 = 首窗口，内圈 = 第二窗口 -->
       <div id="ring">
         <canvas id="disc"></canvas>
         <div id="num"></div>
       </div>
       <!-- 悬停：展开成两行明细 -->
       <div id="card">
-        <div class="row" data-window="five_hour">
+        <div class="row" data-window="0">
           <span class="k">5h</span><span class="pct"></span><span class="reset"></span>
         </div>
-        <div class="row" data-window="seven_day">
+        <div class="row" data-window="1">
           <span class="k">7d</span><span class="pct"></span><span class="reset"></span>
         </div>
       </div>
     </div>
     <script src="sprites.js"></script>
     <script src="drag.js"></script>
+    <script src="usage-model.js"></script>
     <script src="gauge.js"></script>
   </body>
 </html>
