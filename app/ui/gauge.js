@@ -77,11 +77,11 @@ function renderRing() {
   }
   window.SPRITES.draw(document.getElementById("disc"), { g: grid, p: pal }, window.SPRITES.SCALE);
 
-  // 圆心只放五小时窗口的数字：变得快、和"现在还能不能干活"直接相关
-  const five = pctOf(0);
+  // 圆心显示首窗口的已用比例，与外圈保持一致。
+  const primaryPct = pctOf(0);
   const num = document.getElementById("num");
-  num.textContent = five === null ? "?" : `${five}%`;
-  num.classList.toggle("wide", five !== null && five >= 100);
+  num.textContent = primaryPct === null ? "?" : `${primaryPct}%`;
+  num.classList.toggle("wide", primaryPct !== null && primaryPct >= 100);
 }
 
 function renderCard() {
