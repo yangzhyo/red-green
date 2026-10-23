@@ -1,5 +1,4 @@
-// 用量表：哑渲染器，把 manager 发来的用量视图画成一枚像素圆表；悬停展开成两行明细；可拖动。
-// 视图由 manager 裁决（含"重置已过即 0%"），这里只负责几何、格式与配色。
+// 用量表：按来源和额度组切换，外圈/圆心为首窗口、内圈为第二窗口。
 const { listen, emit } = window.__TAURI__.event;
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -35,19 +34,20 @@ function clockwise(list) {
 
 const DISC = cells((d) => d <= 7.3);
 const RINGS = {
-  five_hour: { ch: "O", cells: clockwise(cells((d) => d >= 5.5 && d < 6.5)) },
-  seven_day: { ch: "I", cells: clockwise(cells((d) => d >= 2.5 && d < 3.5)) },
+  0: { ch: "O", cells: clockwise(cells((d) => d >= 5.5 && d < 6.5)) },
+  1: { ch: "I", cells: clockwise(cells((d) => d >= 2.5 && d < 3.5)) },
 };
 
+let groups = [];
 let view = null;
 let expanded = false;
 
-// 五小时窗口只给时分（5 小时内不会跨到歧义的日期）；七天窗口带星期
-function fmtReset(ts, key) {
+// 短窗口显示时分，长窗口显示星期与时分。
+function fmtReset(ts, minutes) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  return key === "five_hour" ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
+  return minutes <= 1440 ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
 }
 
 // 颜色随用量升温：60% 起琥珀，85% 起红
@@ -58,8 +58,8 @@ function level(pct) {
 }
 
 function pctOf(key) {
-  const w = view?.[key];
-  return w ? Math.round(w.used_percentage) : null;
+  const w = view?.windows[key];
+  return typeof w?.used_percentage === "number" ? Math.round(w.used_percentage) : null;
 }
 
 function renderRing() {
@@ -77,24 +77,25 @@ function renderRing() {
   }
   window.SPRITES.draw(document.getElementById("disc"), { g: grid, p: pal }, window.SPRITES.SCALE);
 
-  // 圆心只放五小时窗口的数字：变得快、和"现在还能不能干活"直接相关
-  const five = pctOf("five_hour");
+  // 圆心显示首窗口的已用比例，与外圈保持一致。
+  const primaryPct = pctOf(0);
   const num = document.getElementById("num");
-  num.textContent = five === null ? "" : `${five}%`;
-  num.classList.toggle("wide", five !== null && five >= 100);
+  num.textContent = primaryPct === null ? "?" : `${primaryPct}%`;
+  num.classList.toggle("wide", primaryPct !== null && primaryPct >= 100);
 }
 
 function renderCard() {
   for (const row of document.querySelectorAll("#card .row")) {
-    const key = row.dataset.window;
+    const key = Number(row.dataset.window);
+    const w = view?.windows[key];
     const pct = pctOf(key);
-    row.hidden = pct === null;
-    if (pct === null) continue;
-    // 填充色与圆表灯色同源，在这里内联而不在 CSS 里再抄一份
-    row.style.setProperty("--fill", `color-mix(in srgb, ${LAMP[level(pct)]} 85%, transparent)`);
-    row.style.setProperty("--pct", `${pct}%`);
-    row.querySelector(".pct").textContent = `${pct}%`;
-    row.querySelector(".reset").textContent = fmtReset(view[key].resets_at, key);
+    row.hidden = !w;
+    if (!w) continue;
+    row.style.setProperty("--fill", `color-mix(in srgb, ${LAMP[level(pct ?? 0)]} 85%, transparent)`);
+    row.style.setProperty("--pct", `${pct ?? 0}%`);
+    row.querySelector(".k").textContent = USAGE.duration(w.duration_minutes);
+    row.querySelector(".pct").textContent = pct === null ? "未知" : `${pct}%`;
+    row.querySelector(".reset").textContent = fmtReset(w.resets_at, w.duration_minutes);
   }
 }
 
@@ -102,6 +103,13 @@ const stage = document.getElementById("stage");
 document.getElementById("num").style.color = C.white;
 
 function render() {
+  const source = document.getElementById("source");
+  const label = view?.source === "codex" ? "Codex" : "Claude";
+  source.textContent = label + (groups.length > 1 ? " ▸" : "");
+  const bucket = view?.label && view.label.toLowerCase() !== label.toLowerCase() ? view.label : "";
+  document.getElementById("bucket").textContent = bucket;
+  const updated = view?.updated_at ? `；更新于 ${new Date(view.updated_at * 1000).toLocaleTimeString()}` : "";
+  stage.title = `${label}${bucket ? ` · ${bucket}` : ""}${updated}${groups.length > 1 ? "；点击切换账号用量" : ""}`;
   renderRing();
   renderCard();
   stage.classList.toggle("expanded", expanded);
@@ -119,12 +127,22 @@ listen("gauge-hover", (e) => {
 });
 
 listen("usage-update", (e) => {
-  view = e.payload ?? null;
+  groups = e.payload ?? [];
+  view = USAGE.select(groups, view?.id);
   render();
 }).then(() => {
   // 首帧握手：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪，就绪后请 manager 补发
   emit("gauge-ready");
 });
 
-// 可拖（手势在 drag.js），挡住东西时挪开；原地松手不做任何事
-installDrag();
+// 整窗可拖；原地点击在来源/额度组之间轮换，选择在后续快照中保持。
+function nextGroup() {
+  if (groups.length < 2) return;
+  view = groups[(groups.findIndex((g) => g.id === view?.id) + 1) % groups.length];
+  render();
+}
+installDrag(nextGroup);
+// 原生 button 自己处理点击/键盘，避免与整窗拖动手势重复触发。
+const sourceButton = document.getElementById("source");
+sourceButton.addEventListener("mousedown", (e) => e.stopPropagation());
+sourceButton.addEventListener("click", nextGroup);
