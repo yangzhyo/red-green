@@ -43,7 +43,7 @@ cd app && pnpm install       # 2. 前端依赖（仅 @tauri-apps/cli）
 ../scripts/install-app.sh    # 3. 构建 .app 装进 ~/Applications 并注册登录自启
 ```
 
-开发迭代用 `pnpm tauri dev`（先退掉常驻版：`launchctl unload ~/Library/LaunchAgents/dev.y9g.red-green.plist`）。
+常驻版正常或异常退出后都会自动重启。需要停用时执行 `launchctl unload ~/Library/LaunchAgents/dev.y9g.red-green.plist`，恢复用 `launchctl load ~/Library/LaunchAgents/dev.y9g.red-green.plist`。开发迭代用 `pnpm tauri dev`，先按上述方式停用常驻版。
 
 首次运行时 macOS 会请求「自动化」权限（控制 System Events，以及 Terminal / Ghostty）——点击聚焦与已阅检测靠它；`.app` 是独立应用身份，会各弹一次。
 
@@ -63,6 +63,8 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 账号用量每 60 秒读取一次，不按宠物累计。按账号与额度组区分，API 计费或读取不到限额时显示未知；超过重置时刻或成功快照超过 120 秒也显示未知，悬停提示含最后更新时间。只展示有对应来源宠物的用量。不读取账号凭据，不接管审批，不修改用户会话。
 
 可运行 `app/src-tauri/target/debug/red-green --check-codex` 做只读诊断（输出已绑定会话、状态和额度组数，不输出答复或凭据）。宠物没出现时先检查 `codex --version`、标题中的会话 ID（0.162.1 标题缩为 29 字符加省略号）、`$CODEX_HOME/app-server-control/app-server-control.sock`（默认 `~/.codex`）以及自动化权限。标题为空、进程已退出、会话未在服务中加载或连接失败时不会猜测会话归属。配置文件是符号链接时安装脚本会停止，请手动配置标题。恢复安装前设置可使用备份，或只移除标题中的 `thread-id`；再删除 `~/.config/red-green/codex-home` 即可解除目录登记。
+
+如果重新设置过 Codex 标题，请确认仍保留 `thread-id`；可再次运行安装脚本补回，其他标题项会保留。配置文件修改不会刷新已打开会话的旧标题：在各会话中通过 `/title` 启用 Thread ID 并保存，或在方便时重新打开会话。用 `launchctl list dev.y9g.red-green` 检查常驻进程是否有 PID；已加载但没有运行时，可用 `launchctl kickstart gui/$(id -u)/dev.y9g.red-green` 恢复。
 
 ## 工作原理
 

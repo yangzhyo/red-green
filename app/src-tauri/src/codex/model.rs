@@ -47,11 +47,18 @@ pub fn title_hint(title: &str) -> Option<String> {
                     .filter(|p| p.len() == 29 && uuid_prefix(p))
             }
         });
-    let first = ids.next()?;
-    if ids.any(|s| !s.eq_ignore_ascii_case(first)) {
-        return None;
-    }
-    Some(first.to_ascii_lowercase())
+    let first = ids.next()?.to_ascii_lowercase();
+    // thread-title 未命名时也会显示 ID；兼容同一 ID 的长短写法，优先完整值。
+    ids.try_fold(first, |hint, id| {
+        let id = id.to_ascii_lowercase();
+        if id.starts_with(&hint) {
+            Some(id)
+        } else if hint.starts_with(&id) {
+            Some(hint)
+        } else {
+            None
+        }
+    })
 }
 
 pub fn resolve_id(hint: &str, loaded: &[String]) -> Option<String> {
@@ -237,6 +244,33 @@ mod tests {
         assert_eq!(resolve_id(&ID[..29], &[ID.into(), collision.into()]), None);
         assert_eq!(resolve_id(&ID[..29], &[]), None);
         assert_eq!(title_hint("019a1234..."), None);
+    }
+
+    #[test]
+    fn short_id_and_unnamed_thread_title_bind_the_same_session() {
+        // 0.165.0 的 thread-title 在未命名会话中回退为完整 ID。
+        let title =
+            "01a18245-da4e-7490-b133-364a0... | red-green | 01a18245-da4e-7490-b133-364a0597d263";
+        assert_eq!(
+            title_hint(title),
+            Some("01a18245-da4e-7490-b133-364a0597d263".into())
+        );
+        assert_eq!(
+            title_hint("01a18245-da4e-7490-b133-364a0597d263 | 01A18245-DA4E-7490-B133-364A0..."),
+            Some("01a18245-da4e-7490-b133-364a0597d263".into())
+        );
+    }
+
+    #[test]
+    fn compatible_prefix_does_not_hide_conflicting_full_ids() {
+        assert_eq!(
+            title_hint("01a18245-da4e-7490-b133-364a0... | 01a18245-da4e-7490-b133-364a0597d263 | 01a18245-da4e-7490-b133-364a0597d264"),
+            None
+        );
+        assert_eq!(
+            title_hint("01a18245-da4e-7490-b133-364a1... | 01a18245-da4e-7490-b133-364a0597d263"),
+            None
+        );
     }
 
     #[test]
