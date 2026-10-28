@@ -1,6 +1,5 @@
 #!/bin/bash
-# Build the release .app, install it to ~/Applications, and register a
-# LaunchAgent so the pets start at login and revive after crashes.
+# 构建并安装 .app，注册登录自启；正常或异常退出后都恢复常驻进程。
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,7 +22,7 @@ cat > "$plist" <<EOF
   <key>ProgramArguments</key>
   <array><string>$HOME/Applications/red-green.app/Contents/MacOS/red-green</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
 </dict>
 </plist>
 EOF

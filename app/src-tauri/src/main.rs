@@ -1,13 +1,24 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use red_green::codex::{
+    observer::{Observer, Snapshot},
+    rpc::Rpc,
+};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
+mod codex_terminals;
 mod ghostty;
 
+static CODEX: LazyLock<Mutex<Snapshot>> = LazyLock::new(|| Mutex::new(Snapshot::default()));
+
 fn status_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("RED_GREEN_STATUS_DIR") {
+        return PathBuf::from(dir);
+    }
     PathBuf::from(std::env::var("HOME").expect("HOME not set"))
         .join(".claude")
         .join("session-status")
@@ -25,7 +36,10 @@ fn read_snapshot() -> Vec<Value> {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            if path.file_name().and_then(|n| n.to_str()) == Some(USAGE_FILE) {
+            if matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some(USAGE_FILE | "codex-usage.json")
+            ) {
                 continue;
             }
             if let Ok(text) = std::fs::read_to_string(&path) {
@@ -35,6 +49,13 @@ fn read_snapshot() -> Vec<Value> {
             }
         }
     }
+    sessions.extend(
+        CODEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sessions
+            .clone(),
+    );
     sessions.sort_by(|a, b| {
         a["session_id"]
             .as_str()
@@ -51,10 +72,23 @@ fn get_sessions() -> Vec<Value> {
 
 // 文件不存在或不是合法 JSON 都返回 Null：前端据此整块不显示用量
 fn read_usage() -> Value {
-    std::fs::read_to_string(status_dir().join(USAGE_FILE))
+    let claude = std::fs::read_to_string(status_dir().join(USAGE_FILE))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(Value::Null)
+        .unwrap_or(Value::Null);
+    let codex = if std::env::var_os("RED_GREEN_DISABLE_CODEX").is_some() {
+        std::fs::read_to_string(status_dir().join("codex-usage.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(Value::Null)
+    } else {
+        CODEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .usage
+            .clone()
+    };
+    serde_json::json!({"claude":claude,"codex":codex})
 }
 
 #[tauri::command]
@@ -79,8 +113,8 @@ const SPACING: f64 = 158.0;
 const GAP: f64 = SPACING - PET_H;
 // 用量表：与宠物同宽、同一条纵轴
 const GAUGE_W: f64 = PET_W;
-// 高度 = 像素圆表 60（15 格 × 4px）+ 顶部 2px + 底部投影 6px
-const GAUGE_H: f64 = 68.0;
+// 高度容纳来源/额度组标签、60px 圆表与底部投影
+const GAUGE_H: f64 = 106.0;
 const GAUGE_LABEL: &str = "usage-gauge";
 // slot 0 上缘距工作区上缘：给用量表留位，没有用量表时这块也空着，宠物位置不因它来去而变
 const PET_TOP: f64 = MARGIN_TOP + GAUGE_H + GAP;
@@ -231,7 +265,10 @@ fn tmux_clients() -> Vec<(String, String)> {
     tmux(&["list-clients", "-F", "#{client_tty} #{client_session}"])
         .map(|out| {
             out.lines()
-                .filter_map(|l| l.split_once(' ').map(|(t, s)| (t.to_string(), s.to_string())))
+                .filter_map(|l| {
+                    l.split_once(' ')
+                        .map(|(t, s)| (t.to_string(), s.to_string()))
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -434,7 +471,12 @@ fn frontmost_tty_impl() -> Option<String> {
         // tmux 客户端算进现状：在已登记过的标签页里 attach，也要重新发现
         Host::Ghostty => ghostty::front_tty(
             || format!("{:?} {:?}", session_ttys(), tmux_clients()),
-            || session_ttys().iter().flat_map(|t| ghostty_tab_ttys(t)).collect(),
+            || {
+                session_ttys()
+                    .iter()
+                    .flat_map(|t| ghostty_tab_ttys(t))
+                    .collect()
+            },
         ),
     }
     .filter(|s| !s.is_empty())?;
@@ -468,7 +510,105 @@ fn play_call(app: AppHandle, name: String) {
     let _ = Command::new("afplay").arg(path).spawn();
 }
 
+fn codex_home() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::fs::read_to_string(home.join(".config/red-green/codex-home"))
+                .ok()
+                .map(|s| PathBuf::from(s.trim()))
+        })
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+fn start_codex_observer(app: AppHandle) {
+    std::thread::spawn(move || {
+        let socket = codex_home().join("app-server-control/app-server-control.sock");
+        let mut rpc = None;
+        let mut observer = Observer::default();
+        let mut last_error = String::new();
+        loop {
+            let bindings = codex_terminals::discover();
+            let next = if bindings.is_empty() {
+                rpc = None;
+                observer = Observer::default();
+                Snapshot::default()
+            } else {
+                let result = (|| {
+                    if rpc.is_none() {
+                        rpc = Some(Rpc::connect(&socket)?);
+                    }
+                    observer.poll(rpc.as_mut().unwrap(), &bindings)
+                })();
+                match result {
+                    Ok(snapshot) => {
+                        last_error.clear();
+                        snapshot
+                    }
+                    Err(error) => {
+                        if error != last_error {
+                            dbg_log(&format!("codex observer: {error}"));
+                            last_error = error;
+                        }
+                        rpc = None;
+                        observer = Observer::default();
+                        Snapshot::default()
+                    }
+                }
+            };
+            let changed = {
+                let mut current = CODEX.lock().unwrap_or_else(|e| e.into_inner());
+                let changed = current.sessions != next.sessions || current.usage != next.usage;
+                if changed {
+                    *current = next;
+                }
+                changed
+            };
+            if changed {
+                let _ = app.emit("sessions-changed", read_snapshot());
+                let _ = app.emit("usage-changed", read_usage());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    });
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--install-codex") {
+        if let Err(e) = red_green::codex::install::run() {
+            eprintln!("Codex 接入配置失败：{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("--check-codex") {
+        let bindings = codex_terminals::discover();
+        println!("已识别终端会话：{}", bindings.len());
+        let result = Rpc::connect(&codex_home().join("app-server-control/app-server-control.sock"))
+            .and_then(|mut rpc| Observer::default().poll(&mut rpc, &bindings));
+        match result {
+            Ok(snapshot) => {
+                for session in snapshot.sessions {
+                    println!(
+                        "{} {} {} {}",
+                        session["session_id"], session["state"], session["tty"], session["project"]
+                    );
+                }
+                println!(
+                    "可用额度组：{}",
+                    snapshot.usage["groups"].as_array().map_or(0, Vec::len)
+                );
+            }
+            Err(e) => {
+                eprintln!("Codex 观察失败：{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_sessions,
@@ -488,6 +628,10 @@ fn main() {
 
             let dir = status_dir();
             std::fs::create_dir_all(&dir).ok();
+
+            if std::env::var_os("RED_GREEN_DISABLE_CODEX").is_none() {
+                start_codex_observer(app.handle().clone());
+            }
 
             let handle = app.handle().clone();
             std::thread::spawn(move || {
