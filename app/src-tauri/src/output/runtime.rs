@@ -62,6 +62,9 @@ impl<D: Desktop> Engine<D> {
         now: u64,
         submitted: u64,
     ) -> Result<Vec<Value>, String> {
+        if std::env::var_os("RED_GREEN_MOSAICO_TRACE").is_some() {
+            eprintln!("mosaico model now={now} submitted={submitted}");
+        }
         let changed = self.snapshot != s || self.version == 0;
         self.snapshot = s;
         if changed {
@@ -70,19 +73,19 @@ impl<D: Desktop> Engine<D> {
         }
         self.coordinator.model(submitted, self.version);
         self.tick(now)?;
-        let wire = match self.snapshot.wire(&self.generation, self.version) {
-            Ok(w) => w,
-            Err(e) => {
-                self.disconnected(now);
-                return Err(e);
-            }
-        };
         let mut out = vec![];
+        let mut wire_error = None;
         if changed && self.has_peer() {
-            out.push(wire);
+            match self.snapshot.wire(&self.generation, self.version) {
+                Ok(wire) => out.push(wire),
+                Err(e) => {
+                    self.disconnected(now);
+                    wire_error = Some(e);
+                }
+            }
         }
         if now.saturating_sub(submitted) > 2000 {
-            return Ok(out);
+            return wire_error.map_or(Ok(out), Err);
         }
         for call in calls {
             let Some(pet) = self.snapshot.pets.iter().find(|p| p.sid == call.sid) else {
@@ -105,7 +108,7 @@ impl<D: Desktop> Engine<D> {
             }
             // 交接/回退期间的叫声丢弃，不能稍后补发。
         }
-        Ok(out)
+        wire_error.map_or(Ok(out), Err)
     }
     pub fn message(&mut self, message: Value, now: u64) -> Result<Vec<Value>, String> {
         match message["type"].as_str() {
@@ -217,6 +220,34 @@ pub enum Command {
 }
 pub struct Control(pub SyncSender<Command>);
 
+fn process_commands<D: Desktop>(
+    engine: &mut Engine<D>,
+    rx: &Receiver<Command>,
+    clock: impl Fn() -> u64,
+) -> Result<Vec<Value>, String> {
+    let mut out = vec![];
+    // 先消费更新，避免旧窗口持续失败时阻塞能移除它的新快照。
+    // 每轮最多处理 8 条，submit/tick 仍检查授权期限。
+    for _ in 0..8 {
+        match rx.try_recv() {
+            Ok(Command::Submit {
+                snapshot,
+                calls,
+                at,
+            }) => {
+                out.extend(engine.submit(snapshot, calls, clock(), at)?);
+            }
+            Ok(Command::Refresh) => engine.refresh(),
+            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err("输出控制通道已关闭".into())
+            }
+        }
+    }
+    engine.tick(clock())?;
+    Ok(out)
+}
+
 // Darwin RAW 包含睡眠时间；UPTIME_RAW/Instant 在睡眠期间停走，不能用于授权。
 pub fn now_ms() -> u64 {
     let mut ts = libc::timespec {
@@ -245,31 +276,14 @@ pub fn run<D: Desktop>(desktop: D, rx: Receiver<Command>, log: impl Fn(&str)) {
         let started = now_ms();
         let result = (|| -> Result<(), String> {
             let had_peer = engine.has_peer();
-            engine.tick(started)?;
+            let out = process_commands(&mut engine, &rx, now_ms)?;
             if had_peer && !engine.has_peer() {
                 link = None;
                 next_scan = started + 1000;
             }
-            // 有界通道；处理量也有界，不允许快照洪水饿死授权到期检查。
-            for _ in 0..8 {
-                match rx.try_recv() {
-                    Ok(Command::Submit {
-                        snapshot,
-                        calls,
-                        at,
-                    }) => {
-                        let out = engine.submit(snapshot, calls, now_ms(), at)?;
-                        if let Some(l) = link.as_mut() {
-                            for v in out {
-                                l.send(&v)?;
-                            }
-                        }
-                    }
-                    Ok(Command::Refresh) => engine.refresh(),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        return Err("输出控制通道已关闭".into())
-                    }
+            if let Some(l) = link.as_mut() {
+                for v in out {
+                    l.send(&v)?;
                 }
             }
             if link.is_none() && engine.mode() == Mode::Desktop && started >= next_scan {
@@ -281,6 +295,9 @@ pub fn run<D: Desktop>(desktop: D, rx: Receiver<Command>, log: impl Fn(&str)) {
             }
             if let Some(l) = link.as_mut() {
                 for message in l.read()? {
+                    if std::env::var_os("RED_GREEN_MOSAICO_TRACE").is_some() {
+                        eprintln!("mosaico RX now={} {message}", now_ms());
+                    }
                     for v in engine.message(message, now_ms())? {
                         let grant = v["type"] == "grant";
                         let result = l.send(&v);
@@ -325,9 +342,16 @@ mod tests {
         ids: Vec<String>,
         calls: usize,
         fail_hide: bool,
+        fail_if_present: Option<String>,
     }
     impl Desktop for Screen {
         fn reconcile(&mut self, s: &OutputSnapshot) -> Result<(), String> {
+            if s.pets
+                .iter()
+                .any(|p| Some(&p.sid) == self.fail_if_present.as_ref())
+            {
+                return Err("window creation failed".into());
+            }
             self.visible = true;
             self.ids = s.pets.iter().map(|p| p.sid.clone()).collect();
             Ok(())
@@ -430,5 +454,61 @@ mod tests {
         h["assets"] = json!("old");
         assert!(e.message(h, 5000).is_err());
         assert!(e.desktop.visible);
+    }
+    #[test]
+    fn device_capacity_limits_do_not_silence_desktop_calls() {
+        let mut e = Engine::new(Screen::default(), 0);
+        let mut s = snapshot("a");
+        s.pets[0].model["project"] = json!("长".repeat(70));
+        let result = e.submit(s, vec![call("a")], 2500, 2500);
+        assert_eq!(e.desktop.calls, 1, "设备不支持的名称不能阻止电脑发声");
+        assert!(result.is_ok());
+        assert!(e.desktop.visible);
+        assert!(!e.has_peer());
+    }
+    #[test]
+    fn failed_old_window_does_not_block_a_new_snapshot_that_removes_it() {
+        let mut e = Engine::new(
+            Screen {
+                fail_if_present: Some("a".into()),
+                ..Default::default()
+            },
+            0,
+        );
+        assert!(e.submit(snapshot("a"), vec![], 2500, 2500).is_err());
+        e.disconnected(2500);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        tx.send(Command::Submit {
+            snapshot: OutputSnapshot::default(),
+            calls: vec![],
+            at: 2600,
+        })
+        .unwrap();
+        let result = process_commands(&mut e, &rx, || 2600);
+        assert!(
+            result.is_ok(),
+            "新快照必须能替换导致建窗失败的旧快照: {result:?}"
+        );
+        assert!(e.desktop.visible);
+        assert!(e.snapshot.pets.is_empty());
+        assert!(e.desktop.ids.is_empty());
+    }
+    #[test]
+    fn rejected_device_snapshot_preserves_desktop_sound_but_respects_active_lease() {
+        for active in [false, true] {
+            let mut e = Engine::new(Screen::default(), 0);
+            let g = connect(&mut e);
+            if active {
+                e.message(request(&g, 2), 3000).unwrap();
+            }
+            let mut s = snapshot("a");
+            s.pets[0].model["project"] = json!("长".repeat(70));
+            assert!(e.submit(s, vec![call("a")], 3100, 3100).is_err());
+            assert_eq!(e.desktop.calls, usize::from(!active));
+            assert!(!e.has_peer());
+            e.tick(5500).unwrap();
+            assert!(e.desktop.visible);
+            assert_eq!(e.desktop.calls, usize::from(!active));
+        }
     }
 }

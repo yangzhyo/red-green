@@ -30,6 +30,7 @@ static uint64_t bound_at;
 static char identity[18];
 enum { BOOT_USB, BOOT_DISPLAY, BOOT_FONTS, BOOT_AUDIO, BOOT_RUNNING };
 static atomic_uint boot_phase;
+static const char *last_fault = "none";
 uint64_t rg_now(void) { return (uint64_t)esp_timer_get_time() / 1000; }
 static void usb_shutdown(void) {
   // S31 CPU 复位前停止 USB DMA，避免下一次启动访问旧缓冲区。
@@ -106,6 +107,7 @@ static void hello(void) {
   unsigned phase = atomic_load(&boot_phase);
   const char *phases[] = {"usb", "display", "fonts", "audio", "running"};
   cJSON_AddStringToObject(j, "boot_phase", phases[phase]);
+  cJSON_AddStringToObject(j, "last_fault", last_fault);
   cJSON_AddNumberToObject(j, "reset_reason", esp_reset_reason());
   cJSON_AddNumberToObject(j, "free_heap", esp_get_free_heap_size());
   cJSON_AddNumberToObject(j, "largest_heap",
@@ -123,6 +125,7 @@ static bool consume(const char *bytes, size_t size, void *context) {
   rg_result result = rg_receive(&device, bytes, size, rg_now());
   switch (result) {
   case RG_ERROR:
+    last_fault = "invalid frame";
     return false;
   case RG_BIND:
     quiet();
@@ -142,10 +145,14 @@ static bool consume(const char *bytes, size_t size, void *context) {
   }
   case RG_GRANT:
     if (!rg_ui_healthy((uint32_t)rg_now()) ||
-        !rg_audio_healthy((uint32_t)rg_now()))
+        !rg_audio_healthy((uint32_t)rg_now())) {
+      last_fault = "grant health";
       return false;
-    if (!rg_ui_active(true))
+    }
+    if (!showing && !rg_ui_active(true)) {
+      last_fault = "grant display lock";
       return false;
+    }
     showing = true;
     rg_audio_authorize((uint32_t)device.lease_deadline);
     break;
@@ -162,8 +169,12 @@ static void guard(void *context) {
       fail_closed();
     uint64_t now = rg_now();
     if (showing && (!rg_active(&device, now) || !rg_ui_healthy((uint32_t)now) ||
-                    !rg_audio_healthy((uint32_t)now)))
+                    !rg_audio_healthy((uint32_t)now))) {
+      last_fault = !rg_active(&device, now)        ? "lease expired"
+                   : !rg_ui_healthy((uint32_t)now) ? "display stalled"
+                                                   : "audio stalled";
       unbind();
+    }
     xSemaphoreGive(lock);
     ESP_ERROR_CHECK(esp_task_wdt_reset());
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -248,6 +259,11 @@ void app_main(void) {
     gpio_set_level(BSP_AUDIO_PA_CTRL, 0);
     return;
   }
+  // BSP 屏幕/字体初始化会长时间占用 CPU；此时尚不允许接管。
+  // 初始化结束后只监控高优先级授权看门任务，保持业务失效上限 2 s。
+  const esp_task_wdt_config_t watchdog = {
+      .timeout_ms = 2000, .idle_core_mask = 0, .trigger_panic = true};
+  ESP_ERROR_CHECK(esp_task_wdt_init(&watchdog));
   configASSERT(xTaskCreate(rg_audio_task, "rg_audio", 4096, NULL, 6, NULL) ==
                pdPASS);
   configASSERT(xTaskCreate(guard, "rg_guard", 4096, NULL, 10, NULL) == pdPASS);
