@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- 一次性布局原型：在同一路由比较三种 480×480 屏幕布局，不连接真实会话或设备。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>red-green · Mosaico 布局演示</title>
+    <link rel="stylesheet" href="demo.css?v=golden">
+    <script src="../../ui/sprites.js" defer></script>
+    <script src="../../ui/skins.js" defer></script>
+    <script src="demo.js?v=golden" defer></script>
+  </head>
+  <body>
+    <header class="page-header">
+      <a class="brand" href="?variant=hybrid"><i></i><i></i> red-green <span>/ Mosaico</span></a>
+      <span class="prototype-badge">交互原型 · 模拟数据</span>
+    </header>
+    <main>
+      <section class="preview" aria-label="设备显示预览">
+        <div class="intro"><span class="eyebrow">01—03 / 布局实验</span><h1 id="variant-title"></h1><p id="variant-description"></p></div>
+        <div id="device-space">
+          <div id="device"><div id="screen" role="img" aria-label="480×480 设备屏幕"></div></div>
+        </div>
+        <div class="screen-caption"><span>480 × 480 · 等比例缩放</span><span id="preview-size"></span></div>
+        <p class="size-note">拖小预览，比较名字和状态是否还能辨认。若要模拟实物，可用尺把显示区校准至约 39 mm 宽；网页尺寸不会自动等于实物。</p>
+      </section>
+      <aside class="controls" aria-label="演示控制台">
+        <div class="panel-heading"><h2>试一试</h2><button id="pause" type="button" aria-pressed="false">暂停</button></div>
+        <p class="control-note">这些按钮只控制演示，设备端仍是被动显示。</p>
+        <label class="field">预览宽度 <output id="size-value">480 px</output><input id="size" type="range" min="140" max="560" value="480" step="10"></label>
+        <label class="field">会话数量 <output id="count-value">5 只</output><input id="count" type="range" min="1" max="5" value="5"></label>
+        <section id="split-controls" class="split-controls" aria-label="主角与总览比例">
+          <div class="split-fixed"><span>已选 · 黄金比例</span><strong>61.8 / 38.2</strong></div>
+          <p id="split-note" class="split-note"></p>
+        </section>
+        <div class="divider"></div>
+        <div class="field-title">切换场景</div>
+        <div class="scenario-buttons">
+          <button type="button" data-scene="normal">日常轮播</button><button type="button" data-scene="attention">多个待处理</button><button type="button" data-scene="quiet">完成与空闲</button>
+        </div>
+        <label class="check"><input id="story" type="checkbox" checked> 自动演示状态变化</label>
+        <label class="field target-field">指定会话<select id="target"></select></label>
+        <div class="event-buttons">
+          <button type="button" data-event="awaiting">待确认</button><button type="button" data-event="your_turn">轮到你</button><button type="button" data-event="aborted">异常中止</button><button type="button" data-event="completed">已完成</button><button type="button" data-event="running">恢复运行</button>
+        </div>
+        <label class="check"><input id="sound" type="checkbox"> 开启叫声试听</label>
+        <div class="live-state" aria-live="polite"><span class="eyebrow">当前演示</span><p id="event-log"></p><dl><dt>主角</dt><dd id="focus-info"></dd><dt>轮播队列</dt><dd id="queue-info"></dd><dt>用量来源</dt><dd id="usage-info"></dd></dl></div>
+      </aside>
+    </main>
+    <nav class="variant-switcher" aria-label="切换布局">
+      <button id="previous" type="button" aria-label="上一个布局">←</button>
+      <div class="variant-tabs"><button type="button" data-variant="hybrid">A <span>主角＋总览</span></button><button type="button" data-variant="solo">B <span>单宠轮播</span></button><button type="button" data-variant="list">C <span>会话列表</span></button></div>
+      <button id="next" type="button" aria-label="下一个布局">→</button>
+    </nav>
+  </body>
+</html>
