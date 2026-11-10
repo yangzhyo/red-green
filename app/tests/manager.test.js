@@ -7,7 +7,6 @@ for (const source of ["codex", "claude"]) {
   test(`${source} 首见静默、前台已阅与退出清理`, async () => {
     const handlers = new Map();
     const calls = [];
-    const models = new Map();
     let sessions = [];
     let front = null;
     const context = vm.createContext({
@@ -21,7 +20,7 @@ for (const source of ["codex", "claude"]) {
         } },
         event: {
           listen: (name, fn) => { handlers.set(name, fn); return Promise.resolve(() => {}); },
-          emitTo: (label, name, payload) => models.set(label, payload),
+          emitTo: () => {},
         },
       } },
     });
@@ -36,7 +35,9 @@ for (const source of ["codex", "claude"]) {
       await handlers.get("sessions-changed")({payload: sessions});
       await settle();
     };
-    const callCount = () => calls.filter(([name]) => name === "play_call").length;
+    const submissions = () => calls.filter(([name]) => name === "submit_output").map(([,args]) => args);
+    const callCount = () => submissions().flatMap((args) => args.calls).length;
+    const model = () => submissions().at(-1)?.snapshot.pets[0]?.model;
     await settle();
     await update("completed", "1");
     assert.equal(callCount(), 0);
@@ -49,10 +50,10 @@ for (const source of ["codex", "claude"]) {
     front = "/dev/test";
     await update("running", "4");
     await update("completed", "5");
-    assert.equal(models.get("pet-test").state, "idle");
+    assert.equal(model().state, "idle");
     assert.equal(callCount(), 1);
     await update("your_turn", "6");
-    assert.equal(models.get("pet-test").state, "your_turn");
+    assert.equal(model().state, "your_turn");
     assert.equal(callCount(), 1);
     front = null;
     await update("your_turn", "6");
@@ -61,6 +62,7 @@ for (const source of ["codex", "claude"]) {
     sessions = [];
     handlers.get("sessions-changed")({payload: []});
     await settle();
-    assert.ok(calls.some(([name]) => name === "remove_pet"));
+    assert.equal(submissions().at(-1).snapshot.pets.length, 0);
+    assert.equal(calls.filter(([name]) => ["play_call","ensure_pet","remove_pet","ensure_gauge","remove_gauge"].includes(name)).length, 0);
   });
 }

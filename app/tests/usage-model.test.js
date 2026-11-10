@@ -52,3 +52,21 @@ test("Claude 缺失五小时窗口时，七天用量仍留在第二圈", () => {
   assert.equal(group.windows[1].duration_minutes, 10080);
   assert.equal(group.windows[1].used_percentage, 45);
 });
+
+test("设备 Claude 数值长期不变仍显示，重置或缺失时保持未知", () => {
+  const raw={claude:{updated_at:"2000-01-01T00:00:00Z",five_hour:{used_percentage:47,resets_at:1200}}};
+  assert.equal(USAGE.deviceGroups(raw,new Set(["claude"]),now)[0].windows[0].used_percentage,47);
+  for(const data of [null,{five_hour:{used_percentage:47}},{five_hour:{used_percentage:47,resets_at:999}}]) {
+    const g=USAGE.deviceGroups({claude:data},new Set(["claude"]),now)[0];
+    assert.equal(g.windows[0].used_percentage,null);
+  }
+  assert.deepEqual(USAGE.deviceGroups(raw,new Set(),now),[]);
+});
+
+test("设备 Codex 陈旧数值不伪装成零，窗口保留实际时长与重置文字", () => {
+  const fresh=USAGE.deviceGroups({codex:codex()},new Set(["codex"]),now)[0];
+  assert.equal(fresh.windows[0].duration_label,"5h");
+  assert.ok(fresh.windows[0].reset_label.length>0);
+  const stale=USAGE.deviceGroups({codex:codex({updated_at:800})},new Set(["codex"]),now)[0];
+  assert.equal(stale.windows[0].used_percentage,null);
+});
