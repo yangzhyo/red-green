@@ -1,0 +1,809 @@
+{
+  "sprites": [
+    {
+      "skin": "robot",
+      "state": "idle",
+      "frames": [
+        {
+          "offset": 0,
+          "w": 14,
+          "h": 16
+        }
+      ],
+      "interval": 0,
+      "period": 3200,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          0
+        ],
+        [
+          50,
+          0,
+          0,
+          1.04,
+          0.96,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "robot",
+      "state": "running",
+      "frames": [
+        {
+          "offset": 896,
+          "w": 14,
+          "h": 16
+        },
+        {
+          "offset": 1792,
+          "w": 14,
+          "h": 16
+        }
+      ],
+      "interval": 210,
+      "period": 420,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          0
+        ],
+        [
+          50,
+          0,
+          2,
+          1.03,
+          0.97,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "robot",
+      "state": "awaiting",
+      "frames": [
+        {
+          "offset": 2688,
+          "w": 14,
+          "h": 16
+        }
+      ],
+      "interval": 0,
+      "period": 750,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1.06,
+          0.94,
+          0
+        ],
+        [
+          35,
+          0,
+          -18,
+          0.96,
+          1.06,
+          0
+        ],
+        [
+          55,
+          0,
+          -18,
+          0.96,
+          1.06,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1.06,
+          0.94,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "robot",
+      "state": "your_turn",
+      "frames": [
+        {
+          "offset": 3584,
+          "w": 14,
+          "h": 16
+        },
+        {
+          "offset": 4480,
+          "w": 14,
+          "h": 16
+        }
+      ],
+      "interval": 500,
+      "period": 1600,
+      "motion": [
+        [
+          0,
+          -7,
+          0,
+          1,
+          1,
+          -4
+        ],
+        [
+          50,
+          7,
+          0,
+          1,
+          1,
+          4
+        ],
+        [
+          100,
+          -7,
+          0,
+          1,
+          1,
+          -4
+        ]
+      ]
+    },
+    {
+      "skin": "robot",
+      "state": "completed",
+      "frames": [
+        {
+          "offset": 5376,
+          "w": 14,
+          "h": 16
+        }
+      ],
+      "interval": 0,
+      "period": 1100,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          -6
+        ],
+        [
+          50,
+          0,
+          0,
+          1,
+          1,
+          6
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          -6
+        ]
+      ]
+    },
+    {
+      "skin": "robot",
+      "state": "aborted",
+      "frames": [
+        {
+          "offset": 6272,
+          "w": 16,
+          "h": 10
+        },
+        {
+          "offset": 6912,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 420,
+      "period": 0,
+      "motion": []
+    },
+    {
+      "skin": "crab",
+      "state": "idle",
+      "frames": [
+        {
+          "offset": 7552,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 0,
+      "period": 3200,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          0
+        ],
+        [
+          50,
+          0,
+          0,
+          1.04,
+          0.96,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "crab",
+      "state": "running",
+      "frames": [
+        {
+          "offset": 8192,
+          "w": 16,
+          "h": 10
+        },
+        {
+          "offset": 8832,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 210,
+      "period": 420,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          0
+        ],
+        [
+          50,
+          0,
+          2,
+          1.03,
+          0.97,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "crab",
+      "state": "awaiting",
+      "frames": [
+        {
+          "offset": 9472,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 0,
+      "period": 750,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1.06,
+          0.94,
+          0
+        ],
+        [
+          35,
+          0,
+          -18,
+          0.96,
+          1.06,
+          0
+        ],
+        [
+          55,
+          0,
+          -18,
+          0.96,
+          1.06,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1.06,
+          0.94,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "crab",
+      "state": "your_turn",
+      "frames": [
+        {
+          "offset": 10112,
+          "w": 16,
+          "h": 10
+        },
+        {
+          "offset": 10752,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 500,
+      "period": 1600,
+      "motion": [
+        [
+          0,
+          -7,
+          0,
+          1,
+          1,
+          -4
+        ],
+        [
+          50,
+          7,
+          0,
+          1,
+          1,
+          4
+        ],
+        [
+          100,
+          -7,
+          0,
+          1,
+          1,
+          -4
+        ]
+      ]
+    },
+    {
+      "skin": "crab",
+      "state": "completed",
+      "frames": [
+        {
+          "offset": 11392,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 0,
+      "period": 1100,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          -6
+        ],
+        [
+          50,
+          0,
+          0,
+          1,
+          1,
+          6
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          -6
+        ]
+      ]
+    },
+    {
+      "skin": "crab",
+      "state": "aborted",
+      "frames": [
+        {
+          "offset": 12032,
+          "w": 16,
+          "h": 10
+        },
+        {
+          "offset": 12672,
+          "w": 16,
+          "h": 10
+        }
+      ],
+      "interval": 420,
+      "period": 0,
+      "motion": []
+    },
+    {
+      "skin": "cat",
+      "state": "idle",
+      "frames": [
+        {
+          "offset": 13312,
+          "w": 14,
+          "h": 8
+        }
+      ],
+      "interval": 0,
+      "period": 3200,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          0
+        ],
+        [
+          50,
+          0,
+          0,
+          1.04,
+          0.96,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "cat",
+      "state": "running",
+      "frames": [
+        {
+          "offset": 13760,
+          "w": 14,
+          "h": 13
+        }
+      ],
+      "interval": 0,
+      "period": 420,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          0
+        ],
+        [
+          50,
+          0,
+          2,
+          1.03,
+          0.97,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "cat",
+      "state": "awaiting",
+      "frames": [
+        {
+          "offset": 14488,
+          "w": 14,
+          "h": 13
+        }
+      ],
+      "interval": 0,
+      "period": 750,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1.06,
+          0.94,
+          0
+        ],
+        [
+          35,
+          0,
+          -18,
+          0.96,
+          1.06,
+          0
+        ],
+        [
+          55,
+          0,
+          -18,
+          0.96,
+          1.06,
+          0
+        ],
+        [
+          100,
+          0,
+          0,
+          1.06,
+          0.94,
+          0
+        ]
+      ]
+    },
+    {
+      "skin": "cat",
+      "state": "your_turn",
+      "frames": [
+        {
+          "offset": 15216,
+          "w": 14,
+          "h": 13
+        },
+        {
+          "offset": 15944,
+          "w": 14,
+          "h": 13
+        }
+      ],
+      "interval": 500,
+      "period": 1600,
+      "motion": [
+        [
+          0,
+          -7,
+          0,
+          1,
+          1,
+          -4
+        ],
+        [
+          50,
+          7,
+          0,
+          1,
+          1,
+          4
+        ],
+        [
+          100,
+          -7,
+          0,
+          1,
+          1,
+          -4
+        ]
+      ]
+    },
+    {
+      "skin": "cat",
+      "state": "completed",
+      "frames": [
+        {
+          "offset": 16672,
+          "w": 14,
+          "h": 13
+        }
+      ],
+      "interval": 0,
+      "period": 1100,
+      "motion": [
+        [
+          0,
+          0,
+          0,
+          1,
+          1,
+          -6
+        ],
+        [
+          50,
+          0,
+          0,
+          1,
+          1,
+          6
+        ],
+        [
+          100,
+          0,
+          0,
+          1,
+          1,
+          -6
+        ]
+      ]
+    },
+    {
+      "skin": "cat",
+      "state": "aborted",
+      "frames": [
+        {
+          "offset": 17400,
+          "w": 14,
+          "h": 8
+        },
+        {
+          "offset": 17848,
+          "w": 14,
+          "h": 8
+        }
+      ],
+      "interval": 420,
+      "period": 0,
+      "motion": []
+    }
+  ],
+  "calls": [
+    {
+      "name": "robot-awaiting",
+      "offset": 18296,
+      "length": 68164,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "robot-aborted",
+      "offset": 86460,
+      "length": 99840,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "robot-your_turn",
+      "offset": 186300,
+      "length": 68164,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "robot-completed",
+      "offset": 254464,
+      "length": 26880,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "crab-awaiting",
+      "offset": 281344,
+      "length": 68164,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "crab-aborted",
+      "offset": 349508,
+      "length": 99840,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "crab-your_turn",
+      "offset": 449348,
+      "length": 68164,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "crab-completed",
+      "offset": 517512,
+      "length": 26880,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "cat-awaiting",
+      "offset": 544392,
+      "length": 68164,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "cat-aborted",
+      "offset": 612556,
+      "length": 99840,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "cat-your_turn",
+      "offset": 712396,
+      "length": 68164,
+      "rate": 48000,
+      "channels": 2
+    },
+    {
+      "name": "cat-completed",
+      "offset": 780560,
+      "length": 26880,
+      "rate": 48000,
+      "channels": 2
+    }
+  ],
+  "fonts": [
+    {
+      "size": 20,
+      "sha256": "a3588575af1fbfdc62dadf6e858040be11f3dd2ad1d4be2aca0cac1f1e5f9b2b"
+    },
+    {
+      "size": 28,
+      "sha256": "9fa2acd3916706b69f5c92cc66d44140e941f860c657a7c0d8b472a9ade322e8"
+    }
+  ],
+  "sources": {
+    "app/ui/sprites.js": "4b45f193586d48b6bcda33af5569f5c267734866b6de4dfe6ebcb2e0c694c21f",
+    "app/ui/pet.css": "6c8c21c249ea5b5b81ca556b3f0cb9a94abb453fedcfda9d407a34d98bf971ff",
+    "app/src-tauri/calls/robot-awaiting.wav": "e0c797cb462c47b0eaac2dd450415d5012617abd09c92a85ecef2bc71936a41f",
+    "app/src-tauri/calls/robot-aborted.wav": "a57176a88664d26061dba286b82c04bfb1e54ece8843e650ff757444e5e53c97",
+    "app/src-tauri/calls/robot-your_turn.wav": "a261d0e80e5dbd82a2c0f88425f01ebbab743299e033e33396a59604b1af9d86",
+    "app/src-tauri/calls/robot-completed.wav": "ae0394ff20edf1233448fb52fdc7fd7e096772205b13513fe639aeac98cb7114",
+    "app/src-tauri/calls/crab-awaiting.wav": "c9f6da5aab9414ebd7cec36861703a26da134d8f8c12c87071b097dd52ae3289",
+    "app/src-tauri/calls/crab-aborted.wav": "c8fae3a04f8a9fd9abab7c509f141f1405fefb89c5be66ddc0d117cf27df9293",
+    "app/src-tauri/calls/crab-your_turn.wav": "a0a7c3c8641afbb40d83844e907c0f0a34c1ceb7146c335d5456dad43e414deb",
+    "app/src-tauri/calls/crab-completed.wav": "94d8f20815b2dd197d3bb27dadf1a6f760a99245cd7ae3bc211ba9818b27e0e6",
+    "app/src-tauri/calls/cat-awaiting.wav": "32f307310470181a8c0b90cfca4ce50b13a907c5e41d93578307ad3567d8ced6",
+    "app/src-tauri/calls/cat-aborted.wav": "57c8bb7ab807dcf29d8cdcbe5bca9a043c9716f01dd121cd7171b866c40d6d73",
+    "app/src-tauri/calls/cat-your_turn.wav": "6b74912ea9768e2c134e107fe4ee782882bfb842712f8427992b0fb3dcb54121",
+    "app/src-tauri/calls/cat-completed.wav": "4fdaf49fd54cb96b9ef46cc4a0de7cd5a47802fd6d5d5165f6906232c044a008"
+  },
+  "blob_sha256": "62e181a7c3714da88998e7ccc823aa4fc67c1a96fedf1dc3d82c73aa0150645c",
+  "version": "7aac53232f49979ebd748e857cddf09f884f872f42d2dd6810fb142b3fc12bb2"
+}

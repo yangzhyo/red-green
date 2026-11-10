@@ -11,6 +11,9 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2
         version: 2.11.4
+      lv_font_conv:
+        specifier: 1.5.3
+        version: 1.5.3
 
 packages:
 
@@ -90,6 +93,18 @@ packages:
     engines: {node: '>= 10'}
     hasBin: true
 
+  lv_font_conv@1.5.3:
+    resolution: {integrity: sha512-0xJQThBOw2iptFccSXrKDIUTQAwr/2zhKjCI1lATIRgZo8uvYRTmenKafW9yTw6G0y5AyW00tqGpUtYuTuBIbQ==}
+    hasBin: true
+    bundledDependencies:
+      - argparse
+      - bit-buffer
+      - debug
+      - make-error
+      - mkdirp
+      - opentype.js
+      - pngjs
+
 snapshots:
 
   '@tauri-apps/cli-darwin-arm64@2.11.4':
@@ -138,3 +153,5 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.11.4
       '@tauri-apps/cli-win32-ia32-msvc': 2.11.4
       '@tauri-apps/cli-win32-x64-msvc': 2.11.4
+
+  lv_font_conv@1.5.3: {}

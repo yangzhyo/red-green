@@ -57,7 +57,7 @@ globalThis.USAGE = (() => {
       const d=new Date(seconds*1000);
       return Number.isNaN(d.getTime()) ? "" : `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
     };
-    return result.map(g=>({...g,windows:g.windows.map(w=>({...w,
+    return result.map(g=>({...g,updated_label:g.source==="claude" ? `数值更新于 ${dateLabel(typeof g.updated_at === "string" ? Date.parse(g.updated_at)/1000 : g.updated_at)||"未知"}` : "",windows:g.windows.map(w=>({...w,
       duration_label:duration(w.duration_minutes),
       reset_label:dateLabel(w.resets_at),
       status:w.used_percentage===null ? (typeof w.resets_at==="number" && w.resets_at*1000<=now?"expired":"unknown") : "known",

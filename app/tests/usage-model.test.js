@@ -70,3 +70,7 @@ test("设备 Codex 陈旧数值不伪装成零，窗口保留实际时长与重�
   const stale=USAGE.deviceGroups({codex:codex({updated_at:800})},new Set(["codex"]),now)[0];
   assert.equal(stale.windows[0].used_percentage,null);
 });
+test("设备保留 Claude 数值最后变化的显示时间", () => {
+  const g = USAGE.deviceGroups({claude:{updated_at: 1700000000, five_hour:{used_percentage:10,resets_at:1800000000}}}, new Set(["claude"]), 1750000000000)[0];
+  assert.match(g.updated_label, /^数值更新于 \d+\/\d+ \d\d:\d\d$/);
+});

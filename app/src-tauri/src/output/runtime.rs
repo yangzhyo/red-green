@@ -8,7 +8,8 @@ use std::sync::{
     mpsc::{Receiver, SyncSender},
 };
 use std::time::Duration;
-pub const RESOURCE_VERSION: &str = "red-green-assets-v1";
+pub const RESOURCE_VERSION: &str =
+    include_str!("../../../../firmware/mosaico/main/generated/version.txt");
 pub trait Desktop {
     fn reconcile(&mut self, snapshot: &OutputSnapshot) -> Result<(), String>;
     fn quiesce(&mut self) -> Result<(), String>;

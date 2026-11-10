@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.22)
+set(BSP_ROOT "${CMAKE_CURRENT_LIST_DIR}/../vendor/esp-mosaico-bsp")
+if(NOT EXISTS "${BSP_ROOT}/components/esp-mosaico-bsp")
+  message(FATAL_ERROR "运行 git submodule update --init --recursive，见 docs/mosaico.md")
+endif()
+set(EXTRA_COMPONENT_DIRS "${BSP_ROOT}/components/esp-mosaico-bsp" "${BSP_ROOT}/components/espressif__spi_nand_flash")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(red_green_mosaico)

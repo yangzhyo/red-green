@@ -90,7 +90,7 @@ impl OutputSnapshot {
                     .filter(|p| (0.0..=100.0).contains(p));
                 projected.push(json!({"used_percentage":percentage,"duration_label":bounded(w,"duration_label",32)?,"reset_label":bounded(w,"reset_label",48)?,"status":if percentage.is_some(){"known"}else if w["status"]=="expired"{"expired"}else{"unknown"}}));
             }
-            usage.push(json!({"id":bounded(g,"id",192)?,"source":source,"label":bounded(g,"label",128)?,"windows":projected}));
+            usage.push(json!({"id":bounded(g,"id",192)?,"source":source,"label":bounded(g,"label",128)?,"updated_label":bounded(g,"updated_label",80)?,"windows":projected}));
         }
         let out = json!({"type":"snapshot","generation":generation,"version":version,"sessions":sessions,"usage":usage});
         super::protocol::encode(&out)?;
