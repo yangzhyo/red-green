@@ -1,6 +1,6 @@
 # ESP-Mosaico 首版设计
 
-日期：2026-11-10。需求：[Issue #18](https://github.com/yangzhyo/red-green/issues/18)。状态：整体设计仍为草案，主角＋总览及黄金比例已确认；设备功能尚未实现、编译或在真机上验证。
+日期：2026-11-10。需求：[Issue #18](https://github.com/yangzhyo/red-green/issues/18)。状态：用户已确认设计并授权开工；实施与验收状态见 Issue #18 和实施计划，不以设计批准代替编译或真机验证。
 
 ## 用户已确认
 
