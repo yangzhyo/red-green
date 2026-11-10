@@ -66,6 +66,12 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 
 如果重新设置过 Codex 标题，请确认仍保留 `thread-id`；可再次运行安装脚本补回，其他标题项会保留。配置文件修改不会刷新已打开会话的旧标题：在各会话中通过 `/title` 启用 Thread ID 并保存，或在方便时重新打开会话。用 `launchctl list dev.y9g.red-green` 检查常驻进程是否有 PID；已加载但没有运行时，可用 `launchctl kickstart gui/$(id -u)/dev.y9g.red-green` 恢复。
 
+### ESP-Mosaico（实验性）
+
+CoreBoard V1.2.1 通过 USB-C 连接 Mac 后，匹配版本的设备应用会接管宠物、叫声和用量表；断开或健康检查失败后自动回退电脑。480×480 屏幕采用 61.8% / 38.2%「主角＋总览」，五个会话同屏，更多会话分页。设备端只展示，不改变桌面的已阅和前台静默规则。
+
+固件、固定依赖、安装边界和验证记录见 [Mosaico 开发与验证](docs/mosaico.md)。首次安装需要核对实际分区并完整备份；现有 Vibe 与恢复区域保留。当前版本仍在真机验收，尚未完成的项目以 #18 为准。
+
 ## 工作原理
 
 ```

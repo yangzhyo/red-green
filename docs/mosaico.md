@@ -25,7 +25,7 @@ sh firmware/mosaico/tests/run.sh
 
 三套精灵、六种状态的全部 26 帧和 CSS 动作由 `node scripts/gen-mosaico-assets.mjs` 导出；12 段现有 WAV 离线转成 48 kHz / PCM16 / 双声道。字体、源资产和转换结果共同参与 SHA256 握手，资源不匹配不接管。
 
-字体使用 Noto Sans CJK SC（SIL OFL，许可保留在生成目录），20/28 px、1 bit，覆盖字体中 U+0020–FFFF 的可用字形。执行 `cd app && pnpm install --frozen-lockfile` 后，`bash scripts/gen-mosaico-fonts.sh` 可从校验 SHA256 的固定上游提交重建。**超出字集的项目名会拒绝设备快照并回退电脑**，不显示方框。字体约 5.3 MiB，完整应用约 7 MiB；能否装入实物应用槽位仍须只读检查。
+字体使用 Noto Sans CJK SC（SIL OFL，许可保留在生成目录），20/28 px、1 bit，覆盖字体中 U+0020–FFFF 的可用字形。执行 `cd app && pnpm install --frozen-lockfile` 后，`bash scripts/gen-mosaico-fonts.sh` 可从校验 SHA256 的固定上游提交重建。**超出字集的项目名会拒绝设备快照并回退电脑**，不显示方框。字体约 5.3 MiB，完整应用约 6.94 MiB；实物应用槽位为 7 MiB，构建使用已核对的布局检查容量。
 
 原生预览运行与固件相同的 LVGL 界面代码，支持检查中文长名称和五行总览；不模拟物理屏幕、codec 或 USB：
 
@@ -45,4 +45,48 @@ Claude 的 `updated_at` 表示数值最后变化时间，设备显示“数值�
 
 `partitions.csv` 只用于编译容量校验，不是覆盖实物的授权。首次安装前读取真实板型、现有分区和闪存大小，保存可恢复镜像，核对应用槽位足够大后才能写入应用。禁止全片擦除、改写 eFuse，或直接运行会覆盖 bootloader/partition table 的默认 `idf.py flash`。
 
-现有 Vibe/Iris 与维护分区必须保留；实际恢复和应用部署命令在只读检查后按实物记录。
+现有 Vibe/Iris 与维护分区必须保留。对下述已核对布局，只写 `main_app`：
+
+```sh
+# 设备须先进入 ROM 下载模式；PORT 是该设备重新枚举出的端口。
+/tmp/rg-flash-tools/bin/python -m esptool --chip esp32s31 --port "$PORT" \
+  --before no-reset --after hard-reset write-flash \
+  --flash-mode keep --flash-freq keep --flash-size keep \
+  0x210000 firmware/mosaico/build/red_green_mosaico.bin
+```
+
+先比对备份的 MAC、分区表、Flash 容量与镜像目标；本命令只适用于已核对的 `0x210000` / 7 MiB 槽位。esptool 写后会校验摘要；首次部署还独立复核了应用摘要及写前/写后 `0..0x210000` 的保护区域。原数据分区不在写入范围。ROM 下载模式进入方法：关机，按住 USB-C 左侧 BOOT 键开机后松开；进入 Vibe 则是按住 AI 键开机，两者不同。
+
+恢复原应用时，从原 `flash.bin` 提取 `0x210000..0x910000` 的 7 MiB 为 `main-app.bin`，核对备份摘要后用上面相同的应用地址写回；不要把完整 `flash.bin` 作为应用镜像，也不要全片擦除。备份还保留原启动器、Vibe 和数据，但恢复应用无需改写这些区域。
+
+运行桌面应用后无需配置端口。只有 red-green 握手、资源版本及显示/音频健康都通过才接管；运行 Vibe 或其他应用时仍由电脑呈现。日志在 `~/Library/Logs/red-green.log`，可查看 Preparing / Device / Fallback / Desktop 切换。设备初始化失败时的握手包含 `boot_phase`、复位原因及剩余堆空间，健康标记保持 false。
+
+### 只读备份
+
+`scripts/mosaico-backup.py` 使用 esptool 5.6 的 S31 支持。调用前从官方 Iris 的实时设备清单核对 MAC 和板型；脚本只接受对应 MAC 的 Espressif 维护接口或 ROM 接口。Vibe/原厂应用可按官方 DTR/RTS 时序临时进入 ROM；官方 stub 仅加载到 RAM。
+
+```sh
+python3 -m venv /tmp/rg-flash-tools
+/tmp/rg-flash-tools/bin/pip install esptool==5.6.0
+/tmp/rg-flash-tools/bin/python scripts/mosaico-backup.py \
+  --port /dev/cu.usbmodem设备端口 --expected-mac 设备MAC \
+  --output "$HOME/Library/Application Support/red-green/mosaico-backups/唯一日期目录"
+```
+
+两次完整读取必须逐字节一致，才保存 `flash.bin`、`partition-table.bin` 和含 SHA256 的 `manifest.json`。目录权限 700、文件 600；备份可能包含原设备凭据，留在本机，不提交仓库。脚本不含擦除或写 Flash/eFuse 命令。
+
+2026-11-11 实物确认：ESP32-S31 v0.0、板型 eFuse 0x0102、16 MiB NOR、约 16 MiB PSRAM，Vibe 0.3.0 / Recovery ABI 2。分区表 SHA256 为 `f893e928b43d0e497fa9fb07ea383303ba60a8f4b03f425519f29cb6e97856c3`，与官方 Iris 实时清单一致。`main_app` 位于 `0x210000`、容量 `0x700000`；`0x910000` 之后是原有 model/font/product_assets。模板中的更大应用槽位不适用于这台设备。
+
+### 主机与设备核心集成验证
+
+```sh
+cargo build --manifest-path app/src-tauri/Cargo.toml --example mosaico_probe
+python3 scripts/mosaico-simulator.py
+python3 scripts/mosaico-simulator.py --serve
+```
+
+模拟器使用真实 C 协议核心，通过 PTY 连接真实 Rust 串口循环；`--serve` 输出端口，供隔离 Tauri 实例使用。它验证单向丢包、渲染停止、manager 停止、迟到授权、重复 Call 与回退后的会话清理。CI 执行 C 核心 ASan/UBSan 和 PTY 集成测试；SDK 固件编译、实际显示和物理声音仍需单独验收。
+
+本地已验证：Rust 33 项、前端 12 项、设备核心与调度、上述 PTY 场景、固定资源完整重建、LVGL 原生预览，以及 Tauri 实际窗口/afplay 的设备独占和桌面回退。回退恢复当前会话，设备期间删除的会话不会复活。原生预览不代表物理屏幕验收。
+
+**真机验收未通过：** 首次应用安装及保护区域校验成功，但启动后黑屏/无业务 USB，正在用初始化阶段握手诊断。实际屏幕、声音、拔插、睡眠唤醒、真实账号数据与两小时运行尚未验收，Issue #18 保持打开。

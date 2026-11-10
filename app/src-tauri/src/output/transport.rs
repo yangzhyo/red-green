@@ -15,7 +15,12 @@ impl Link {
         }
     }
     pub fn open(path: &str) -> Result<Self, String> {
-        let port = serialport::new(path, 115200)
+        // macOS PTY 不支持 IOSSIOSPEED；0 是 serialport 保留 PTY 波特率的契约。
+        let pty = cfg!(target_os = "macos")
+            && path.strip_prefix("/dev/ttys").is_some_and(|suffix| {
+                suffix.len() == 3 && suffix.bytes().all(|b| b.is_ascii_digit())
+            });
+        let port = serialport::new(path, if pty { 0 } else { 115200 })
             .timeout(Duration::from_millis(20))
             .dtr_on_open(false)
             .open()
@@ -93,5 +98,14 @@ mod tests {
         let mut b = [0; 15];
         peer.read_exact(&mut b).unwrap();
         assert_eq!(&b, b"RGP1\x07\x00\x00\x00{\"x\":2}");
+    }
+    #[test]
+    fn explicit_pty_can_be_opened_by_the_runtime() {
+        let (mut peer, port) = serialport::TTYPort::pair().unwrap();
+        let path = port.name().unwrap();
+        drop(port);
+        let mut link = Link::open(&path).unwrap();
+        peer.write_all(b"RGP1\x07\x00\x00\x00{\"x\":1}").unwrap();
+        assert_eq!(link.read().unwrap(), vec![json!({"x":1})]);
     }
 }

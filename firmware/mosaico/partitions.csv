@@ -1,5 +1,12 @@
-# 仅用于编译容量校验；安装前读取实物分区，禁止直接用此表覆盖现有分区。
+# 已只读核对 V1.2.1 实物布局；仅编译校验，安装不得写此表。
 # Name,Type,SubType,Offset,Size,Flags
-nvs,data,nvs,0x9000,0x6000,
-phy_init,data,phy,0xf000,0x1000,
-factory,app,factory,0x10000,0xf00000,
+otadata,data,ota,0x9000,0x2000,
+phy_init,data,phy,0xb000,0x1000,
+sysmeta,data,nvs,0xc000,0x14000,
+vibe_mode,app,test,0x20000,0x1c0000,
+coredump,data,coredump,0x1e0000,0x20000,
+nvs,data,nvs,0x200000,0x10000,
+main_app,app,ota_0,0x210000,0x700000,
+model,data,spiffs,0x910000,0x200000,
+font,data,0x40,0xb10000,0x200000,
+product_assets,data,spiffs,0xd10000,0x2f0000,

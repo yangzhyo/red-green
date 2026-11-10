@@ -44,6 +44,29 @@ for (const source of ["codex", "claude"]) {
     await update("running", "2");
     await update("awaiting", "3");
     assert.equal(callCount(), 1);
+    // 桌面回退仍使用来源隔离后的窗口身份，真实 pet.js 必须能接受快照。
+    const elements = new Map(["sprite", "bubble", "tag"].map((id) => [id, {
+      textContent: "", classList: { add() {}, remove() {} },
+    }]));
+    let onUpdate;
+    let drawn = 0;
+    const renderer = vm.createContext({
+      URLSearchParams, location: { search: `?sid=${source}-test` },
+      document: { body: { dataset: {} }, getElementById: (id) => elements.get(id) },
+      setInterval: () => 1, clearInterval() {}, installDrag() {},
+      window: {
+        SPRITES: { SCALE: 1, spec: () => ({ frames: [0] }), draw: () => drawn++ },
+        __TAURI__: { core: { invoke() {} }, event: {
+          listen: (_, fn) => { onUpdate = fn; return Promise.resolve(); }, emit() {},
+        } },
+      },
+    });
+    vm.runInContext(fs.readFileSync(new URL("../ui/pet.js", import.meta.url), "utf8"), renderer);
+    onUpdate({ payload: model() });
+    assert.equal(elements.get("tag").textContent, "delta");
+    assert.equal(drawn, 1);
+    onUpdate({ payload: { ...model(), session_id: `${source === "codex" ? "claude" : "codex"}-test`, project: "other" } });
+    assert.equal(elements.get("tag").textContent, "delta");
     await update("awaiting", "3");
     assert.equal(callCount(), 1);
 

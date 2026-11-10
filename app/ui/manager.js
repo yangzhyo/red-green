@@ -52,7 +52,7 @@ async function applySessions(sessions) {
       calls.push({ sid, name: CALLS.name(SKINS.pick(s.project), effective) });
     }
     pet.prevState = effective;
-    pet.model = { ...s, state: effective, skin: SKINS.pick(s.project) };
+    pet.model = { ...s, session_id: sid, state: effective, skin: SKINS.pick(s.project) };
   }
   for (const sid of pets.keys()) if (!seen.has(sid)) pets.delete(sid);
   // 一次转移最多提交一次；调用失败也不重投叫声，下一次心跳只补状态。

@@ -1,6 +1,8 @@
 #include "audio.h"
 #include "bsp/esp_mosaico.h"
 #include "device.h"
+#include "device/dcd.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -10,11 +12,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "hal/usb_utmi_ll.h"
 #include "tinyusb.h"
 #include "tinyusb_cdc_acm.h"
 #include "tinyusb_default_config.h"
 #include "tusb.h"
 #include "ui.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +28,16 @@ static SemaphoreHandle_t lock;
 static bool showing;
 static uint64_t bound_at;
 static char identity[18];
+enum { BOOT_USB, BOOT_DISPLAY, BOOT_FONTS, BOOT_AUDIO, BOOT_RUNNING };
+static atomic_uint boot_phase;
 uint64_t rg_now(void) { return (uint64_t)esp_timer_get_time() / 1000; }
+static void usb_shutdown(void) {
+  // S31 CPU 复位前停止 USB DMA，避免下一次启动访问旧缓冲区。
+  // 与官方 ESP-Iris 的 S31 shutdown 顺序一致。
+  dcd_int_disable(0);
+  usb_utmi_ll_reset_register();
+  usb_utmi_ll_enable_bus_clock(false);
+}
 static void fail_closed(void) {
   // 只在只读板型校验成功后启动这些任务。避开堵塞的 LVGL/I2C 锁。
   gpio_set_level(BSP_AUDIO_PA_CTRL, 0);
@@ -90,8 +103,19 @@ static void hello(void) {
   cJSON_AddNumberToObject(j, "protocol", 1);
   cJSON_AddStringToObject(j, "assets", RG_RESOURCES);
   cJSON_AddStringToObject(j, "board", "v1.2");
-  cJSON_AddBoolToObject(j, "display_ok", rg_ui_healthy((uint32_t)rg_now()));
-  cJSON_AddBoolToObject(j, "audio_ok", rg_audio_healthy((uint32_t)rg_now()));
+  unsigned phase = atomic_load(&boot_phase);
+  const char *phases[] = {"usb", "display", "fonts", "audio", "running"};
+  cJSON_AddStringToObject(j, "boot_phase", phases[phase]);
+  cJSON_AddNumberToObject(j, "reset_reason", esp_reset_reason());
+  cJSON_AddNumberToObject(j, "free_heap", esp_get_free_heap_size());
+  cJSON_AddNumberToObject(j, "largest_heap",
+                          heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  cJSON_AddBoolToObject(j, "display_ok",
+                        phase == BOOT_RUNNING &&
+                            rg_ui_healthy((uint32_t)rg_now()));
+  cJSON_AddBoolToObject(j, "audio_ok",
+                        phase == BOOT_RUNNING &&
+                            rg_audio_healthy((uint32_t)rg_now()));
   send_json(j);
 }
 static bool consume(const char *bytes, size_t size, void *context) {
@@ -150,6 +174,12 @@ static void serial_task(void *context) {
   uint64_t last_hello = 0, last_request = 0;
   uint8_t bytes[4096];
   for (;;) {
+    // 初始化失败也保留诊断握手；尚未就绪时不处理任何业务输入。
+    if (atomic_load(&boot_phase) != BOOT_RUNNING) {
+      hello();
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
     if (xSemaphoreTake(lock, pdMS_TO_TICKS(40)) != pdTRUE)
       fail_closed();
     uint64_t now = rg_now();
@@ -187,14 +217,6 @@ void app_main(void) {
     ESP_LOGE("red-green", "不支持的板型；保持电脑输出");
     return;
   }
-  bsp_display_config_t display = BSP_DISPLAY_DEFAULT_CONFIG();
-  display.enable_touch = false;
-  if (!bsp_display_start_with_config(&display) || !rg_ui_init() ||
-      !rg_audio_init()) {
-    ESP_LOGE("red-green", "屏幕/音频初始化失败；不发布就绪");
-    gpio_set_level(BSP_AUDIO_PA_CTRL, 0);
-    return;
-  }
   uint8_t mac[6];
   ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_BASE));
   snprintf(identity, sizeof(identity), "%02x%02x%02x%02x%02x%02x", mac[0],
@@ -208,11 +230,26 @@ void app_main(void) {
     return;
   tinyusb_config_t usb = TINYUSB_DEFAULT_CONFIG();
   ESP_ERROR_CHECK(tinyusb_driver_install(&usb));
+  ESP_ERROR_CHECK(esp_register_shutdown_handler(usb_shutdown));
   tinyusb_config_cdcacm_t cdc = {.cdc_port = TINYUSB_CDC_ACM_0};
   ESP_ERROR_CHECK(tinyusb_cdcacm_init(&cdc));
+  configASSERT(xTaskCreate(serial_task, "rg_usb", 12288, NULL, 5, NULL) ==
+               pdPASS);
+  bsp_display_config_t display = BSP_DISPLAY_DEFAULT_CONFIG();
+  display.enable_touch = false;
+  atomic_store(&boot_phase, BOOT_DISPLAY);
+  if (!bsp_display_start_with_config(&display))
+    return;
+  atomic_store(&boot_phase, BOOT_FONTS);
+  if (!rg_ui_init())
+    return;
+  atomic_store(&boot_phase, BOOT_AUDIO);
+  if (!rg_audio_init()) {
+    gpio_set_level(BSP_AUDIO_PA_CTRL, 0);
+    return;
+  }
   configASSERT(xTaskCreate(rg_audio_task, "rg_audio", 4096, NULL, 6, NULL) ==
                pdPASS);
   configASSERT(xTaskCreate(guard, "rg_guard", 4096, NULL, 10, NULL) == pdPASS);
-  configASSERT(xTaskCreate(serial_task, "rg_usb", 12288, NULL, 5, NULL) ==
-               pdPASS);
+  atomic_store(&boot_phase, BOOT_RUNNING);
 }
