@@ -64,3 +64,8 @@ const rg_sound rg_sounds[]={{"robot-awaiting",rg_asset_blob+18296,68164},
 {"cat-aborted",rg_asset_blob+612556,99840},
 {"cat-your_turn",rg_asset_blob+712396,68164},
 {"cat-completed",rg_asset_blob+780560,26880}};
+const rg_bubble rg_bubbles[]={{"idle",{32,32,rg_asset_blob+807440}},
+{"awaiting",{68,32,rg_asset_blob+811536}},
+{"aborted",{32,32,rg_asset_blob+820240}},
+{"your_turn",{68,32,rg_asset_blob+824336}},
+{"completed",{32,32,rg_asset_blob+833040}}};

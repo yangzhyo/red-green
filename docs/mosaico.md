@@ -25,7 +25,9 @@ sh firmware/mosaico/tests/run.sh
 
 三套精灵、六种状态的全部 26 帧和 CSS 动作由 `node scripts/gen-mosaico-assets.mjs` 导出；12 段现有 WAV 离线转成 48 kHz / PCM16 / 双声道。字体、源资产和转换结果共同参与 SHA256 握手，资源不匹配不接管。
 
-字体使用 Noto Sans CJK SC（SIL OFL，许可保留在生成目录），20/28 px、1 bit，覆盖字体中 U+0020–FFFF 的可用字形。执行 `cd app && pnpm install --frozen-lockfile` 后，`bash scripts/gen-mosaico-fonts.sh` 可从校验 SHA256 的固定上游提交重建。**超出字集的项目名会拒绝设备快照并回退电脑**，不显示方框。字体约 5.3 MiB，完整应用约 6.94 MiB；实物应用槽位为 7 MiB，构建使用已核对的布局检查容量。
+固定气泡采用 32 px 预置彩色图片：💤、🚩❗、💥、👋💬、✨，运行中仍显示动词。图形来自 Twemoji（CC BY 4.0），[来源、许可与重建说明](../firmware/mosaico/assets/twemoji/README.md)随仓库保留。先在 `app/` 执行 `pnpm install --frozen-lockfile`，再导出资源；不依赖设备的 emoji 字体。更新图片资源后必须配套重建桌面应用和固件。
+
+字体使用 Noto Sans CJK SC（SIL OFL，许可保留在生成目录），20/28 px、1 bit，覆盖字体中 U+0020–FFFF 的可用字形。执行 `cd app && pnpm install --frozen-lockfile` 后，`bash scripts/gen-mosaico-fonts.sh` 可从校验 SHA256 的固定上游提交重建。**超出字集的项目名会拒绝设备快照并回退电脑**，不显示方框。字体约 5.3 MiB，含彩色气泡的完整应用约 6.97 MiB；实物应用槽位为 7 MiB，构建使用已核对的布局检查容量。
 
 原生预览运行与固件相同的 LVGL 界面代码，支持检查中文长名称和五行总览；不模拟物理屏幕、codec 或 USB：
 
@@ -33,9 +35,12 @@ sh firmware/mosaico/tests/run.sh
 cmake -S firmware/mosaico/tests/preview -B /tmp/rg-preview -G Ninja
 cmake --build /tmp/rg-preview -j 8
 /tmp/rg-preview/preview firmware/mosaico/tests/preview/five.json /tmp/rg-five.ppm 2000
+python3 firmware/mosaico/tests/preview/bubbles.py /tmp/rg-preview/preview
 ```
 
 需先通过固件配置取得锁定的 LVGL 依赖。`sh firmware/mosaico/tests/run.sh` 在主机使用 ASan/UBSan 验证授权期限、去重、过期、帧上限与轮播公平性。`node --test app/tests/*.test.js` 验证资源可重跑及设备用量投影。
+
+气泡回归在真实 LVGL 中切换六种状态，检查三套皮肤下的颜色、可辨认尺寸、状态切换与运行中文字；[渲染预览](images/mosaico-bubbles-lvgl.png)。这次修复保留原宠物动效，尚未更新到实机，物理屏幕确认仍待进行。
 
 设备授权到期或显示/音频无进展时，高优先级任务关闭功放并切回等待画面；显示锁无法取得则拉低屏幕复位并重启。该软件路径已编译和模拟验证，硬故障下物理屏幕/声音的实际截止时间待真机测量。
 

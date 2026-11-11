@@ -9,6 +9,7 @@
     "demo:mosaico": "python3 -m http.server 8768 --bind 127.0.0.1 --directory ."
   },
   "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "@tauri-apps/cli": "^2",
     "lv_font_conv": "1.5.3"
   }

@@ -22,5 +22,10 @@ typedef struct {
   const uint8_t *pcm;
   size_t length;
 } rg_sound;
+typedef struct {
+  const char *state;
+  rg_frame frame;
+} rg_bubble;
 extern const rg_sprite rg_sprites[18];
 extern const rg_sound rg_sounds[12];
+extern const rg_bubble rg_bubbles[5];

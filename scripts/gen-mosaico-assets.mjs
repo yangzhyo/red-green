@@ -4,7 +4,10 @@ import path from "node:path";
 import vm from "node:vm";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(path.join(root, "app/package.json"));
+const { Resvg } = require("@resvg/resvg-js");
 const out = process.argv[2] || path.join(root, "firmware/mosaico/main/generated");
 fs.mkdirSync(out, { recursive: true });
 const read = p => fs.readFileSync(path.join(root, p));
@@ -69,11 +72,37 @@ for (const skin of ["robot", "crab", "cat"]) for (const state of ["awaiting", "a
   }
   calls.push({name,offset:append(pcm),length:pcm.length,rate:48000,channels:2});
 }
+// 固定气泡预渲染为 32 px 彩图；设备无需 emoji 字体或 SVG 解码器。
+const bubbleSources = {
+  idle: ["1f4a4"], awaiting: ["1f6a9", "2757"],
+  aborted: ["1f4a5"], your_turn: ["1f44b", "1f4ac"], completed: ["2728"],
+};
+const bubbleFiles = [];
+const bubbles = Object.entries(bubbleSources).map(([state, symbols]) => {
+  const w = symbols.length * 32 + (symbols.length - 1) * 4, h = 32;
+  const pixels = Buffer.alloc(w * h * 4);
+  symbols.forEach((symbol, index) => {
+    const source = `firmware/mosaico/assets/twemoji/${symbol}.svg`;
+    bubbleFiles.push(source);
+    const rendered = new Resvg(read(source), {
+      fitTo: { mode: "width", value: 32 }, font: { loadSystemFonts: false },
+    }).render();
+    if (rendered.width !== 32 || rendered.height !== 32) throw Error(`气泡尺寸错误：${source}`);
+    const rgba = rendered.pixels;
+    for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+      const from = (y * 32 + x) * 4, to = (y * w + index * 36 + x) * 4;
+      // resvg 的直通 RGBA → LVGL ARGB8888 的小端 BGRA。
+      pixels[to] = rgba[from + 2]; pixels[to + 1] = rgba[from + 1];
+      pixels[to + 2] = rgba[from]; pixels[to + 3] = rgba[from + 3];
+    }
+  });
+  return { state, symbols, w, h, offset: append(pixels) };
+});
 const blob=Buffer.concat(chunks);
 const fonts=[20,28].map(size=>({size,sha256:hash(fs.readFileSync(path.join(out,`font${size}.bin`)))}));
-const sourceFiles=["app/ui/sprites.js","app/ui/pet.css",...calls.map(c=>`app/src-tauri/calls/${c.name}.wav`)];
+const sourceFiles=["app/ui/sprites.js","app/ui/pet.css","scripts/gen-mosaico-assets.mjs",...calls.map(c=>`app/src-tauri/calls/${c.name}.wav`),...bubbleFiles];
 const sources=Object.fromEntries(sourceFiles.map(p=>[p,hash(read(p))]));
-const manifest={sprites,calls,fonts,sources,blob_sha256:hash(blob)};
+const manifest={sprites,calls,bubbles,fonts,sources,rasterizer:{name:"@resvg/resvg-js",version:require("@resvg/resvg-js/package.json").version},blob_sha256:hash(blob)};
 manifest.version=hash(JSON.stringify(manifest));
 fs.writeFileSync(path.join(out,"assets.bin"),blob);
 fs.writeFileSync(path.join(out,"manifest.json"),JSON.stringify(manifest,null,2)+"\n");
@@ -87,5 +116,6 @@ sprites.forEach((s,i)=>{
 });
 code.push(`const rg_sprite rg_sprites[]={${sprites.map((s,i)=>`{"${s.skin}","${s.state}",${s.frames.length},${s.interval},frames_${i},${s.period},${s.motion.length},${s.motion.length?`motion_${i}`:"NULL"}}`).join(",\n")}};`);
 code.push(`const rg_sound rg_sounds[]={${calls.map(c=>`{"${c.name}",rg_asset_blob+${c.offset},${c.length}}`).join(",\n")}};`);
+code.push(`const rg_bubble rg_bubbles[]={${bubbles.map(b=>`{"${b.state}",{${b.w},${b.h},rg_asset_blob+${b.offset}}}`).join(",\n")}};`);
 fs.writeFileSync(path.join(out,"assets.c"),code.join("\n")+"\n");
-console.log(`资源 ${manifest.version}：18 个状态、${sprites.reduce((n,s)=>n+s.frames.length,0)} 帧、12 段声音；${blob.length} bytes`);
+console.log(`资源 ${manifest.version}：18 个状态、${sprites.reduce((n,s)=>n+s.frames.length,0)} 帧、12 段声音、5 组气泡；${blob.length} bytes`);

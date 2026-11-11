@@ -16,11 +16,12 @@
 static cJSON *model;
 static rg_schedule schedule;
 static lv_obj_t *screen, *business, *waiting, *hero_name, *hero_state,
-    *hero_bubble, *hero_image, *footer;
+    *hero_bubble, *bubble_image, *hero_image, *footer;
 static lv_obj_t *names[5], *states[5], *marks[5], *overview_title, *usage_title,
     *usage_values[2], *arcs[2], *percent;
 static lv_font_t *font20, *font28;
 static lv_image_dsc_t image_dsc;
+static lv_image_dsc_t bubble_dsc[5];
 static bool active;
 static atomic_uint_least32_t rendered;
 static uint64_t epoch, last_text;
@@ -165,6 +166,24 @@ static void animate(const cJSON *p, uint64_t now) {
   lv_obj_set_pos(hero_image, 16 + (269 - f->w) / 2 + (int)x,
                  282 - f->h / 2 + (int)y);
 }
+static void draw_bubble(int state, uint64_t now) {
+  if (state == 1) {
+    lv_obj_add_flag(bubble_image, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(hero_bubble, LV_OBJ_FLAG_HIDDEN);
+    set_text(hero_bubble, (now / 15000) % 2 ? "Thinking…" : "Pondering…");
+    return;
+  }
+  lv_obj_add_flag(hero_bubble, LV_OBJ_FLAG_HIDDEN);
+  for (size_t i = 0; i < 5; i++) {
+    if (!strcmp(rg_bubbles[i].state, state_keys[state])) {
+      const rg_frame *f = &rg_bubbles[i].frame;
+      lv_image_set_src(bubble_image, &bubble_dsc[i]);
+      lv_obj_set_pos(bubble_image, 24 + (253 - f->w) / 2, 146);
+      lv_obj_remove_flag(bubble_image, LV_OBJ_FLAG_HIDDEN);
+      return;
+    }
+  }
+}
 static int usage_pages(const cJSON *u) {
   int n = cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(u, "windows"));
   return n > 2 ? (n + 1) / 2 : 1;
@@ -289,14 +308,7 @@ static void refresh(lv_timer_t *timer) {
   set_text(hero_name, rg_string(p, "name"));
   set_text(hero_state, state_names[state]);
   lv_obj_set_style_text_color(hero_state, lv_color_hex(state_colors[state]), 0);
-  const char *bubble = state == 1
-                           ? ((now / 15000) % 2 ? "Thinking…" : "Pondering…")
-                       : state == 2 ? "!"
-                       : state == 3 ? "×"
-                       : state == 4 ? "…"
-                       : state == 5 ? "*"
-                                    : "z Z";
-  set_text(hero_bubble, bubble);
+  draw_bubble(state, now);
   int pending = 0;
   for (size_t i = 0; i < schedule.count; i++)
     if (schedule.sessions[i].priority <= 2)
@@ -339,6 +351,16 @@ bool rg_ui_init(void) {
   lv_obj_set_style_text_align(hero_name, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_align(hero_state, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_align(hero_bubble, LV_TEXT_ALIGN_CENTER, 0);
+  bubble_image = lv_image_create(business);
+  lv_obj_add_flag(bubble_image, LV_OBJ_FLAG_HIDDEN);
+  for (size_t i = 0; i < 5; i++) {
+    const rg_frame *f = &rg_bubbles[i].frame;
+    bubble_dsc[i] = (lv_image_dsc_t){
+        .header = {.magic = LV_IMAGE_HEADER_MAGIC,
+                   .cf = LV_COLOR_FORMAT_ARGB8888,
+                   .w = f->w, .h = f->h, .stride = f->w * 4},
+        .data_size = f->w * f->h * 4, .data = f->pixels};
+  }
   hero_image = lv_image_create(business);
   lv_image_set_antialias(hero_image, false);
   overview_title = label(business, 297, 146, 167, font20);

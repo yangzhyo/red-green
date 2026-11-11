@@ -32,8 +32,10 @@ int main(int argc, char **argv) {
   assert(rg_ui_init());
   cJSON *s = cJSON_Parse(json);
   assert(s);
-  assert(rg_ui_apply(s));
-  cJSON *invalid = cJSON_Duplicate(s, true);
+  // 数组夹具每 200 ms 应用一个快照，用于检查同一界面的状态切换。
+  cJSON *initial = cJSON_IsArray(s) ? cJSON_GetArrayItem(s, 0) : s;
+  assert(rg_ui_apply(initial));
+  cJSON *invalid = cJSON_Duplicate(initial, true);
   cJSON *first = cJSON_GetArrayItem(
       cJSON_GetObjectItemCaseSensitive(invalid, "sessions"), 0);
   if (first) {
@@ -45,6 +47,11 @@ int main(int argc, char **argv) {
   assert(rg_ui_active(true));
   unsigned end = argc > 3 ? atoi(argv[3]) : 2000;
   for (now = 10; now < end; now += 10) {
+    if (cJSON_IsArray(s) && now % 200 == 0) {
+      cJSON *next = cJSON_GetArrayItem(s, (int)(now / 200));
+      if (next)
+        assert(rg_ui_apply(next));
+    }
     lv_tick_inc(10);
     lv_timer_handler();
   }
