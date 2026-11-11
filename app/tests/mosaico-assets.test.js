@@ -25,7 +25,7 @@ test("设备资源保留所有皮肤状态帧、动作和叫声，哈希绑定�
     assert.equal(c.rate, 48000); assert.equal(c.channels, 2);
     assert.ok(c.length > 0 && c.length <= 48000 * 4);
   }
-  assert.equal(manifest.fonts.length, 2);
+  assert.deepEqual(manifest.fonts.map(f => f.size), [16, 20, 28]);
   assert.match(manifest.version, /^[a-f0-9]{64}$/);
 });
 test("资源导出可重跑，源文件与字体均参与握手哈希", () => {
@@ -33,7 +33,7 @@ test("资源导出可重跑，源文件与字体均参与握手哈希", () => {
   const generated=new URL("firmware/mosaico/main/generated/",root);
   const digest=b=>crypto.createHash("sha256").update(b).digest("hex");
   try {
-    for(const size of [20,28]) fs.copyFileSync(new URL(`font${size}.bin`,generated),path.join(dir,`font${size}.bin`));
+    for(const size of [16,20,28]) fs.copyFileSync(new URL(`font${size}.bin`,generated),path.join(dir,`font${size}.bin`));
     execFileSync(process.execPath,[new URL("scripts/gen-mosaico-assets.mjs",root).pathname,dir]);
     for(const name of ["assets.bin","assets.c","manifest.json","version.txt","version.h"])
       assert.equal(digest(fs.readFileSync(new URL(name,generated))),digest(fs.readFileSync(path.join(dir,name))),`${name} 需要重新导出`);

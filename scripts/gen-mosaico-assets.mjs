@@ -101,7 +101,7 @@ const bubbles = Object.entries(bubbleSources).map(([state, symbols]) => {
   return { state, symbols, w, h, offset: append(pixels) };
 });
 const blob=Buffer.concat(chunks);
-const fonts=[20,28].map(size=>({size,sha256:hash(fs.readFileSync(path.join(out,`font${size}.bin`)))}));
+const fonts=[16,20,28].map(size=>({size,sha256:hash(fs.readFileSync(path.join(out,`font${size}.bin`)))}));
 const sourceFiles=["app/ui/sprites.js","app/ui/pet.css","scripts/gen-mosaico-assets.mjs",...calls.map(c=>`app/src-tauri/calls/${c.name}.wav`),...bubbleFiles];
 const sources=Object.fromEntries(sourceFiles.map(p=>[p,hash(read(p))]));
 const manifest={sprites,calls,bubbles,fonts,sources,rasterizer:{name:"@resvg/resvg-js",version:require("@resvg/resvg-js/package.json").version},blob_sha256:hash(blob)};

@@ -829,6 +829,10 @@
   ],
   "fonts": [
     {
+      "size": 16,
+      "sha256": "69f75857ead0b9cf26d68feb79778e165e399668b22e09d92f7ebebe266c5543"
+    },
+    {
       "size": 20,
       "sha256": "a3588575af1fbfdc62dadf6e858040be11f3dd2ad1d4be2aca0cac1f1e5f9b2b"
     },
@@ -840,7 +844,7 @@
   "sources": {
     "app/ui/sprites.js": "4b45f193586d48b6bcda33af5569f5c267734866b6de4dfe6ebcb2e0c694c21f",
     "app/ui/pet.css": "6c8c21c249ea5b5b81ca556b3f0cb9a94abb453fedcfda9d407a34d98bf971ff",
-    "scripts/gen-mosaico-assets.mjs": "c0649b6ace307e74ae4eccbb21ddda3112f5bc158e3f16eacf989f5ff9a85b0a",
+    "scripts/gen-mosaico-assets.mjs": "b787c57a6c550667a8a67bd1fb976f35d965e45660bdbe1973d1636c04715758",
     "app/src-tauri/calls/robot-awaiting.wav": "e0c797cb462c47b0eaac2dd450415d5012617abd09c92a85ecef2bc71936a41f",
     "app/src-tauri/calls/robot-aborted.wav": "a57176a88664d26061dba286b82c04bfb1e54ece8843e650ff757444e5e53c97",
     "app/src-tauri/calls/robot-your_turn.wav": "a261d0e80e5dbd82a2c0f88425f01ebbab743299e033e33396a59604b1af9d86",
@@ -866,5 +870,5 @@
     "version": "2.6.2"
   },
   "blob_sha256": "d1f883cc2af7df8f73d44d7079a696adbfe7d2c2c6e8c869ba9a8df9279c247f",
-  "version": "d2db1f1e250060c389545f36886699c9d563e80570fe2e7cc33cacb32ff641e3"
+  "version": "cc283b9c09fd209d75ede06b6d4fb2ec0f4725ccccded7635b3fd98e4145a5cf"
 }

@@ -16,10 +16,12 @@
 static cJSON *model;
 static rg_schedule schedule;
 static lv_obj_t *screen, *business, *waiting, *hero_name, *hero_state,
-    *hero_bubble, *bubble_image, *hero_image, *footer;
-static lv_obj_t *names[5], *states[5], *marks[5], *overview_title, *usage_title,
-    *usage_values[2], *arcs[2], *percent;
-static lv_font_t *font20, *font28;
+    *hero_bubble, *bubble_image, *hero_image, *balloon, *footer, *footer_meta;
+static lv_obj_t *names[5], *states[5], *tiles[5], *header_count, *usage_title,
+    *usage_page, *usage_labels[2], *usage_values[2], *usage_reset[2],
+    *tracks[2], *fills[2];
+static bool usage_unknown[2];
+static lv_font_t *font16, *font20, *font28;
 static lv_image_dsc_t image_dsc;
 static lv_image_dsc_t bubble_dsc[5];
 static bool active;
@@ -29,6 +31,11 @@ static size_t page;
 static int usage_item, usage_pair;
 static char usage_id[193];
 static uint64_t usage_since;
+static char focus_id[65];
+static uint64_t focus_since;
+static int current_tile = -1;
+extern const uint8_t font16_start[] asm("_binary_font16_bin_start");
+extern const uint8_t font16_end[] asm("_binary_font16_bin_end");
 extern const uint8_t font20_start[] asm("_binary_font20_bin_start");
 extern const uint8_t font20_end[] asm("_binary_font20_bin_end");
 extern const uint8_t font28_start[] asm("_binary_font28_bin_start");
@@ -37,8 +44,10 @@ static const char *state_names[] = {"空闲",     "运行中", "待确认",
                                     "异常中止", "轮到你", "已完成"};
 static const char *state_keys[] = {"idle",    "running",   "awaiting",
                                    "aborted", "your_turn", "completed"};
-static const uint32_t state_colors[] = {0xa8adb5, 0xffc53d, 0xff4d4f,
-                                        0xf17b68, 0x4096ff, 0x52c41a};
+static const uint32_t state_colors[] = {0xacb2b9, 0xe7b42b, 0xff677e,
+                                        0xf3896e, 0x54b2f1, 0x4bc695};
+static const uint32_t tile_colors[] = {0x41474e, 0xe7b42b, 0xbf2942,
+                                       0xa63c27, 0x086eb5, 0x087e56};
 static int state_index(const char *s) {
   for (int i = 0; i < 6; i++)
     if (!strcmp(s, state_keys[i]))
@@ -65,6 +74,17 @@ static lv_obj_t *label(lv_obj_t *p, int x, int y, int w, const lv_font_t *f) {
 static void set_text(lv_obj_t *o, const char *t) {
   if (strcmp(lv_label_get_text(o), t))
     lv_label_set_text(o, t);
+}
+static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h,
+                     uint32_t color) {
+  lv_obj_t *o = lv_obj_create(parent);
+  lv_obj_remove_style_all(o);
+  lv_obj_set_pos(o, x, y);
+  lv_obj_set_size(o, w, h);
+  lv_obj_set_style_bg_color(o, lv_color_hex(color), 0);
+  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  return o;
 }
 static void ready(lv_event_t *event) {
   (void)event;
@@ -96,6 +116,13 @@ static bool glyphs(const lv_font_t *f, const char *s) {
   }
   return true;
 }
+static void small_text(lv_obj_t *o, const char *text) {
+  // 小字集只包含固定文案；动态内容用完整字体兜底，绝不显示缺字框。
+  const lv_font_t *font = glyphs(font16, text) ? font16 : font20;
+  if (lv_obj_get_style_text_font(o, 0) != font)
+    lv_obj_set_style_text_font(o, font, 0);
+  set_text(o, text);
+}
 static bool supported(const cJSON *j) {
   if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(j, "sessions")) > 32)
     return false;
@@ -106,7 +133,8 @@ static bool supported(const cJSON *j) {
                                  !glyphs(font28,
                                          rg_string(p, "name"))) return false;
   cJSON_ArrayForEach(p, cJSON_GetObjectItemCaseSensitive(j, "usage")) {
-    if (!glyphs(font20, rg_string(p, "label")))
+    if (!glyphs(font20, rg_string(p, "label")) ||
+        !glyphs(font20, rg_string(p, "updated_label")))
       return false;
     cJSON_ArrayForEach(
         w,
@@ -171,6 +199,8 @@ static void draw_bubble(int state, uint64_t now) {
     lv_obj_add_flag(bubble_image, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(hero_bubble, LV_OBJ_FLAG_HIDDEN);
     set_text(hero_bubble, (now / 15000) % 2 ? "Thinking…" : "Pondering…");
+    lv_obj_set_size(balloon, 182, 36);
+    lv_obj_set_pos(balloon, 59, 144);
     return;
   }
   lv_obj_add_flag(hero_bubble, LV_OBJ_FLAG_HIDDEN);
@@ -178,11 +208,50 @@ static void draw_bubble(int state, uint64_t now) {
     if (!strcmp(rg_bubbles[i].state, state_keys[state])) {
       const rg_frame *f = &rg_bubbles[i].frame;
       lv_image_set_src(bubble_image, &bubble_dsc[i]);
-      lv_obj_set_pos(bubble_image, 24 + (253 - f->w) / 2, 146);
+      lv_obj_set_size(balloon, f->w + 12, 36);
+      lv_obj_set_pos(balloon, 150 - (f->w + 12) / 2, 144);
       lv_obj_remove_flag(bubble_image, LV_OBJ_FLAG_HIDDEN);
       return;
     }
   }
+}
+static void dashed_track(lv_event_t *event) {
+  size_t i = (size_t)(uintptr_t)lv_event_get_user_data(event);
+  if (!usage_unknown[i])
+    return;
+  lv_area_t area;
+  lv_obj_get_coords(tracks[i], &area);
+  lv_draw_rect_dsc_t dsc;
+  lv_draw_rect_dsc_init(&dsc);
+  dsc.bg_color = lv_color_hex(0x737373);
+  for (int x = area.x1; x <= area.x2; x += 7) {
+    int end = x + 3 < area.x2 ? x + 3 : area.x2;
+    lv_area_t top = {x, area.y1, end, area.y1};
+    lv_area_t bottom = {x, area.y2, end, area.y2};
+    lv_draw_rect(lv_event_get_layer(event), &dsc, &top);
+    lv_draw_rect(lv_event_get_layer(event), &dsc, &bottom);
+  }
+}
+static void usage_bar(int i, bool known, int pct) {
+  usage_unknown[i] = !known;
+  lv_obj_set_style_bg_color(tracks[i], lv_color_hex(known ? 0x262626 : 0), 0);
+  lv_obj_set_width(fills[i], known ? (432 * pct + 50) / 100 : 0);
+  lv_obj_set_style_bg_color(fills[i],
+      lv_color_hex(pct >= 85 ? 0xed526c : pct >= 60 ? 0xe7b42b : 0x35b982), 0);
+  lv_obj_invalidate(tracks[i]);
+}
+static void tile_effect(uint64_t now) {
+  uint32_t phase = (uint32_t)((now - focus_since) % 3000);
+  float opacity = 1;
+  if (phase >= 2400 && phase < 2600)
+    opacity = 0;
+  else if (phase >= 2000) {
+    float t = (float)(phase < 2400 ? phase - 2000 : phase - 2600) / 400;
+    float eased = t * t * (3 - 2 * t);
+    opacity = phase < 2400 ? 1 - eased : eased;
+  }
+  for (int i = 0; i < 5; i++)
+    lv_obj_set_style_opa(tiles[i], i == current_tile ? (lv_opa_t)(255 * opacity) : LV_OPA_COVER, 0);
 }
 static int usage_pages(const cJSON *u) {
   int n = cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(u, "windows"));
@@ -201,11 +270,13 @@ static void draw_usage(uint64_t now) {
   }
   if (!count) {
     set_text(usage_title, "暂无用量");
+    set_text(usage_page, "");
     for (int i = 0; i < 2; i++) {
+      set_text(usage_labels[i], "");
       set_text(usage_values[i], "");
-      lv_arc_set_value(arcs[i], 0);
+      set_text(usage_reset[i], "");
+      lv_obj_add_flag(tracks[i], LV_OBJ_FLAG_HIDDEN);
     }
-    set_text(percent, "--");
     return;
   }
   if (current < 0) {
@@ -232,6 +303,9 @@ static void draw_usage(uint64_t now) {
   }
   if (!g)
     return;
+  char page_text[24];
+  snprintf(page_text, sizeof(page_text), "%d/%d", usage_item + 1, count);
+  set_text(usage_page, page_text);
   usage_pair = at;
   snprintf(usage_id, sizeof(usage_id), "%s", rg_string(g, "id"));
   char title[384];
@@ -246,32 +320,22 @@ static void draw_usage(uint64_t now) {
                 *v = cJSON_GetObjectItemCaseSensitive(w, "used_percentage");
     bool known = cJSON_IsNumber(v);
     int pct = known ? (int)round(v->valuedouble) : 0;
-    lv_arc_set_value(arcs[i], pct);
-    lv_obj_set_style_arc_color(arcs[i],
-                               lv_color_hex(pct >= 90   ? 0xff4d4f
-                                            : pct >= 70 ? 0xffc53d
-                                                        : 0x52c41a),
-                               LV_PART_INDICATOR);
-    char value[160], number[12];
+    usage_bar(i, known, pct);
+    char reset[160], number[16];
     if (known)
       snprintf(number, sizeof(number), "%d%%", pct);
     else
       snprintf(number, sizeof(number), "%s",
                !strcmp(rg_string(w, "status"), "expired") ? "过期" : "未知");
+    snprintf(reset, sizeof(reset), "重置 %s",
+             *rg_string(w, "reset_label") ? rg_string(w, "reset_label") : "--");
+    small_text(usage_labels[i], w ? rg_string(w, "duration_label") : "");
+    set_text(usage_values[i], w ? number : "");
+    small_text(usage_reset[i], w ? reset : "");
     if (w)
-      snprintf(value, sizeof(value), "%s  %s\n重置 %s",
-               rg_string(w, "duration_label"), number,
-               *rg_string(w, "reset_label") ? rg_string(w, "reset_label")
-                                            : "--");
+      lv_obj_remove_flag(tracks[i], LV_OBJ_FLAG_HIDDEN);
     else
-      value[0] = 0;
-    set_text(usage_values[i], value);
-    if (i == 0)
-      set_text(percent, known ? number : "--");
-    if (w)
-      lv_obj_remove_flag(arcs[i], LV_OBJ_FLAG_HIDDEN);
-    else
-      lv_obj_add_flag(arcs[i], LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(tracks[i], LV_OBJ_FLAG_HIDDEN);
   }
 }
 static void refresh(lv_timer_t *timer) {
@@ -283,27 +347,43 @@ static void refresh(lv_timer_t *timer) {
     return;
   rg_schedule_tick(&schedule, now);
   const cJSON *p = cJSON_GetArrayItem(sessions(), (int)schedule.focus);
+  if (strcmp(focus_id, rg_string(p, "id"))) {
+    snprintf(focus_id, sizeof(focus_id), "%s", rg_string(p, "id"));
+    focus_since = now;
+    last_text = 0;
+  }
   animate(p, now);
+  tile_effect(now);
   if (now - last_text < 100)
     return;
   last_text = now;
   size_t pages = (schedule.count + 4) / 5;
   page = ((now - epoch) / 8000) % pages;
   char text[128];
-  snprintf(text, sizeof(text), "总览 %zu/%zu", page + 1, pages);
-  set_text(overview_title, text);
+  if (pages > 1)
+    snprintf(text, sizeof(text), "%zu 个会话 · %zu/%zu", schedule.count, page + 1, pages);
+  else
+    snprintf(text, sizeof(text), "%zu 个会话", schedule.count);
+  set_text(header_count, text);
+  current_tile = -1;
   for (size_t i = 0; i < 5; i++) {
     const cJSON *row = cJSON_GetArrayItem(sessions(), (int)(page * 5 + i));
     int state = state_index(rg_string(row, "state"));
     set_text(names[i], row ? rg_string(row, "name") : "");
     set_text(states[i], row ? state_names[state] : "");
-    lv_obj_set_style_text_color(states[i], lv_color_hex(state_colors[state]),
-                                0);
-    set_text(marks[i],
-             row && !strcmp(rg_string(row, "id"), rg_schedule_focus(&schedule))
-                 ? ">"
-                 : "");
+    if (row) {
+      lv_obj_remove_flag(tiles[i], LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_style_bg_color(tiles[i], lv_color_hex(tile_colors[state]), 0);
+      lv_color_t ink = lv_color_hex(state == 1 ? 0x111111 : 0xffffff);
+      lv_obj_set_style_text_color(names[i], ink, 0);
+      lv_obj_set_style_text_color(states[i], ink, 0);
+      if (!strcmp(rg_string(row, "id"), rg_schedule_focus(&schedule)))
+        current_tile = (int)i;
+    } else {
+      lv_obj_add_flag(tiles[i], LV_OBJ_FLAG_HIDDEN);
+    }
   }
+  tile_effect(now);
   int state = state_index(rg_string(p, "state"));
   set_text(hero_name, rg_string(p, "name"));
   set_text(hero_state, state_names[state]);
@@ -313,30 +393,39 @@ static void refresh(lv_timer_t *timer) {
   for (size_t i = 0; i < schedule.count; i++)
     if (schedule.sessions[i].priority <= 2)
       pending++;
-  snprintf(text, sizeof(text), "%s · %zu/%zu · 待处理 %d",
-           !strcmp(rg_string(p, "source"), "codex") ? "Codex" : "Claude",
-           schedule.focus + 1, schedule.count, pending);
+  if (pending)
+    snprintf(text, sizeof(text), "%d 个待处理", pending);
+  else
+    snprintf(text, sizeof(text), "所有会话正常");
   set_text(footer, text);
+  snprintf(text, sizeof(text), "%s  %zu/%zu",
+           !strcmp(rg_string(p, "source"), "codex") ? "Codex" : "Claude",
+           schedule.focus + 1, schedule.count);
+  set_text(footer_meta, text);
   draw_usage(now);
 }
 bool rg_ui_init(void) {
   if (!bsp_display_lock(1000))
     return false;
+  font16 = lv_binfont_create_from_buffer((void *)font16_start,
+                                         font16_end - font16_start);
   font20 = lv_binfont_create_from_buffer((void *)font20_start,
                                          font20_end - font20_start);
   font28 = lv_binfont_create_from_buffer((void *)font28_start,
                                          font28_end - font28_start);
-  if (!font20 || !font28) {
+  if (!font16 || !font20 || !font28) {
     bsp_display_unlock();
     return false;
   }
   // Noto 全字集携带极端字形的行距；屏幕采用明确的中文正文行盒。
+  font16->line_height = 20;
+  font16->base_line = 4;
   font20->line_height = 24;
   font20->base_line = 4;
   font28->line_height = 36;
   font28->base_line = 7;
   screen = lv_screen_active();
-  lv_obj_set_style_bg_color(screen, lv_color_hex(0x161b22), 0);
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0), 0);
   business = lv_obj_create(screen);
   lv_obj_remove_style_all(business);
   lv_obj_set_size(business, 480, 480);
@@ -345,13 +434,21 @@ bool rg_ui_init(void) {
   waiting = label(screen, 32, 215, 416, font28);
   lv_obj_set_style_text_align(waiting, LV_TEXT_ALIGN_CENTER, 0);
   set_text(waiting, "等待电脑连接");
-  hero_name = label(business, 24, 365, 253, font28);
-  hero_state = label(business, 24, 407, 253, font20);
-  hero_bubble = label(business, 24, 144, 253, font28);
+  lv_obj_t *brand = label(business, 65, 16, 175, font16);
+  set_text(brand, "red-green");
+  header_count = label(business, 240, 16, 175, font16);
+  lv_obj_set_style_text_align(header_count, LV_TEXT_ALIGN_RIGHT, 0);
+  hero_name = label(business, 24, 366, 253, font28);
+  hero_state = label(business, 24, 406, 253, font20);
+  balloon = box(business, 128, 144, 44, 36, 0xffffff);
+  box(business, 147, 180, 6, 5, 0xffffff);
+  hero_bubble = label(balloon, 6, 6, 170, font20);
+  lv_obj_set_style_text_color(hero_bubble, lv_color_hex(0x111111), 0);
   lv_obj_set_style_text_align(hero_name, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_align(hero_state, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_align(hero_bubble, LV_TEXT_ALIGN_CENTER, 0);
-  bubble_image = lv_image_create(business);
+  bubble_image = lv_image_create(balloon);
+  lv_obj_set_pos(bubble_image, 6, 2);
   lv_obj_add_flag(bubble_image, LV_OBJ_FLAG_HIDDEN);
   for (size_t i = 0; i < 5; i++) {
     const rg_frame *f = &rg_bubbles[i].frame;
@@ -363,32 +460,27 @@ bool rg_ui_init(void) {
   }
   hero_image = lv_image_create(business);
   lv_image_set_antialias(hero_image, false);
-  overview_title = label(business, 297, 146, 167, font20);
   for (int i = 0; i < 5; i++) {
-    marks[i] = label(business, 293, 180 + i * 52, 14, font20);
-    names[i] = label(business, 309, 176 + i * 52, 155, font20);
-    states[i] = label(business, 309, 201 + i * 52, 155, font20);
+    tiles[i] = box(business, 297, 148 + i * 58, 167, 52, 0);
+    names[i] = label(tiles[i], 8, 3, 151, font20);
+    states[i] = label(tiles[i], 8, 29, 151, font16);
+    lv_obj_add_flag(tiles[i], LV_OBJ_FLAG_HIDDEN);
   }
-  footer = label(business, 16, 449, 448, font20);
-  usage_title = label(business, 148, 12, 316, font20);
-  usage_values[0] = label(business, 148, 40, 316, font20);
-  usage_values[1] = label(business, 148, 88, 316, font20);
+  footer = label(business, 65, 440, 179, font16);
+  footer_meta = label(business, 244, 440, 171, font16);
+  lv_obj_set_style_text_align(footer_meta, LV_TEXT_ALIGN_RIGHT, 0);
+  usage_title = label(business, 24, 46, 360, font20);
+  usage_page = label(business, 386, 48, 70, font16);
+  lv_obj_set_style_text_align(usage_page, LV_TEXT_ALIGN_RIGHT, 0);
   for (int i = 0; i < 2; i++) {
-    arcs[i] = lv_arc_create(business);
-    lv_obj_set_pos(arcs[i], 16 + i * 16, 12 + i * 16);
-    lv_obj_set_size(arcs[i], 116 - i * 32, 116 - i * 32);
-    lv_arc_set_bg_angles(arcs[i], 0, 360);
-    lv_arc_set_rotation(arcs[i], 270);
-    lv_arc_set_range(arcs[i], 0, 100);
-    lv_arc_set_value(arcs[i], 0);
-    lv_obj_remove_style(arcs[i], NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(arcs[i], LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_width(arcs[i], 8, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arcs[i], 8, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arcs[i], lv_color_hex(0x303942), LV_PART_MAIN);
+    usage_labels[i] = label(business, 24, 72 + i * 36, 70, font16);
+    usage_values[i] = label(business, 96, 70 + i * 36, 80, font20);
+    usage_reset[i] = label(business, 183, 72 + i * 36, 273, font16);
+    lv_obj_set_style_text_align(usage_reset[i], LV_TEXT_ALIGN_RIGHT, 0);
+    tracks[i] = box(business, 24, 95 + i * 36, 432, 7, 0x262626);
+    fills[i] = box(tracks[i], 0, 0, 0, 7, 0x35b982);
+    lv_obj_add_event_cb(tracks[i], dashed_track, LV_EVENT_DRAW_MAIN, (void *)(uintptr_t)i);
   }
-  percent = label(business, 31, 54, 86, font20);
-  lv_obj_set_style_text_align(percent, LV_TEXT_ALIGN_CENTER, 0);
   epoch = usage_since = rg_now();
   lv_timer_create(refresh, 33, NULL);
   lv_display_add_event_cb(lv_display_get_default(), ready, LV_EVENT_REFR_READY,
