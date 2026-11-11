@@ -31,6 +31,12 @@ _Avoid_: 仪表盘（那是 dashboard，这只是一个表）、进度条（形�
 **来源 (Source)**：
 会话或用量所属的工具，当前为 Claude Code (`claude`) 与 Codex CLI (`codex`)。会话 ID 按来源区分，用量不跨来源合并。
 
+**Vibe Mode**：
+Mosaico 保留的应用管理固件，可管理、保存和打开 Idea。按住 AI 键开机进入；与按住 BOOT 键开机的 ROM 下载模式不同。
+
+**本地 Idea (Local Idea)**：
+通过 Vibe Mode「保存当前开发版」存入设备 NAND 的应用副本，包含程序、分区表描述及该布局的资源分区，可离线打开。不等同于社区发布或电脑上的完整闪存备份，也不会随 red-green 后续刷机自动更新。
+
 **额度组 (Limit Group)**：
 同一账号下由 Codex `limitId` 区分的限额集合，各组有独立的窗口、用量和重置时刻。用量表一次显示一组，可点击切换。
 
