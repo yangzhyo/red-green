@@ -36,13 +36,12 @@ static lv_indev_t *input;
 static bool touched;
 static bool submitted;
 static uint32_t frames;
-static uint64_t epoch, last_text;
+static uint64_t last_text;
 static size_t page;
 static int usage_item, usage_pair;
 static char usage_id[193];
 static uint64_t usage_since;
 static char focus_id[65];
-static uint64_t focus_since;
 static int current_tile = -1;
 extern const uint8_t font16_start[] asm("_binary_font16_bin_start");
 extern const uint8_t font16_end[] asm("_binary_font16_bin_end");
@@ -257,7 +256,7 @@ static void usage_bar(int i, bool known, int pct) {
   lv_obj_invalidate(tracks[i]);
 }
 static void tile_effect(uint64_t now) {
-  uint32_t phase = (uint32_t)((now - focus_since) % 3000);
+  uint32_t phase = (uint32_t)((now - schedule.since) % RG_FOCUS_BLINK_MS);
   float opacity = 1;
   if (phase >= 2400 && phase < 2600)
     opacity = 0;
@@ -359,12 +358,12 @@ static void draw_frame(uint64_t now, bool force) {
   lv_obj_invalidate(screen);
   if (!active || !model || !schedule.count)
     return;
-  rg_schedule_tick(&schedule, now);
+  if (rg_schedule_tick(&schedule, now))
+    force = true;
   const cJSON *p = cJSON_GetArrayItem(sessions(), (int)schedule.focus);
   if (strcmp(focus_id, rg_string(p, "id"))) {
     snprintf(focus_id, sizeof(focus_id), "%s", rg_string(p, "id"));
-    focus_since = now;
-    last_text = 0;
+    force = true;
   }
   animate(p, now);
   tile_effect(now);
@@ -372,7 +371,7 @@ static void draw_frame(uint64_t now, bool force) {
     return;
   last_text = now;
   size_t pages = (schedule.count + 4) / 5;
-  page = ((now - epoch) / 8000) % pages;
+  page = schedule.focus / 5;
   char text[128];
   if (pages > 1)
     snprintf(text, sizeof(text), "%zu 个会话 · %zu/%zu", schedule.count, page + 1, pages);
@@ -553,8 +552,8 @@ bool rg_ui_init(void) {
     fills[i] = box(tracks[i], 0, 0, 0, 7, 0x35b982);
     lv_obj_add_event_cb(tracks[i], dashed_track, LV_EVENT_DRAW_MAIN, (void *)(uintptr_t)i);
   }
-  epoch = usage_since = rg_now();
-  rg_idle_screen_init(&idle_screen, epoch);
+  usage_since = rg_now();
+  rg_idle_screen_init(&idle_screen, usage_since);
   lv_indev_add_event_cb(input, touch_event, LV_EVENT_PRESSED, NULL);
   lv_timer_create(refresh, 33, NULL);
   lv_display_add_event_cb(lv_display_get_default(), ready, LV_EVENT_REFR_READY,

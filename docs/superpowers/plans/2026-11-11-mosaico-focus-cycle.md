@@ -30,16 +30,16 @@
 **Files:** `firmware/mosaico/main/schedule.h`, `schedule.c`, `tests/schedule_test.c`。
 **Interfaces:** `RG_FOCUS_BLINK_MS=3000`，`RG_FOCUS_BLINK_COUNT=2`，`RG_FOCUS_ROUND_MS`；`schedule.since` 是唯一轮次起点。已有 update/tick/focus 接口不变。
 
-- [ ] 改测试并观察 RED：5999 ms 不换、6000 换；高优先级到达也等6000；重复更新不延期；多会话不连选、全部可见；单会话完成周期继续；删除当前立即重选。
-- [ ] 删除中途抢占计时，将优先/公平选择固定在轮次边界；选择下一项跳过当前项，更新仍保留当前 ID。
-- [ ] C sanitizer 全套通过并提交。
+- [x] 改测试并观察 RED：5999 ms 不换、6000 换；高优先级到达也等6000；重复更新不延期；多会话不连选、全部可见；单会话完成周期继续；删除当前立即重选。
+- [x] 删除中途抢占计时，将优先/公平选择固定在轮次边界；选择下一项跳过当前项，更新仍保留当前 ID。
+- [x] C sanitizer 全套通过并提交。
 
 ### Task 2: UI 对齐、验证及合并部署
 
 **Files:** `firmware/mosaico/main/ui.c`, `tests/preview/metro.py`, `docs/mosaico.md`；同步更新原设计中已被新要求取代的时长。
 **Interfaces:** 透明度使用 `(now-schedule.since)%RG_FOCUS_BLINK_MS`，总览页 `schedule.focus/5`；移除独立 focus_since。
 
-- [ ] 真正 LVGL 新回归 RED→GREEN：2500/5500同一块消失，6000新块从常亮开始，8500新块消失；普通快照和新优先状态不提前切换；第六会话焦点可见。
+- [x] 真正 LVGL 新回归 RED→GREEN：2500/5500同一块消失，6000新块从常亮开始，8500新块消失；普通快照和新优先状态不提前切换；第六会话焦点可见。
 - [ ] 全部现有预览/电源/气泡与协议测试通过；固件构建与容量通过。
 - [ ] code-review 双轴审查，修正重要问题，PR #19 关联 #25，CI 通过。
 - [ ] 与 #24 一起安装：仅应用槽位、写前备份及写后保护区校验；检查真实两次闪烁/六秒切换与内存样本。新旧本地 Idea 版本边界写入说明。

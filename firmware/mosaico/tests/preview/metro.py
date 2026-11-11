@@ -14,11 +14,15 @@ fixture = json.loads(Path(__file__).with_name('five.json').read_text())
 def render(directory, name, model, end):
     source, output = directory / f'{name}.json', directory / f'{name}.ppm'
     source.write_text(json.dumps(model, ensure_ascii=False))
-    subprocess.run([str(preview), str(source), str(output), str(end)],
-                   check=True, stdout=subprocess.DEVNULL)
+    result = subprocess.run([str(preview), str(source), str(output), str(end)],
+                            check=True, capture_output=True, text=True)
     header, pixels = output.read_bytes().split(b'\n255\n', 1)
     assert header == b'P6\n480 480'
-    return lambda x, y: tuple(pixels[(y * 480 + x) * 3:(y * 480 + x) * 3 + 3])
+    def pixel(x, y):
+        return tuple(pixels[(y * 480 + x) * 3:(y * 480 + x) * 3 + 3])
+    pixel.labels = json.loads(next(line for line in result.stdout.splitlines() if line.startswith('[')))
+    pixel.hero = next(label['text'] for label in pixel.labels if label['x'] == 24 and label['y'] == 366)
+    return pixel
 
 
 def inside_safe(x, y):
@@ -55,6 +59,34 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     for row in range(1, 5):
         assert hidden(300, 151 + row * 58) == colors[row], '其他色块不能随焦点闪烁'
 
+    # 定时器每 40 ms 实际运行一帧；end=2440 读取 2400 ms 的输出。
+    boundary = render(directory, 'first-hidden-boundary', fixture, 2440)
+    assert boundary(300, 151) == (0, 0, 0), '透明度必须使用调度轮次起点，不能延后到首次绘制'
+    second_hidden = render(directory, 'second-hidden', fixture, 5500)
+    assert second_hidden.hero == 'red-green' and second_hidden(300, 151) == (0, 0, 0), \
+        '第二次消失前不能切换主角'
+    switched = render(directory, 'next-start', fixture, 6040)
+    assert switched.hero == '工具箱 #1', '两个完整周期后必须切换到下一主角'
+    assert switched(300, 151) == colors[0] and switched(300, 267) == colors[2], \
+        '切换帧旧色块常亮，新色块从常亮开始'
+    next_hidden = render(directory, 'next-hidden', fixture, 8500)
+    assert next_hidden.hero == '工具箱 #1' and next_hidden(300, 267) == (0, 0, 0), \
+        '下一主角色块必须从切换时刻开始计算闪烁'
+
+    initial = json.loads(json.dumps(fixture))
+    for session in initial['sessions']:
+        session['state'] = 'running'
+    updated = json.loads(json.dumps(initial))
+    updated['sessions'][1]['state'] = 'awaiting'
+    timeline = [initial] + [updated] * 29
+    before = render(directory, 'priority-waits', timeline, 5500)
+    assert before.hero == 'red-green' and before(300, 151) == (0, 0, 0), \
+        '重复快照/新优先状态不能截断或延期第二次闪烁'
+    assert before(300, 209) == colors[0], '新状态应立即更新，不等待主角切换'
+    after = render(directory, 'priority-next', timeline, 6040)
+    assert after.hero == updated['sessions'][1]['name'] and after(300, 209) == colors[0], \
+        '待处理会话在完整轮次结束后成为主角并重新开始闪烁'
+
     for status in ['unknown', 'expired']:
         model = json.loads(json.dumps(fixture))
         for window in model['usage'][0]['windows']:
@@ -69,10 +101,14 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     model['sessions'] = model['sessions'][:1]
     one = render(directory, 'one', model, 1000)
     assert one(300, 209) == (0, 0, 0), '少于五个会话时不得保留旧色块'
-    model = json.loads(json.dumps(fixture))
-    sixth = dict(model['sessions'][0], id='s5', slot=5, name='其他页', state='running')
+    model = json.loads(json.dumps(initial))
+    sixth = dict(model['sessions'][0], id='s5', slot=5, name='其他页', state='awaiting')
     model['sessions'].append(sixth)
-    second_page = render(directory, 'six-page-two', model, 8500)
-    assert second_page(300, 151) == colors[1], '第六个会话应出现在第二页首行'
+    second_page = render(directory, 'six-page-two', model, 1000)
+    assert second_page.hero == '其他页' and second_page(300, 151) == colors[0], \
+        '第六个主角对应色块必须立即出现在第二页首行'
     assert second_page(300, 209) == (0, 0, 0), '翻页后不得留下前页的色块'
-    print('Metro: 黑底、五行、进度条、未知/过期、整体闪烁、圆角安全区与分页通过')
+    first_page = render(directory, 'six-back-to-first', model, 6040)
+    assert first_page.hero == 'red-green' and first_page(300, 209) == colors[1], \
+        '下一主角切回第一页时，总览必须同帧跟随'
+    print('Metro: 布局、圆角、完整两次闪烁/六秒轮播、状态即时更新与焦点分页通过')

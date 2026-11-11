@@ -7,6 +7,19 @@
 static uint64_t now;
 uint64_t rg_now(void) { return now; }
 static uint32_t pixels[480 * 480], buffer[480 * 48];
+static void collect_labels(lv_obj_t *obj, cJSON *labels) {
+  if (lv_obj_check_type(obj, &lv_label_class)) {
+    lv_area_t area;
+    lv_obj_get_coords(obj, &area);
+    cJSON *label = cJSON_CreateObject();
+    cJSON_AddNumberToObject(label, "x", area.x1);
+    cJSON_AddNumberToObject(label, "y", area.y1);
+    cJSON_AddStringToObject(label, "text", lv_label_get_text(obj));
+    cJSON_AddItemToArray(labels, label);
+  }
+  for (uint32_t i = 0; i < lv_obj_get_child_count(obj); i++)
+    collect_labels(lv_obj_get_child(obj, i), labels);
+}
 static void flush(lv_display_t *d, const lv_area_t *a, uint8_t *data) {
   uint32_t *p = (uint32_t *)data;
   for (int y = a->y1; y <= a->y2; y++)
@@ -67,6 +80,12 @@ int main(int argc, char **argv) {
   }
   fclose(out);
   assert(rg_ui_healthy((uint32_t)now));
+  cJSON *labels = cJSON_CreateArray();
+  collect_labels(lv_screen_active(), labels);
+  char *text = cJSON_PrintUnformatted(labels);
+  puts(text);
+  cJSON_free(text);
+  cJSON_Delete(labels);
   printf("LVGL 真实界面帧 %s；缺字时拒绝接管\n", argv[2]);
   cJSON_Delete(s);
   free(json);
