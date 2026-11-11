@@ -54,6 +54,19 @@ class MemoryReportTests(unittest.TestCase):
         self.assertEqual(len(report.analyze(data)["groups"]), 2)
         self.assertEqual(report.analyze([sample(i) for i in range(5)])["groups"][0]["status"], "insufficient")
 
+    def test_out_of_range_timestamp_is_skipped_without_losing_valid_history(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "samples.jsonl"
+            bad = sample(2)
+            bad["received_at_ms"] = 9007199254740991
+            path.write_text(json.dumps(sample(1)) + "\n" + json.dumps(bad) + "\n")
+            completed = subprocess.run([sys.executable, SPEC.origin, str(path)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("1 个样本", completed.stdout)
+            self.assertIn("忽略无效行 1", completed.stdout)
+
     def test_input_rejects_bad_rows_and_deduplicates_rotation_overlap(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "samples.jsonl"

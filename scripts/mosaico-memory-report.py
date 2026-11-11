@@ -23,6 +23,10 @@ def valid(row):
         return False
     if not all(integer(row.get(k), 9007199254740991) for k in ("uptime_ms", "received_at_ms")):
         return False
+    try:
+        datetime.fromtimestamp(row["received_at_ms"] / 1000, timezone.utc).astimezone()
+    except (ValueError, OverflowError, OSError):
+        return False
     if not integer(row.get("sessions"), 32) or any(type(row.get(k)) is not bool for k in ("idle", "screen_on")):
         return False
     for name in ("internal", "psram"):
