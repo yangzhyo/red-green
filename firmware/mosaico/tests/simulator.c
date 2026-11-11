@@ -1,12 +1,15 @@
 // Python PTY 模拟器调用真实设备协议核心，避免第二套授权实现。
 #include "device.h"
+#include "memory_sample.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 static rg_device device;
+static rg_memory_clock memory_clock;
 void rg_sim_init(const char *boot) {
   rg_clear(&device);
   rg_init(&device, boot);
+  memory_clock.next_ms = 0;
 }
 int rg_sim_receive(const char *json, uint64_t now) {
   rg_result r = rg_receive(&device, json, strlen(json), now);
@@ -19,6 +22,11 @@ const char *rg_sim_request(uint64_t now, int healthy) {
   cJSON *j = rg_request(&device, now, healthy);
   if (!j)
     return NULL;
+  if (rg_active(&device, now) && rg_memory_due(&memory_clock, now)) {
+    rg_heap_sample internal = {100000, 50000, 90000};
+    rg_heap_sample psram = {3000000, 2500000, 2900000};
+    rg_memory_attach(j, now, &internal, &psram, device.snapshot, true, "simulator");
+  }
   char *text = cJSON_PrintUnformatted(j);
   cJSON_Delete(j);
   if (!text)

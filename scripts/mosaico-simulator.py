@@ -74,12 +74,15 @@ class Simulator:
             "desktop_usage": [],
             "device_usage": [],
         }
+        self.memory_dir = tempfile.TemporaryDirectory(prefix="rg-memory-pty-")
+        self.memory_log = Path(self.memory_dir.name) / "samples.jsonl"
         self.proc = (
             subprocess.Popen(
                 [str(probe)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                env={**os.environ, "RED_GREEN_MOSAICO_PORT": self.path},
+                env={**os.environ, "RED_GREEN_MOSAICO_PORT": self.path,
+                     "RED_GREEN_MOSAICO_MEMORY_LOG": str(self.memory_log)},
             )
             if probe
             else None
@@ -91,6 +94,7 @@ class Simulator:
             self.proc.wait(timeout=5)
         os.close(self.master)
         os.close(self.slave)
+        self.memory_dir.cleanup()
 
     def send(self, j):
         if not self.drop_up:
@@ -226,6 +230,7 @@ def compile_core(directory):
             "-I" + str(base / "main"),
             "-I" + str(base / "components/cjson"),
             str(base / "main/device.c"),
+            str(base / "main/memory_sample.c"),
             str(base / "components/cjson/cJSON.c"),
             str(base / "tests/simulator.c"),
             "-lm",
@@ -248,7 +253,10 @@ def exercise(library, probe, scenario):
             print("通过：迟到 2.1 秒的 Grant 未接管", flush=True)
             return
         sim.until(sim.active)
-        sim.run_for(0.1)
+        sim.until(lambda: sim.memory_log.exists(), 5)
+        records = [json.loads(line) for line in sim.memory_log.read_text().splitlines()]
+        assert records[-1]["boot"] == "sim-boot"
+        assert records[-1]["internal"]["free"] == 100000
         assert any(e.get("desktop") == "stop" for _, e in sim.events)
         start = len(sim.events)
         sim.snapshot["pets"][0]["model"]["state"] = "awaiting"
@@ -298,7 +306,7 @@ def exercise(library, probe, scenario):
         sim.heartbeat = True
         sim.submit()
         sim.until(sim.active)
-        sim.run_for(0.6)
+        sim.until(lambda: any(json.loads(line)["boot"] == "sim-reboot" for line in sim.memory_log.read_text().splitlines()), 5)
         assert sim.calls == ["cat-awaiting"], "重启后重放了旧叫声"
         print(f"通过：{scenario} 恢复后新启动代次重新接管，无旧叫声", flush=True)
     finally:

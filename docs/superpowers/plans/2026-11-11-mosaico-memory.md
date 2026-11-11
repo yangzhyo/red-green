@@ -41,9 +41,9 @@
 
 **Interfaces:** `MemorySample` 类型、`Recorder` 有界后台线程；Engine 从已验证且接受的 lease_request 提取样本，提供 `take_memory()`，run 用非阻塞提交写盘；默认 `~/Library/Logs/red-green-mosaico-memory.jsonl`，测试可覆盖路径。
 
-- [ ] RED：真实 Engine 正常续期并拿到样本；旧代/畸形/重复不记录；缺字段旧固件继续工作；队列满无阻塞，文件轮转正确且失败可恢复。
-- [ ] 实现 typed validation、时间戳与 boot 关联、异步日志；每次写盘错误只报告诊断，不影响输出。
-- [ ] Rust 全套与 PTY 集成通过，提交。
+- [x] RED：真实 Engine 正常续期并拿到样本；旧代/畸形/重复不记录；缺字段旧固件继续工作；队列满无阻塞，文件轮转正确且失败可恢复。
+- [x] 实现 typed validation、时间戳与 boot 关联、异步日志；每次写盘错误只报告诊断，不影响输出。
+- [x] Rust 全套与 PTY 集成通过，提交。
 
 ### Task 3: 趋势报告、构建与交付
 

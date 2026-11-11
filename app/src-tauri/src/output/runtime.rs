@@ -25,6 +25,8 @@ pub struct Engine<D: Desktop> {
     dirty: bool,
     event: u64,
     nonce: u64,
+    memory: Option<super::memory::MemoryObservation>,
+    memory_uptime: Option<u64>,
 }
 impl<D: Desktop> Engine<D> {
     pub fn new(desktop: D, now: u64) -> Self {
@@ -38,7 +40,12 @@ impl<D: Desktop> Engine<D> {
             dirty: true,
             event: 0,
             nonce: 0,
+            memory: None,
+            memory_uptime: None,
         }
+    }
+    pub fn take_memory(&mut self) -> Option<super::memory::MemoryObservation> {
+        self.memory.take()
     }
     pub fn mode(&self) -> Mode {
         self.coordinator.mode()
@@ -144,6 +151,8 @@ impl<D: Desktop> Engine<D> {
                 );
                 self.boot = Some(boot.into());
                 self.nonce = 0;
+                self.memory = None;
+                self.memory_uptime = None;
                 let snapshot = self.snapshot.wire(&self.generation, self.version)?;
                 Ok(vec![
                     json!({"type":"bind","boot":boot,"generation":self.generation,"protocol":1,"assets":RESOURCE_VERSION}),
@@ -168,6 +177,19 @@ impl<D: Desktop> Engine<D> {
                 let stopped = decision == Decision::Grant || self.desktop.quiesce().is_ok();
                 if let Some((nonce, version)) = self.coordinator.grant(now, stopped) {
                     self.nonce = nonce;
+                    if let Some(sample) = super::memory::MemorySample::parse(&message["memory"]) {
+                        if self
+                            .memory_uptime
+                            .is_none_or(|last| sample.uptime_ms >= last.saturating_add(60_000))
+                        {
+                            self.memory_uptime = Some(sample.uptime_ms);
+                            self.memory = Some(super::memory::MemoryObservation {
+                                boot: self.boot.clone().unwrap(),
+                                generation: self.generation.clone(),
+                                sample,
+                            });
+                        }
+                    }
                     return Ok(vec![
                         json!({"type":"grant","boot":self.boot,"generation":self.generation,"nonce":nonce,"version":version}),
                     ]);
@@ -196,6 +218,7 @@ impl<D: Desktop> Engine<D> {
         }
         if matches!(self.mode(), Mode::Desktop | Mode::Fallback) {
             self.boot = None;
+            self.memory = None;
         }
         if self.visible() && self.dirty {
             self.desktop.reconcile(&self.snapshot)?;
@@ -206,6 +229,7 @@ impl<D: Desktop> Engine<D> {
     pub fn disconnected(&mut self, now: u64) {
         self.coordinator.disconnect(now);
         self.boot = None;
+        self.memory = None;
         self.dirty = true;
     }
 }
@@ -267,6 +291,9 @@ pub fn now_ms() -> u64 {
 pub fn run<D: Desktop>(desktop: D, rx: Receiver<Command>, log: impl Fn(&str)) {
     use super::transport::Link;
     let mut engine = Engine::new(desktop, now_ms());
+    let recorder = super::memory::Recorder::start()
+        .map_err(|e| log(&format!("mosaico 内存记录未启用: {e}")))
+        .ok();
     let mut link: Option<Link> = None;
     let mut next_scan = 0;
     let mut opened = 0;
@@ -305,6 +332,11 @@ pub fn run<D: Desktop>(desktop: D, rx: Receiver<Command>, log: impl Fn(&str)) {
                             engine.sent(now_ms());
                         } // 包括失败与可能部分写入的时刻。
                         result?;
+                    }
+                    if let Some(observation) = engine.take_memory() {
+                        if let Some(recorder) = &recorder {
+                            recorder.submit(observation);
+                        }
                     }
                 }
                 if !engine.has_peer() && now_ms().saturating_sub(opened) > 2000 {
@@ -510,5 +542,70 @@ mod tests {
             assert!(e.desktop.visible);
             assert_eq!(e.desktop.calls, usize::from(!active));
         }
+    }
+    fn memory_sample(uptime: u64) -> Value {
+        json!({"uptime_ms":uptime,"firmware":"test-build","sessions":1,
+            "idle":true,"screen_on":false,
+            "internal":{"free":100000,"largest":50000,"minimum":90000},
+            "psram":{"free":3000000,"largest":2500000,"minimum":2900000}})
+    }
+    #[test]
+    fn memory_diagnostics_preserve_grants_and_reject_untrusted_or_invalid_samples() {
+        let mut e = Engine::new(Screen::default(), 0);
+        let g = connect(&mut e);
+        let mut req = request(&g, 2);
+        req["memory"] = memory_sample(60000);
+        assert_eq!(e.message(req.clone(), 3000).unwrap()[0]["type"], "grant");
+        let sample = e
+            .take_memory()
+            .expect("accepted lease must yield memory sample");
+        assert_eq!(sample.boot, "boot1");
+        assert_eq!(sample.sample.internal.free, 100000);
+        assert!(!sample.sample.screen_on);
+        assert!(e.take_memory().is_none());
+        e.sent(3000);
+        for (index, mutation) in [
+            "duplicate",
+            "old_boot",
+            "old_generation",
+            "invalid_heap",
+            "malformed",
+            "too_soon",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let now = 3500 + index as u64 * 500;
+            e.submit(snapshot("a"), vec![], now, now).unwrap();
+            let mut req = request(&g, index as u64 + 3);
+            req["memory"] = memory_sample(120000);
+            match *mutation {
+                "duplicate" => req["memory"]["uptime_ms"] = json!(60000),
+                "old_boot" => req["boot"] = json!("old"),
+                "old_generation" => req["generation"] = json!("old"),
+                "invalid_heap" => req["memory"]["internal"]["largest"] = json!(200000),
+                "malformed" => req["memory"]["psram"]["free"] = json!(-1),
+                "too_soon" => req["memory"]["uptime_ms"] = json!(60001),
+                _ => unreachable!(),
+            }
+            let out = e.message(req, now).unwrap();
+            if mutation.starts_with("old_") {
+                assert!(out.is_empty());
+                assert!(e.take_memory().is_none());
+                assert_eq!(
+                    e.message(request(&g, index as u64 + 3), now).unwrap()[0]["type"],
+                    "grant"
+                );
+            } else {
+                assert_eq!(out[0]["type"], "grant", "{mutation}");
+            }
+            e.sent(now);
+            assert!(e.take_memory().is_none(), "{mutation}");
+        }
+        e.submit(snapshot("a"), vec![], 6500, 6500).unwrap();
+        let mut req = request(&g, 10);
+        req["memory"] = memory_sample(120000);
+        assert_eq!(e.message(req, 6500).unwrap()[0]["type"], "grant");
+        assert_eq!(e.take_memory().unwrap().sample.uptime_ms, 120000);
     }
 }
