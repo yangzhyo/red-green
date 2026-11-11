@@ -31,6 +31,14 @@ def inside_safe(x, y):
     return 8 <= x < 472 and 8 <= y < 472 and (x-cx)**2+(y-cy)**2 <= 88**2
 
 
+def has_pet(pixel):
+    return any(pixel(x, y) != (0, 0, 0) for y in range(190, 360) for x in range(16, 290))
+
+
+def has_bubble(pixel):
+    return any(pixel(x, y) != (0, 0, 0) for y in range(144, 180) for x in range(24, 280))
+
+
 with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     directory = destination or Path(temporary)
     directory.mkdir(parents=True, exist_ok=True)
@@ -67,19 +75,29 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     assert before_switch.hero == 'red-green' and before_switch(300, 151) == colors[0], \
         '第二次闪烁后的停留期结束前不能切换主角'
 
-    # 定时器每 40 ms 实际运行一帧；end=440 读取 400 ms 的输出。
-    boundary = render(directory, 'first-hidden-boundary', fixture, 440)
+    # 定时器每 40 ms 实际运行一帧；480/520 ms 的 1/255 低于 LVGL 可见阈值。
+    boundary = render(directory, 'first-hidden-boundary', fixture, 540)
     assert boundary(300, 151) == (0, 0, 0), '透明度必须使用调度轮次起点，不能延后到首次绘制'
     second_hidden = render(directory, 'second-hidden', fixture, 3500)
     assert second_hidden.hero == 'red-green' and second_hidden(300, 151) == (0, 0, 0), \
         '第二次消失前不能切换主角'
+    assert has_pet(second_hidden) and has_bubble(second_hidden), '第二次只闪色块，宠物气泡保持显示'
     switched = render(directory, 'next-start', fixture, 6040)
-    assert switched.hero == '工具箱 #1', '两个完整周期后必须切换到下一主角'
+    assert switched.hero == 'red-green', '新轮次先让旧宠物退场，不能立刻换图和名称'
     assert switched(300, 151) == colors[0] and switched(300, 267) == colors[2], \
         '切换帧旧色块恢复常亮，新色块从完整亮度开始淡出'
     next_hidden = render(directory, 'next-hidden', fixture, 6500)
-    assert next_hidden.hero == '工具箱 #1' and next_hidden(300, 267) == (0, 0, 0), \
+    assert next_hidden.hero == 'red-green' and next_hidden(300, 267) == (0, 0, 0), \
         '下一主角色块必须从切换时刻开始计算闪烁'
+    assert not has_pet(next_hidden) and not has_bubble(next_hidden), '宠物、气泡与色块必须同时全隐'
+    midpoint = render(directory, 'next-midpoint', fixture, 6540)
+    assert midpoint.hero == '工具箱 #1' and not has_pet(midpoint) and not has_bubble(midpoint), \
+        '完全隐藏时更换宠物和对应文字'
+    visible = render(directory, 'next-visible', fixture, 7040)
+    assert visible.hero == '工具箱 #1' and has_pet(visible) and has_bubble(visible), '一秒时宠物气泡恢复'
+    second = render(directory, 'next-second-blink', fixture, 9500)
+    assert second(300, 267) == (0, 0, 0) and has_pet(second) and has_bubble(second), \
+        '下一轮的第二次也只闪色块'
 
     initial = json.loads(json.dumps(fixture))
     for session in initial['sessions']:
@@ -91,7 +109,7 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     assert before.hero == 'red-green' and before(300, 151) == (0, 0, 0), \
         '重复快照/新优先状态不能截断或延期第二次闪烁'
     assert before(300, 209) == colors[0], '新状态应立即更新，不等待主角切换'
-    after = render(directory, 'priority-next', timeline, 6040)
+    after = render(directory, 'priority-next', timeline, 7040)
     assert after.hero == updated['sessions'][1]['name'] and after(300, 209) == colors[0], \
         '待处理会话在完整轮次结束后成为主角并立即开始闪烁'
 
@@ -117,6 +135,19 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
         '第六个主角对应色块必须立即出现在第二页首行'
     assert second_page(300, 209) == (0, 0, 0), '翻页后不得留下前页的色块'
     first_page = render(directory, 'six-back-to-first', model, 6040)
-    assert first_page.hero == 'red-green' and first_page(300, 209) == colors[1], \
-        '下一主角切回第一页时，总览必须同帧跟随'
-    print('Metro: 布局、圆角、先闪再停留、完整两次/六秒轮播、状态即时更新与焦点分页通过')
+    assert first_page.hero == '其他页' and first_page(300, 209) == colors[1], \
+        '轮次开始总览先跟随目标，旧宠物仍使用旧名称退场'
+    first_hero = render(directory, 'six-new-hero', model, 6540)
+    assert first_hero.hero == 'red-green', '跨页新主角在中点才切换'
+
+    single = dict(fixture, sessions=fixture['sessions'][:1])
+    single_later = render(directory, 'one-no-exit', single, 6500)
+    assert has_pet(single_later) and has_bubble(single_later), '单只宠物不能每轮退场'
+    reordered = dict(fixture, sessions=list(reversed(fixture['sessions'])))
+    updates = [fixture] * 31 + [reordered] * 5
+    assert render(directory, 'reordered-exit', updates, 6300).hero == 'red-green'
+    assert render(directory, 'reordered-enter', updates, 6800).hero == '工具箱 #1'
+    deleted = dict(fixture, sessions=fixture['sessions'][1:])
+    removed = render(directory, 'outgoing-deleted', [fixture] * 31 + [deleted], 6300)
+    assert removed.hero != 'red-green', '删除退场对象后不能继续显示旧名称'
+    print('Metro: 布局、圆角、同步进退场、中点换宠、两次/六秒、更新/删除与跨页通过')

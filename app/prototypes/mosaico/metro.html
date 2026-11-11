@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="metro.css?v=screen-corners">
   <script src="../../ui/sprites.js" defer></script>
   <script src="../../ui/skins.js" defer></script>
-  <script src="metro.js?v=screen-corners" defer></script>
+  <script src="metro.js?v=hero-transition-sync" defer></script>
 </head>
 <body>
   <header class="page-header"><a href="metro.html">red-green <span>/ Mosaico</span></a><span>视觉 Demo · 模拟数据</span></header>
@@ -22,6 +22,10 @@
     <aside class="controls" aria-label="演示控制">
       <div class="control-heading"><h2 id="variant-title">A · 等高条块</h2><button id="pause" type="button" aria-pressed="false">暂停动画</button></div>
       <p id="variant-description"></p>
+      <section id="motion-controls" hidden aria-label="宠物过渡演示">
+        <button id="replay-transition" type="button">立即演示下一次切换</button>
+        <p id="motion-phase" class="live-state" aria-live="off"></p>
+      </section>
       <label>会话场景<select id="scene"><option value="mixed">五种状态</option><option value="running">全部运行中</option><option value="quiet">完成与空闲</option><option value="attention">异常与待确认</option></select></label>
       <div class="control-pair"><label>会话数量<select id="count"><option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option></select></label><label>用量来源<select id="source"><option value="0">Codex</option><option value="1">Claude</option></select></label></div>
       <label>当前主角<select id="focus"></select></label>

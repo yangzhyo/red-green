@@ -1,4 +1,4 @@
-// 一次性视觉原型。A 五行等高条块；B 当前主角大块＋其余小块。只演示外观，不连接设备。
+// 已验收的视觉参考。?motion=half 演示同步过渡；不连接设备。
 const $ = (id) => document.getElementById(id);
 const variants = {
   rows: { title: "A · 等高条块（已选）", description: "五个会话各占一条。当前主角色块整体消失、再现，淡出与淡入柔和过渡，其余色块保持常亮。" },
@@ -20,8 +20,17 @@ const groups = [
   { source: "Codex", values: [43,68], reset: ["16:30", "11/15 09:00"] },
   { source: "Claude", values: [32,57], reset: ["17:45", "11/16 10:00"] },
 ];
+const motionVariants = {
+  half: { label: "完整一秒 · 0.5 秒", short: "0.5 秒", duration: 500 },
+};
+const params = new URLSearchParams(location.search);
+const motionDemo = params.has("motion");
+let motion = "half";
+let displayedFocus = null, heroFocus = 0, previousHero = null, transitioning = false, arrivedAt = 0;
+const roundMs = motionDemo ? 6000 : 4000;
 let variant = new URLSearchParams(location.search).get("variant") || "rows";
 if (!variants[variant]) variant = "rows";
+if (motionDemo) variant = "rows";
 let count = 5, focus = 0, source = 0, usageMode = "normal", paused = false;
 let elapsed = 0, focusClock = 0, usageClock = 0, previousTime = performance.now(), drawing;
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -70,10 +79,16 @@ function refreshMarquees() {
 }
 function render() {
   if (focus >= count) focus = 0;
-  const s = sessions[focus], state = states[s.state];
+  if (displayedFocus !== focus || heroFocus >= count) {
+    previousHero = displayedFocus === null || heroFocus >= count ? null : heroFocus;
+    displayedFocus = focus; arrivedAt = elapsed; focusClock = 0;
+    transitioning = motionDemo && motionVariants[motion].duration > 0 && !reducedMotion.matches && previousHero !== focus;
+    if (!transitioning || previousHero === null) heroFocus = focus;
+  }
+  const s = sessions[motionDemo ? heroFocus : focus], state = states[s.state];
   const list = variant === "rows" ? shown() : [s,...shown().filter((item) => item !== s)];
   const attention = shown().filter((item) => ["awaiting","your_turn","aborted"].includes(item.state)).length;
-  $("screen").innerHTML = `<header class="device-header"><strong>red-green</strong><span>${count} 个会话</span></header>${usageMarkup()}<section class="device-main"><div class="hero" data-state="${s.state}"><div class="pet-area"><div class="pet" data-state="${s.state}"><span class="bubble">${state.symbol}</span><canvas id="pet" role="img" aria-label="${nameOf(s)}，${state.label}"></canvas></div></div>${nameMarkup(s,"hero-name")}<div class="hero-state">${state.label}</div></div><div class="overview ${variant}">${list.map(tileMarkup).join("")}</div></section><footer class="device-footer"><span>${attention ? `${attention} 个待处理` : "所有会话正常"}</span><span><strong>${s.source}</strong>　${focus + 1} / ${count}</span></footer>`;
+  $("screen").innerHTML = `<header class="device-header"><strong>red-green</strong><span>${count} 个会话</span></header>${usageMarkup()}<section class="device-main"><div class="hero" data-state="${s.state}"><div class="pet-area"><div class="pet" data-state="${s.state}"><span class="bubble">${state.symbol}</span><canvas id="pet" role="img" aria-label="${nameOf(s)}，${state.label}"></canvas></div></div>${nameMarkup(s,"hero-name")}<div class="hero-state">${state.label}</div></div><div class="overview ${variant}">${list.map(tileMarkup).join("")}</div></section><footer class="device-footer"><span>${attention ? `${attention} 个待处理` : "所有会话正常"}</span><span><strong>${s.source}</strong>　${s.id + 1} / ${count}</span></footer>`;
   $("variant-title").textContent = variants[variant].title;
   $("variant-description").textContent = variants[variant].description;
   $("focus").innerHTML = shown().map((item) => `<option value="${item.id}" ${item.id === focus ? "selected" : ""}>${nameOf(item)} · ${states[item.state].label}</option>`).join("");
@@ -84,6 +99,41 @@ function render() {
   draw();
   applyScreenGeometry();
   refreshMarquees();
+  if (motionDemo) {
+    $("variant-title").textContent = motionVariants[motion].label;
+    $("variant-description").textContent = "每轮第一秒，色块与宠物同步淡出、淡入；完全隐藏时换宠物和文字。第二次只闪色块，每 6 秒开始下一轮。";
+    document.querySelectorAll("[data-motion]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.motion === motion)));
+    drawTransition();
+  }
+}
+function smooth(t) { t = Math.max(0,Math.min(1,t)); return t * t * (3 - 2 * t); }
+function blinkOpacity(t,duration) {
+  return t < duration ? 1-smooth(t/duration) : t < 1000-duration ? 0 : t < 1000 ? smooth((t-1000+duration)/duration) : 1;
+}
+function drawTransition() {
+  const duration = motionVariants[motion].duration;
+  const enabled = duration > 0 && !reducedMotion.matches;
+  const age = elapsed - arrivedAt;
+  // 色块开始闪烁才退场；第一秒的中点完全透明时才更换精灵及对应文字。
+  if (transitioning && (!enabled || age >= 500) && heroFocus !== focus) {
+    heroFocus = focus;
+    render();
+    return;
+  }
+  if (!enabled || age >= 1000) transitioning = false;
+  let opacity = 1, phase = "稳定显示";
+  if (transitioning) {
+    opacity = previousHero === null && age < 500 ? 0 : blinkOpacity(age,duration);
+    phase = age < duration ? (previousHero === null ? "等待首次入场" : "离场 · 同步淡出") : age < 1000-duration ? "完全隐藏 · 更换主角" : "入场 · 同步淡入";
+  }
+  document.querySelector(".pet").style.opacity = opacity;
+  // 同一个时钟、同一条透明度曲线；保留闪 1 秒、稳 2 秒、每轮两次。
+  const t = ($("rotate").checked ? focusClock : elapsed - arrivedAt) % 3000;
+  const tileOpacity = reducedMotion.matches ? 1 : blinkOpacity(t,duration || 400);
+  const tile = document.querySelector(".tile.current");
+  tile.style.animation = "none";
+  tile.style.opacity = tileOpacity;
+  $("motion-phase").textContent = `${phase} · 主角 ${(focusClock/1000).toFixed(1)} / 6.0 秒 · 可见度 ${Math.round(opacity*100)}%`;
 }
 function draw() {
   if (!drawing) return;
@@ -101,7 +151,9 @@ function setVariant(next,writeURL = true) {
   if (writeURL) { const url = new URL(location.href); url.searchParams.set("variant",variant); history.replaceState(null,"",url); }
   render();
 }
-function shiftVariant() { setVariant(variant === "rows" ? "tiles" : "rows"); }
+function shiftVariant(direction = 1) {
+  if (!motionDemo) setVariant(variant === "rows" ? "tiles" : "rows");
+}
 function resize() {
   const width = Math.min(Number($("size").value),document.querySelector(".preview").clientWidth * 480 / 500);
   const scale = width / 480;
@@ -110,12 +162,30 @@ function resize() {
   $("size-value").value = `${Math.round(width)} px`;
   $("size-caption").textContent = `${Math.round(scale * 100)}%`;
 }
+if (motionDemo) {
+  document.title = "Mosaico · 宠物入场与离场 Demo";
+  document.querySelector(".intro h1").textContent = "让切换柔和一点";
+  document.querySelector(".intro p").textContent = "色块开始闪烁时，宠物与气泡才退场；完全隐藏时换宠物，再同步入场。";
+  document.querySelector(".control-note").textContent = "已选节奏：一起淡出 0.5 秒 → 换宠物 → 一起淡入 0.5 秒。宠物与气泡一起过渡；第二次只闪色块，单只宠物不反复退场。";
+  $("motion-controls").hidden = false;
+  $("rotate").checked = true;
+  const bar = document.querySelector(".variant-switcher");
+  bar.style.display = "none";
+  $("replay-transition").addEventListener("click",() => {
+    paused = false; document.body.classList.remove("paused");
+    $("pause").textContent = "暂停动画"; $("pause").setAttribute("aria-pressed","false");
+    $("rotate").checked = true;
+    if (count > 1) focus = (focus + 1) % count;
+    else displayedFocus = null;
+    render();
+  });
+}
 document.querySelectorAll("[data-variant]").forEach((b) => b.addEventListener("click",() => setVariant(b.dataset.variant)));
-$("previous").addEventListener("click",shiftVariant);
-$("next").addEventListener("click",shiftVariant);
+$("previous").addEventListener("click",() => shiftVariant(-1));
+$("next").addEventListener("click",() => shiftVariant(1));
 document.addEventListener("keydown",(event) => {
   if (event.target.closest("input,select,textarea,[contenteditable]")) return;
-  if (["ArrowLeft","ArrowRight"].includes(event.key)) { event.preventDefault(); shiftVariant(); }
+  if (["ArrowLeft","ArrowRight"].includes(event.key)) { event.preventDefault(); shiftVariant(event.key === "ArrowLeft" ? -1 : 1); }
 });
 window.addEventListener("popstate",() => setVariant(new URLSearchParams(location.search).get("variant"),false));
 $("count").addEventListener("change",() => { count = Number($("count").value); render(); });
@@ -128,7 +198,10 @@ $("scene").addEventListener("change",() => {
   const values = scene === "mixed" ? ["awaiting","running","your_turn","completed","idle"] : scene === "quiet" ? ["completed","idle","completed","idle","idle"] : scene === "attention" ? ["awaiting","aborted","your_turn","running","awaiting"] : Array(5).fill("running");
   sessions.forEach((s,i) => { s.state = values[i]; }); render();
 });
-$("rotate").addEventListener("change",() => { focusClock = usageClock = 0; });
+$("rotate").addEventListener("change",() => {
+  focusClock = usageClock = 0;
+  if (motionDemo) { heroFocus = focus; transitioning = false; arrivedAt = elapsed; render(); }
+});
 $("pause").addEventListener("click",() => { paused = !paused; document.body.classList.toggle("paused",paused); $("pause").textContent = paused ? "继续动画" : "暂停动画"; $("pause").setAttribute("aria-pressed",String(paused)); });
 $("size").addEventListener("input",resize);
 $("corner-mode").addEventListener("change",applyScreenGeometry);
@@ -141,11 +214,12 @@ function tick(now) {
     if ($("rotate").checked && !reducedMotion.matches) {
       focusClock += dt; usageClock += dt;
       let changed = false;
-      if (focusClock >= 4000) { focus = (focus + 1) % count; focusClock = 0; changed = true; }
+      if (focusClock >= roundMs) { focus = (focus + 1) % count; focusClock = 0; changed = true; }
       if (usageClock >= 8000) { source = (source + 1) % groups.length; usageClock = 0; changed = true; }
       if (changed) render();
     }
     draw();
+    if (motionDemo) drawTransition();
   }
   requestAnimationFrame(tick);
 }

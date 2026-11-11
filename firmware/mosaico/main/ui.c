@@ -3,6 +3,7 @@
 #include "bsp/display.h"
 #include "device.h"
 #include "health.h"
+#include "hero.h"
 #include "idle_screen.h"
 #include "panel.h"
 #include "lvgl.h"
@@ -17,6 +18,7 @@
 // 唯一写入者是 LVGL 任务或持有 BSP 显示锁的调用者。
 static cJSON *model;
 static rg_schedule schedule;
+static rg_hero hero;
 static lv_obj_t *screen, *business, *waiting, *hero_name, *hero_state,
     *hero_bubble, *bubble_image, *hero_image, *balloon, *footer, *footer_meta;
 static lv_obj_t *names[5], *states[5], *tiles[5], *header_count, *usage_title,
@@ -256,17 +258,9 @@ static void usage_bar(int i, bool known, int pct) {
   lv_obj_invalidate(tracks[i]);
 }
 static void tile_effect(uint64_t now) {
-  uint32_t phase = (uint32_t)((now - schedule.since) % RG_FOCUS_BLINK_MS);
-  float opacity = 1;
-  if (phase >= 400 && phase < 600)
-    opacity = 0;
-  else if (phase < 1000) {
-    float t = (float)(phase < 400 ? phase : phase - 600) / 400;
-    float eased = t * t * (3 - 2 * t);
-    opacity = phase < 400 ? 1 - eased : eased;
-  }
+  lv_opa_t opacity = rg_focus_opacity(now - schedule.since);
   for (int i = 0; i < 5; i++)
-    lv_obj_set_style_opa(tiles[i], i == current_tile ? (lv_opa_t)(255 * opacity) : LV_OPA_COVER, 0);
+    lv_obj_set_style_opa(tiles[i], i == current_tile ? opacity : LV_OPA_COVER, 0);
 }
 static int usage_pages(const cJSON *u) {
   int n = cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(u, "windows"));
@@ -360,7 +354,18 @@ static void draw_frame(uint64_t now, bool force) {
     return;
   if (rg_schedule_tick(&schedule, now))
     force = true;
-  const cJSON *p = cJSON_GetArrayItem(sessions(), (int)schedule.focus);
+  rg_hero_frame frame = rg_hero_update(&hero, &schedule, now);
+  const cJSON *p = NULL;
+  size_t hero_index = 0;
+  for (size_t i = 0; i < schedule.count; i++) {
+    if (!strcmp(frame.id, schedule.sessions[i].id)) {
+      hero_index = i;
+      p = cJSON_GetArrayItem(sessions(), (int)i);
+      break;
+    }
+  }
+  lv_obj_set_style_opa(hero_image, frame.opacity, 0);
+  lv_obj_set_style_opa(balloon, frame.opacity, 0);
   if (strcmp(focus_id, rg_string(p, "id"))) {
     snprintf(focus_id, sizeof(focus_id), "%s", rg_string(p, "id"));
     force = true;
@@ -413,7 +418,7 @@ static void draw_frame(uint64_t now, bool force) {
   set_text(footer, text);
   snprintf(text, sizeof(text), "%s  %zu/%zu",
            !strcmp(rg_string(p, "source"), "codex") ? "Codex" : "Claude",
-           schedule.focus + 1, schedule.count);
+           hero_index + 1, schedule.count);
   set_text(footer_meta, text);
   draw_usage(now);
 }
@@ -578,6 +583,10 @@ bool rg_ui_apply(const cJSON *snapshot) {
       items[n++].priority = priority(state_index(rg_string(p, "state")));
     }
     rg_schedule_update(&schedule, items, n, rg_now());
+    if (!n) {
+      rg_hero_reset(&hero);
+      focus_id[0] = 0;
+    }
     last_text = 0;
     if (active) {
       if (n) {
@@ -601,6 +610,10 @@ bool rg_ui_active(bool value) {
     return false;
   }
   active = value;
+  if (!active) {
+    rg_hero_reset(&hero);
+    focus_id[0] = 0;
+  }
   if (active && schedule.count) {
     lv_obj_remove_flag(business, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(waiting, LV_OBJ_FLAG_HIDDEN);
