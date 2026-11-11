@@ -463,7 +463,7 @@ static void refresh(lv_timer_t *timer) {
     // 先写入最新的完整帧，再让面板发光，避免短暂出现熄屏前的旧状态。
     uint32_t previous = frames;
     lv_refr_now(display);
-    if (frames == previous || !rg_panel_set_on(true)) {
+    if (frames == previous || !rg_panel_healthy() || !rg_panel_set_on(true)) {
       atomic_store(&panel_failed, true);
       return;
     }
@@ -475,7 +475,7 @@ bool rg_ui_init(void) {
     return false;
   display = lv_display_get_default();
   input = bsp_display_get_input_dev();
-  if (!display || !input || !rg_panel_set_on(true)) {
+  if (!display || !input || !rg_panel_init() || !rg_panel_set_on(true)) {
     bsp_display_unlock();
     return false;
   }
@@ -597,7 +597,7 @@ bool rg_ui_apply(const cJSON *snapshot) {
 bool rg_ui_active(bool value) {
   if (!bsp_display_lock(40))
     return false;
-  if (atomic_load(&panel_failed)) {
+  if (atomic_load(&panel_failed) || !rg_panel_healthy()) {
     bsp_display_unlock();
     return false;
   }
@@ -614,7 +614,7 @@ bool rg_ui_active(bool value) {
   return true;
 }
 bool rg_ui_healthy(uint32_t now) {
-  if (atomic_load(&panel_failed))
+  if (atomic_load(&panel_failed) || !rg_panel_healthy())
     return false;
   uint32_t stamp = atomic_load(&dark) ? atomic_load(&progressed) : atomic_load(&rendered);
   return rg_recent(now, stamp);
