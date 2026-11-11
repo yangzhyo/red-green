@@ -13,6 +13,9 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$root/main"
   "$root/main/schedule.c" "$root/tests/schedule_test.c" -o "$build/schedule-test"
 "$build/schedule-test"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$root/main" \
+  "$root/main/schedule.c" "$root/main/hero.c" "$root/tests/hero_test.c" -o "$build/hero-test"
+"$build/hero-test"
+cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$root/main" \
   "$root/main/idle_screen.c" "$root/tests/idle_screen_test.c" -o "$build/idle-screen-test"
 "$build/idle-screen-test"
 cc -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -g \
