@@ -3,6 +3,8 @@
 #include "bsp/display.h"
 #include "device.h"
 #include "health.h"
+#include "idle_screen.h"
+#include "panel.h"
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_header_cache.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
@@ -26,6 +28,14 @@ static lv_image_dsc_t image_dsc;
 static lv_image_dsc_t bubble_dsc[5];
 static bool active;
 static atomic_uint_least32_t rendered;
+static atomic_uint_least32_t progressed;
+static atomic_bool dark, panel_failed;
+static rg_idle_screen idle_screen;
+static lv_display_t *display;
+static lv_indev_t *input;
+static bool touched;
+static bool submitted;
+static uint32_t frames;
 static uint64_t epoch, last_text;
 static size_t page;
 static int usage_item, usage_pair;
@@ -87,8 +97,14 @@ static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h,
   return o;
 }
 static void ready(lv_event_t *event) {
-  (void)event;
-  atomic_store(&rendered, (uint32_t)rg_now());
+  if (lv_event_get_code(event) == LV_EVENT_FLUSH_FINISH) {
+    submitted = true;
+  } else if (submitted) {
+    // REFR_READY 在无重绘时也会触发，不能单凭该事件续健康期限。
+    submitted = false;
+    frames++;
+    atomic_store(&rendered, (uint32_t)rg_now());
+  }
 }
 static bool glyphs(const lv_font_t *f, const char *s) {
   const unsigned char *p = (const unsigned char *)s;
@@ -338,9 +354,7 @@ static void draw_usage(uint64_t now) {
       lv_obj_add_flag(tracks[i], LV_OBJ_FLAG_HIDDEN);
   }
 }
-static void refresh(lv_timer_t *timer) {
-  (void)timer;
-  uint64_t now = rg_now();
+static void draw_frame(uint64_t now, bool force) {
   // 等待画面也周期刷新，健康取自真正结束的刷新回调。
   lv_obj_invalidate(screen);
   if (!active || !model || !schedule.count)
@@ -354,7 +368,7 @@ static void refresh(lv_timer_t *timer) {
   }
   animate(p, now);
   tile_effect(now);
-  if (now - last_text < 100)
+  if (!force && now - last_text < 100)
     return;
   last_text = now;
   size_t pages = (schedule.count + 4) / 5;
@@ -404,9 +418,67 @@ static void refresh(lv_timer_t *timer) {
   set_text(footer_meta, text);
   draw_usage(now);
 }
+static void touch_event(lv_event_t *event) {
+  (void)event;
+  touched = true;
+}
+static bool has_activity(void) {
+  if (!active)
+    return false;
+  const cJSON *p;
+  cJSON_ArrayForEach(p, sessions()) {
+    if (strcmp(rg_string(p, "state"), "idle"))
+      return true;
+  }
+  return false;
+}
+static void refresh(lv_timer_t *timer) {
+  (void)timer;
+  uint64_t now = rg_now();
+  atomic_store(&progressed, (uint32_t)now);
+  if (atomic_load(&panel_failed))
+    return;
+  // PRESSED 捕获短点按；轮询当前状态覆盖持续按住（PRESSING 不转发给 indev）。
+  bool on = rg_idle_screen_update(&idle_screen, now, has_activity(),
+                                  touched || lv_indev_get_state(input) == LV_INDEV_STATE_PRESSED);
+  touched = false;
+  bool off = atomic_load(&dark);
+  if (!on) {
+    if (!off) {
+      if (!rg_panel_set_on(false)) {
+        atomic_store(&panel_failed, true);
+        return;
+      }
+      // 标签滚动也会请求刷新；仅暂停 timer 会被重新唤醒，需一起禁止失效提交。
+      lv_display_enable_invalidation(display, false);
+      lv_timer_pause(lv_display_get_refr_timer(display));
+      atomic_store(&dark, true);
+    }
+    return;
+  }
+  if (off)
+    lv_display_enable_invalidation(display, true);
+  draw_frame(now, off);
+  if (off) {
+    // 先写入最新的完整帧，再让面板发光，避免短暂出现熄屏前的旧状态。
+    uint32_t previous = frames;
+    lv_refr_now(display);
+    if (frames == previous || !rg_panel_set_on(true)) {
+      atomic_store(&panel_failed, true);
+      return;
+    }
+    atomic_store(&dark, false);
+  }
+}
 bool rg_ui_init(void) {
   if (!bsp_display_lock(1000))
     return false;
+  display = lv_display_get_default();
+  input = bsp_display_get_input_dev();
+  if (!display || !input || !rg_panel_set_on(true)) {
+    bsp_display_unlock();
+    return false;
+  }
   font16 = lv_binfont_create_from_buffer((void *)font16_start,
                                          font16_end - font16_start);
   font20 = lv_binfont_create_from_buffer((void *)font20_start,
@@ -482,9 +554,12 @@ bool rg_ui_init(void) {
     lv_obj_add_event_cb(tracks[i], dashed_track, LV_EVENT_DRAW_MAIN, (void *)(uintptr_t)i);
   }
   epoch = usage_since = rg_now();
+  rg_idle_screen_init(&idle_screen, epoch);
+  lv_indev_add_event_cb(input, touch_event, LV_EVENT_PRESSED, NULL);
   lv_timer_create(refresh, 33, NULL);
   lv_display_add_event_cb(lv_display_get_default(), ready, LV_EVENT_REFR_READY,
                           NULL);
+  lv_display_add_event_cb(display, ready, LV_EVENT_FLUSH_FINISH, NULL);
   bsp_display_unlock();
   return true;
 }
@@ -522,6 +597,10 @@ bool rg_ui_apply(const cJSON *snapshot) {
 bool rg_ui_active(bool value) {
   if (!bsp_display_lock(40))
     return false;
+  if (atomic_load(&panel_failed)) {
+    bsp_display_unlock();
+    return false;
+  }
   active = value;
   if (active && schedule.count) {
     lv_obj_remove_flag(business, LV_OBJ_FLAG_HIDDEN);
@@ -535,6 +614,8 @@ bool rg_ui_active(bool value) {
   return true;
 }
 bool rg_ui_healthy(uint32_t now) {
-  uint32_t stamp = atomic_load(&rendered);
+  if (atomic_load(&panel_failed))
+    return false;
+  uint32_t stamp = atomic_load(&dark) ? atomic_load(&progressed) : atomic_load(&rendered);
   return rg_recent(now, stamp);
 }

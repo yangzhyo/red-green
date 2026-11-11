@@ -1,5 +1,6 @@
 #include "lvgl.h"
 #include "ui.h"
+#include "native_panel.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,7 @@ int main(int argc, char **argv) {
   lv_display_set_buffers(d, buffer, NULL, sizeof(buffer),
                          LV_DISPLAY_RENDER_MODE_PARTIAL);
   lv_display_set_flush_cb(d, flush);
+  test_input_create();
   assert(rg_ui_init());
   cJSON *s = cJSON_Parse(json);
   assert(s);

@@ -247,7 +247,7 @@ void app_main(void) {
   configASSERT(xTaskCreate(serial_task, "rg_usb", 12288, NULL, 5, NULL) ==
                pdPASS);
   bsp_display_config_t display = BSP_DISPLAY_DEFAULT_CONFIG();
-  display.enable_touch = false;
+  display.enable_touch = true;
   atomic_store(&boot_phase, BOOT_DISPLAY);
   if (!bsp_display_start_with_config(&display))
     return;

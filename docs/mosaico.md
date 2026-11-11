@@ -27,7 +27,7 @@ sh firmware/mosaico/tests/run.sh
 
 固定气泡采用 32 px 预置彩色图片：💤、🚩❗、💥、👋💬、✨，运行中仍显示动词。图形来自 Twemoji（CC BY 4.0），[来源、许可与重建说明](../firmware/mosaico/assets/twemoji/README.md)随仓库保留。先在 `app/` 执行 `pnpm install --frozen-lockfile`，再导出资源；不依赖设备的 emoji 字体。更新图片资源后必须配套重建桌面应用和固件。
 
-字体使用 Noto Sans CJK SC（SIL OFL，许可保留在生成目录），20/28 px、1 bit，覆盖字体中 U+0020–FFFF 的可用字形。执行 `cd app && pnpm install --frozen-lockfile` 后，`bash scripts/gen-mosaico-fonts.sh` 可从校验 SHA256 的固定上游提交重建。**超出字集的项目名会拒绝设备快照并回退电脑**，不显示方框。字体约 5.3 MiB，含彩色气泡的完整应用约 6.97 MiB；实物应用槽位为 7 MiB，构建使用已核对的布局检查容量。
+字体使用 Noto Sans CJK SC（SIL OFL，许可保留在生成目录），固定文案另有 16 px 子集；20/28 px、1 bit，覆盖字体中 U+0020–FFFF 的可用字形。执行 `cd app && pnpm install --frozen-lockfile` 后，`bash scripts/gen-mosaico-fonts.sh` 可从校验 SHA256 的固定上游提交重建。**超出字集的项目名会拒绝设备快照并回退电脑**，不显示方框。字体约 5.3 MiB，含彩色气泡的完整应用约 6.97 MiB；实物应用槽位为 7 MiB，构建使用已核对的布局检查容量。
 
 原生预览运行与固件相同的 LVGL 界面代码，支持检查中文长名称和五行总览；不模拟物理屏幕、codec 或 USB：
 
@@ -36,6 +36,8 @@ cmake -S firmware/mosaico/tests/preview -B /tmp/rg-preview -G Ninja
 cmake --build /tmp/rg-preview -j 8
 /tmp/rg-preview/preview firmware/mosaico/tests/preview/five.json /tmp/rg-five.ppm 2000
 python3 firmware/mosaico/tests/preview/bubbles.py /tmp/rg-preview/preview
+python3 firmware/mosaico/tests/preview/metro.py /tmp/rg-preview/preview
+ctest --test-dir /tmp/rg-preview --output-on-failure
 ```
 
 需先通过固件配置取得锁定的 LVGL 依赖。`sh firmware/mosaico/tests/run.sh` 在主机使用 ASan/UBSan 验证授权期限、去重、过期、帧上限与轮播公平性。`node --test app/tests/*.test.js` 验证资源可重跑及设备用量投影。
@@ -47,6 +49,16 @@ python3 firmware/mosaico/tests/preview/bubbles.py /tmp/rg-preview/preview
 设备授权到期或显示/音频无进展时，高优先级任务关闭功放并切回等待画面；显示锁无法取得则拉低屏幕复位并重启。该软件路径已编译和模拟验证，硬故障下物理屏幕/声音的实际截止时间待真机测量。
 
 Claude 的 `updated_at` 表示数值最后变化时间，设备显示“数值更新于 …”；没有可信 `resets_at` 时显示未知，到重置时刻后标为过期。Codex 继续使用成功快照 120 秒时效。
+
+## Metro 界面与空闲熄屏（#22）
+
+新版沿用“主角＋总览”黄金分栏，底色为纯黑，用量改为两条进度条，右侧保留五行固定色块。主角色块的背景和文字一起按 3 秒周期变化：显示 2 秒、淡出 0.4 秒、全隐 0.2 秒、淡入 0.4 秒；其它行保持显示。顶底文字内收 65 px，按保守 R96、内缩 8 px 的轮廓检查；这不是厂商标注的圆角半径。原宠物动作和彩色气泡保持不变。
+
+用户已确认：所有会话连续 idle 30 秒后关闭面板，触摸可亮屏至最后一次触摸后 30 秒。持续按住会续时；重复空闲快照和用量更新不续时。所有分页参与判断，任一非 idle（含待确认、轮到你、已完成、异常）自动唤醒并保持亮屏，无会话也视为空闲。
+
+只关闭 CO5300 的 Display On/Off，不执行 Sleep In 或 MCU 深睡。暂停显示刷新并禁止滚动标签请求新帧，USB、授权、触摸轮询继续工作，熄屏期间仍由设备接管；恢复时先提交最新完整帧，再点亮面板。失联后触摸只显示等待连接，不显示旧会话。亮屏健康需要实际画面提交；熄屏健康需要关闭面板成功且 UI 计时器继续进展，面板控制失败仍走既有故障回退。
+
+原生 LVGL 已覆盖计时、重复快照、长按/重复触摸、跨页活动、授权撤销、无会话、面板开关失败、没有实际重绘的健康超时。设备上的触摸、亮灭和新 UI 仍需本次实机验收。
 
 ## 安装边界
 
