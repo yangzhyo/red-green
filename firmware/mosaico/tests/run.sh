@@ -15,3 +15,7 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$root/main"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I"$root/main" \
   "$root/main/idle_screen.c" "$root/tests/idle_screen_test.c" -o "$build/idle-screen-test"
 "$build/idle-screen-test"
+cc -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=address,undefined -g \
+  -I"$root/main" -I"$root/components/cjson" "$root/main/memory_sample.c" \
+  "$build/cjson.o" "$root/tests/memory_sample_test.c" -lm -o "$build/memory-sample-test"
+"$build/memory-sample-test"

@@ -3,6 +3,8 @@
 #include "device.h"
 #include "device/dcd.h"
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
+#include "memory_sample.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -180,9 +182,16 @@ static void guard(void *context) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
+static rg_heap_sample read_heap(uint32_t caps) {
+  multi_heap_info_t info;
+  heap_caps_get_info(&info, caps | MALLOC_CAP_8BIT);
+  return (rg_heap_sample){info.total_free_bytes, info.largest_free_block,
+                          info.minimum_free_bytes};
+}
 static void serial_task(void *context) {
   (void)context;
   uint64_t last_hello = 0, last_request = 0;
+  rg_memory_clock memory_clock = {0};
   uint8_t bytes[4096];
   for (;;) {
     // 初始化失败也保留诊断握手；尚未就绪时不处理任何业务输入。
@@ -212,7 +221,15 @@ static void serial_task(void *context) {
       else if (device.version && now - last_request >= 500) {
         bool healthy =
             rg_ui_healthy((uint32_t)now) && rg_audio_healthy((uint32_t)now);
-        if (!send_json(rg_request(&device, rg_now(), healthy)))
+        cJSON *request = rg_request(&device, rg_now(), healthy);
+        if (request && showing && rg_memory_due(&memory_clock, now)) {
+          rg_heap_sample internal = read_heap(MALLOC_CAP_INTERNAL);
+          rg_heap_sample psram = read_heap(MALLOC_CAP_SPIRAM);
+          // 诊断分配失败只丢弃本次样本，仍发送原健康续期。
+          (void)rg_memory_attach(request, now, &internal, &psram, device.snapshot,
+                                 rg_ui_screen_on(), esp_app_get_description()->version);
+        }
+        if (!send_json(request))
           unbind();
         last_request = now;
       }

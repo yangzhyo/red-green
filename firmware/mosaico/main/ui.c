@@ -619,3 +619,5 @@ bool rg_ui_healthy(uint32_t now) {
   uint32_t stamp = atomic_load(&dark) ? atomic_load(&progressed) : atomic_load(&rendered);
   return rg_recent(now, stamp);
 }
+
+bool rg_ui_screen_on(void) { return !atomic_load(&dark); }
