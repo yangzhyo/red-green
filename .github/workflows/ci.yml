@@ -41,6 +41,7 @@ jobs:
           sh firmware/mosaico/tests/run.sh
           cargo build --manifest-path app/src-tauri/Cargo.toml --example mosaico_probe
           python3 scripts/mosaico-simulator.py
+          python3 -m unittest discover -s scripts/tests -p 'test_mosaico_memory_report.py'
 
       - name: JS/Shell 语法检查
         run: |
