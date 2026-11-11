@@ -34,7 +34,7 @@ def inside_safe(x, y):
 with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     directory = destination or Path(temporary)
     directory.mkdir(parents=True, exist_ok=True)
-    full = render(directory, 'five-visible', fixture, 1000)
+    full = render(directory, 'five-visible', fixture, 1200)
     assert full(0, 0) == (0, 0, 0), '屏幕底色必须是纯黑'
     assert full(111, 145) == (0, 0, 0), '气泡容器必须透明，不得出现白色底板'
     assert full(149, 182) == (0, 0, 0), '透明气泡不得残留白色尾巴'
@@ -49,9 +49,9 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
             if full(x, y) == (245, 246, 248) or full(x, y) == (255, 255, 255):
                 assert inside_safe(x, y), f'文字/气泡被圆角切到：{x},{y}'
 
-    fading = render(directory, 'five-fading', fixture, 2250)
-    hidden = render(directory, 'five-hidden', fixture, 2500)
-    restored = render(directory, 'five-restored', fixture, 3200)
+    fading = render(directory, 'five-fading', fixture, 250)
+    hidden = render(directory, 'five-hidden', fixture, 500)
+    restored = render(directory, 'five-restored', fixture, 1040)
     assert 0 < sum(fading(300, 151)) < sum(colors[0]), '焦点色块必须柔和淡出'
     assert all(hidden(x, y) == (0, 0, 0) for y in range(148, 200) for x in range(297, 464)), \
         '焦点色块和文字必须一起完全消失'
@@ -59,17 +59,25 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     for row in range(1, 5):
         assert hidden(300, 151 + row * 58) == colors[row], '其他色块不能随焦点闪烁'
 
-    # 定时器每 40 ms 实际运行一帧；end=2440 读取 2400 ms 的输出。
-    boundary = render(directory, 'first-hidden-boundary', fixture, 2440)
+    returning = render(directory, 'five-returning', fixture, 840)
+    assert 0 < sum(returning(300, 151)) < sum(colors[0]), '先闪烁时必须保留柔和淡入'
+    held = render(directory, 'five-hold-after-blink', fixture, 2840)
+    assert restored(300, 151) == held(300, 151) == colors[0], '闪烁完成后常亮停留至本周期结束'
+    before_switch = render(directory, 'hold-before-switch', fixture, 5500)
+    assert before_switch.hero == 'red-green' and before_switch(300, 151) == colors[0], \
+        '第二次闪烁后的停留期结束前不能切换主角'
+
+    # 定时器每 40 ms 实际运行一帧；end=440 读取 400 ms 的输出。
+    boundary = render(directory, 'first-hidden-boundary', fixture, 440)
     assert boundary(300, 151) == (0, 0, 0), '透明度必须使用调度轮次起点，不能延后到首次绘制'
-    second_hidden = render(directory, 'second-hidden', fixture, 5500)
+    second_hidden = render(directory, 'second-hidden', fixture, 3500)
     assert second_hidden.hero == 'red-green' and second_hidden(300, 151) == (0, 0, 0), \
         '第二次消失前不能切换主角'
     switched = render(directory, 'next-start', fixture, 6040)
     assert switched.hero == '工具箱 #1', '两个完整周期后必须切换到下一主角'
     assert switched(300, 151) == colors[0] and switched(300, 267) == colors[2], \
-        '切换帧旧色块常亮，新色块从常亮开始'
-    next_hidden = render(directory, 'next-hidden', fixture, 8500)
+        '切换帧旧色块恢复常亮，新色块从完整亮度开始淡出'
+    next_hidden = render(directory, 'next-hidden', fixture, 6500)
     assert next_hidden.hero == '工具箱 #1' and next_hidden(300, 267) == (0, 0, 0), \
         '下一主角色块必须从切换时刻开始计算闪烁'
 
@@ -79,13 +87,13 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     updated = json.loads(json.dumps(initial))
     updated['sessions'][1]['state'] = 'awaiting'
     timeline = [initial] + [updated] * 29
-    before = render(directory, 'priority-waits', timeline, 5500)
+    before = render(directory, 'priority-waits', timeline, 3500)
     assert before.hero == 'red-green' and before(300, 151) == (0, 0, 0), \
         '重复快照/新优先状态不能截断或延期第二次闪烁'
     assert before(300, 209) == colors[0], '新状态应立即更新，不等待主角切换'
     after = render(directory, 'priority-next', timeline, 6040)
     assert after.hero == updated['sessions'][1]['name'] and after(300, 209) == colors[0], \
-        '待处理会话在完整轮次结束后成为主角并重新开始闪烁'
+        '待处理会话在完整轮次结束后成为主角并立即开始闪烁'
 
     for status in ['unknown', 'expired']:
         model = json.loads(json.dumps(fixture))
@@ -104,11 +112,11 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     model = json.loads(json.dumps(initial))
     sixth = dict(model['sessions'][0], id='s5', slot=5, name='其他页', state='awaiting')
     model['sessions'].append(sixth)
-    second_page = render(directory, 'six-page-two', model, 1000)
+    second_page = render(directory, 'six-page-two', model, 1200)
     assert second_page.hero == '其他页' and second_page(300, 151) == colors[0], \
         '第六个主角对应色块必须立即出现在第二页首行'
     assert second_page(300, 209) == (0, 0, 0), '翻页后不得留下前页的色块'
     first_page = render(directory, 'six-back-to-first', model, 6040)
     assert first_page.hero == 'red-green' and first_page(300, 209) == colors[1], \
         '下一主角切回第一页时，总览必须同帧跟随'
-    print('Metro: 布局、圆角、完整两次闪烁/六秒轮播、状态即时更新与焦点分页通过')
+    print('Metro: 布局、圆角、先闪再停留、完整两次/六秒轮播、状态即时更新与焦点分页通过')

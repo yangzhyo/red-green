@@ -258,12 +258,12 @@ static void usage_bar(int i, bool known, int pct) {
 static void tile_effect(uint64_t now) {
   uint32_t phase = (uint32_t)((now - schedule.since) % RG_FOCUS_BLINK_MS);
   float opacity = 1;
-  if (phase >= 2400 && phase < 2600)
+  if (phase >= 400 && phase < 600)
     opacity = 0;
-  else if (phase >= 2000) {
-    float t = (float)(phase < 2400 ? phase - 2000 : phase - 2600) / 400;
+  else if (phase < 1000) {
+    float t = (float)(phase < 400 ? phase : phase - 600) / 400;
     float eased = t * t * (3 - 2 * t);
-    opacity = phase < 2400 ? 1 - eased : eased;
+    opacity = phase < 400 ? 1 - eased : eased;
   }
   for (int i = 0; i < 5; i++)
     lv_obj_set_style_opa(tiles[i], i == current_tile ? (lv_opa_t)(255 * opacity) : LV_OPA_COVER, 0);
