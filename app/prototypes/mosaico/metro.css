@@ -39,8 +39,7 @@ h1 { font-size: 32px; font-weight: 500; margin: 0 0 10px; letter-spacing: -.8px;
 .pet-area { min-height: 0; display: flex; align-items: center; justify-content: center; padding-top: 30px; }
 .pet { position: relative; }
 .pet canvas { display: block; image-rendering: pixelated; }
-.bubble { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); background: #fff; color: #000; padding: 2px 9px; font-size: 21px; line-height: 25px; min-width: 32px; text-align: center; }
-.bubble::after { content: ""; position: absolute; width: 7px; height: 7px; background: #fff; bottom: -4px; left: calc(50% - 3px); }
+.bubble { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); background: transparent; color: #f5f6f8; padding: 2px 9px; font-size: 21px; line-height: 25px; min-width: 32px; text-align: center; }
 .hero-name { text-align: center; font-size: 30px; font-weight: 500; line-height: 36px; min-width: 0; }
 .hero-state { text-align: center; color: var(--accent); font-size: 23px; line-height: 28px; }
 .name-clip { overflow: hidden; white-space: nowrap; min-width: 0; }

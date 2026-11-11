@@ -32,6 +32,8 @@ with tempfile.TemporaryDirectory(prefix='rg-metro-') as temporary:
     directory.mkdir(parents=True, exist_ok=True)
     full = render(directory, 'five-visible', fixture, 1000)
     assert full(0, 0) == (0, 0, 0), '屏幕底色必须是纯黑'
+    assert full(111, 145) == (0, 0, 0), '气泡容器必须透明，不得出现白色底板'
+    assert full(149, 182) == (0, 0, 0), '透明气泡不得残留白色尾巴'
     colors = [(191, 41, 66), (231, 180, 43), (8, 110, 181), (8, 126, 86), (65, 71, 78)]
     for row, color in enumerate(colors):
         assert full(300, 151 + row * 58) == color, f'第 {row + 1} 行不是固定 Metro 色块'

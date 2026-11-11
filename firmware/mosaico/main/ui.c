@@ -512,10 +512,10 @@ bool rg_ui_init(void) {
   lv_obj_set_style_text_align(header_count, LV_TEXT_ALIGN_RIGHT, 0);
   hero_name = label(business, 24, 366, 253, font28);
   hero_state = label(business, 24, 406, 253, font20);
-  balloon = box(business, 128, 144, 44, 36, 0xffffff);
-  box(business, 147, 180, 6, 5, 0xffffff);
+  balloon = box(business, 128, 144, 44, 36, 0);
+  lv_obj_set_style_bg_opa(balloon, LV_OPA_TRANSP, 0);
   hero_bubble = label(balloon, 6, 6, 170, font20);
-  lv_obj_set_style_text_color(hero_bubble, lv_color_hex(0x111111), 0);
+  lv_obj_set_style_text_color(hero_bubble, lv_color_hex(0xf5f6f8), 0);
   lv_obj_set_style_text_align(hero_name, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_align(hero_state, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_align(hero_bubble, LV_TEXT_ALIGN_CENTER, 0);
