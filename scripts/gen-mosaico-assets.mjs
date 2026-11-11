@@ -91,9 +91,11 @@ const bubbles = Object.entries(bubbleSources).map(([state, symbols]) => {
     const rgba = rendered.pixels;
     for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
       const from = (y * 32 + x) * 4, to = (y * w + index * 36 + x) * 4;
-      // resvg 的直通 RGBA → LVGL ARGB8888 的小端 BGRA。
-      pixels[to] = rgba[from + 2]; pixels[to + 1] = rgba[from + 1];
-      pixels[to + 2] = rgba[from]; pixels[to + 3] = rgba[from + 3];
+      // resvg 返回预乘 RGBA；LVGL ARGB8888 需要直通 alpha 的小端 BGRA。
+      const alpha = rgba[from + 3];
+      for (let channel = 0; channel < 3; channel++)
+        pixels[to + channel] = alpha ? Math.min(255, Math.round(rgba[from + 2 - channel] * 255 / alpha)) : 0;
+      pixels[to + 3] = alpha;
     }
   });
   return { state, symbols, w, h, offset: append(pixels) };

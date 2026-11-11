@@ -1,2 +1,2 @@
 #pragma once
-#define RG_RESOURCES "3f2139dddcda53da205a1a89a9daf7a10e6af4d45a4c4ef81176d5b0ce63700e"
+#define RG_RESOURCES "d2db1f1e250060c389545f36886699c9d563e80570fe2e7cc33cacb32ff641e3"
