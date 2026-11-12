@@ -24,6 +24,11 @@ jobs:
       - name: cargo check
         run: cargo check --manifest-path app/src-tauri/Cargo.toml
 
+      - name: Rust 与用量模型测试
+        run: |
+          cargo test --manifest-path app/src-tauri/Cargo.toml --lib
+          node --test app/tests/*.test.js
+
       - name: JS/Shell 语法检查
         run: |
           fail=0

@@ -1,0 +1,14 @@
+/* 宠物名牌与用量标签共用外观，限宽由各窗口布局决定。 */
+.name-tag {
+  box-sizing: border-box;
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

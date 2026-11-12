@@ -24,8 +24,16 @@ body {
 
 #stage {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
 }
+
+#source, #bucket {
+  max-width: 108px;
+}
+#source { cursor: pointer; }
+#bucket:empty { display: none; }
 
 /* 静置只见圆表，展开只见卡片 */
 #stage.expanded #ring,
@@ -76,12 +84,12 @@ body {
   --pct: 0%;
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  gap: 3px;
   height: 14px;
   line-height: 14px;
   padding: 0 5px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 9px;
   color: #fff;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
   white-space: nowrap;

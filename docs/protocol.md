@@ -1,6 +1,6 @@
 # 状态文件协议
 
-hooks、status line 脚本与宠物 app 之间的唯一契约：会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
+Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 使用文末的只读 App Server 协议。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
 
 ## 文件
 
@@ -122,3 +122,30 @@ hooks、status line 脚本与宠物 app 之间的唯一契约：会话文件由 
 - AskUserQuestion 是否触发 `Notification` hook（若不触发，兜底是 `Stop` + `last_assistant_message` 含问句的启发式）。
 - `idle_prompt` 的确切触发时机（延迟多久）。
 - 进程树向上找 tty 在真实 hook 环境中是否可靠。
+
+## Codex CLI 原生观察
+
+安装仅将 `thread-id` 加到 `tui.terminal_title` 首位。运行时由标题中的会话 ID（0.162.1 标题缩为 29 字符加省略号）和当前 tty 上的 Codex 进程共同绑定会话。Terminal 读 custom title/tty；Ghostty 读 name/id 并复用 OSC 7 映射；tmux 读 pane title/tty。退出或失去可信绑定时宠物离场，不扫描历史记录，缩略 ID 需与全部已加载 ID 唯一匹配，歧义时不绑定，不按 cwd 匹配。同 thread 多客户端只保留 tty 排序的第一个。
+
+目录优先级：运行 app 的 `CODEX_HOME` → 安装脚本登记的 `~/.config/red-green/codex-home` → `~/.codex`。连接 `<目录>/app-server-control/app-server-control.sock`，以 WebSocket 握手后调用 `initialize`（experimentalApi）、发送 `initialized`。每 1.5 秒先读取 `thread/loaded/list`（遍历全部分页、只对当前已加载会话匹配 ID），再读取 `thread/read(includeTurns:false)` 与 `thread/turns/list(limit:1,itemsView:summary)`。不调用 resume/subscribe 或审批接口；子代理、notLoaded 会话不显示。断线清空快照并自动重连，重连首次状态不补叫声。
+
+| 服务状态 / 最近回合 | 宠物状态 |
+|---|---|
+| active + waitingOnApproval / waitingOnUserInput | awaiting |
+| active，无上述标志（包括重试） | running |
+| systemError 或 idle + failed | aborted |
+| idle + completed，末条非 commentary 答复末行命中问句规则 | your_turn |
+| idle + completed，其余 | completed |
+| idle + interrupted / 无回合（含首条消息前尚未 materialized） | idle |
+
+问句规则与 Claude 的末行启发式一致；用户中断不是外部失败。归一化对象沿用会话结构，加 `source:"codex"`，`session_id:"codex-<UUID>"`，`event:"app-server"`。`since` 是回合 ID、状态、完成时间构成的稳定事件标识，不是采样时间。项目名首次观察时按 git 根目录锚定。复用已阅、前台静默与点击聚焦。
+
+`get_usage` / `usage-changed` 返回 `{claude:<原 usage.json 或 null>,codex:<快照或 null>}`。Codex 快照：
+
+```json
+{"updated_at":1792100000,"groups":[{"id":"codex:account:codex","source":"codex","account_id":"account","label":"Codex","windows":[{"key":"primary","used_percentage":23,"duration_minutes":300,"resets_at":1792103600}]}]}
+```
+
+`account/rateLimits/read` 首次有会话时请求，随后每 60 秒刷新。优先使用 rateLimitsByLimitId，回退单一 rateLimits；不按会话累加。账号变化通知清缓存。未知、非法、过期或超过 120 秒的快照不显示成零；失败时旧快照仅在有效期内继续显示。用量表仅列有存活宠物的来源，点击切换额度组并保持选择，未知显示 `?` / `未知`。Claude 的既有过期规则不变。
+
+隔离验证可设置 `RED_GREEN_STATUS_DIR` 改用临时状态目录；配合 `RED_GREEN_DISABLE_CODEX=1` 停止原生观察器，并从该目录的 `codex-usage.json` 注入用量快照。此文件和 `usage.json` 均不当作会话。常规运行不读取 Codex 用量文件。
