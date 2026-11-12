@@ -1,0 +1,3 @@
+[submodule "firmware/vendor/esp-mosaico-bsp"]
+	path = firmware/vendor/esp-mosaico-bsp
+	url = https://github.com/esp-mosaico/esp-mosaico-bsp.git

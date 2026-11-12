@@ -7,7 +7,6 @@ for (const source of ["codex", "claude"]) {
   test(`${source} 首见静默、前台已阅与退出清理`, async () => {
     const handlers = new Map();
     const calls = [];
-    const models = new Map();
     let sessions = [];
     let front = null;
     const context = vm.createContext({
@@ -21,7 +20,7 @@ for (const source of ["codex", "claude"]) {
         } },
         event: {
           listen: (name, fn) => { handlers.set(name, fn); return Promise.resolve(() => {}); },
-          emitTo: (label, name, payload) => models.set(label, payload),
+          emitTo: () => {},
         },
       } },
     });
@@ -36,23 +35,48 @@ for (const source of ["codex", "claude"]) {
       await handlers.get("sessions-changed")({payload: sessions});
       await settle();
     };
-    const callCount = () => calls.filter(([name]) => name === "play_call").length;
+    const submissions = () => calls.filter(([name]) => name === "submit_output").map(([,args]) => args);
+    const callCount = () => submissions().flatMap((args) => args.calls).length;
+    const model = () => submissions().at(-1)?.snapshot.pets[0]?.model;
     await settle();
     await update("completed", "1");
     assert.equal(callCount(), 0);
     await update("running", "2");
     await update("awaiting", "3");
     assert.equal(callCount(), 1);
+    // 桌面回退仍使用来源隔离后的窗口身份，真实 pet.js 必须能接受快照。
+    const elements = new Map(["sprite", "bubble", "tag"].map((id) => [id, {
+      textContent: "", classList: { add() {}, remove() {} },
+    }]));
+    let onUpdate;
+    let drawn = 0;
+    const renderer = vm.createContext({
+      URLSearchParams, location: { search: `?sid=${source}-test` },
+      document: { body: { dataset: {} }, getElementById: (id) => elements.get(id) },
+      setInterval: () => 1, clearInterval() {}, installDrag() {},
+      window: {
+        SPRITES: { SCALE: 1, spec: () => ({ frames: [0] }), draw: () => drawn++ },
+        __TAURI__: { core: { invoke() {} }, event: {
+          listen: (_, fn) => { onUpdate = fn; return Promise.resolve(); }, emit() {},
+        } },
+      },
+    });
+    vm.runInContext(fs.readFileSync(new URL("../ui/pet.js", import.meta.url), "utf8"), renderer);
+    onUpdate({ payload: model() });
+    assert.equal(elements.get("tag").textContent, "delta");
+    assert.equal(drawn, 1);
+    onUpdate({ payload: { ...model(), session_id: `${source === "codex" ? "claude" : "codex"}-test`, project: "other" } });
+    assert.equal(elements.get("tag").textContent, "delta");
     await update("awaiting", "3");
     assert.equal(callCount(), 1);
 
     front = "/dev/test";
     await update("running", "4");
     await update("completed", "5");
-    assert.equal(models.get("pet-test").state, "idle");
+    assert.equal(model().state, "idle");
     assert.equal(callCount(), 1);
     await update("your_turn", "6");
-    assert.equal(models.get("pet-test").state, "your_turn");
+    assert.equal(model().state, "your_turn");
     assert.equal(callCount(), 1);
     front = null;
     await update("your_turn", "6");
@@ -61,6 +85,7 @@ for (const source of ["codex", "claude"]) {
     sessions = [];
     handlers.get("sessions-changed")({payload: []});
     await settle();
-    assert.ok(calls.some(([name]) => name === "remove_pet"));
+    assert.equal(submissions().at(-1).snapshot.pets.length, 0);
+    assert.equal(calls.filter(([name]) => ["play_call","ensure_pet","remove_pet","ensure_gauge","remove_gauge"].includes(name)).length, 0);
   });
 }
