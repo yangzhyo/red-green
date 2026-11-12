@@ -100,7 +100,7 @@ Vibe 保存了当前应用、分区表和原布局中的 model/font/product_asse
 | 条目 | 本地编号 | 版本 | 状态 |
 | --- | --- | --- | --- |
 | `red_green_6d208cf` | `d84da7` | `6d208cf` | 新副本，14,251 KiB，已重新打开 |
-| `red_green_mosaico` | `dcd1bf` | `23ea7a0` | 原副本保留 |
+| `red_green_mosaico` | `dcd1bf` | `23ea7a0` | 保存时保留；随后按用户要求删除，见下文 |
 | 望潮 Tide Watcher | `688018` | `6.18.0` | 原应用保留 |
 
 保存成功页、三个条目的详情和打开进度均已留存。Vibe 实时启动编号为 `8751591401586485268`，身份匹配且 `stale=false`。应用 SHA256 仍为 `3fb0d4c4837bf21e6e9268ddbc5359d0cff171535cf06a98b25794d2d80b7a10`；用此前已验证的应用、分区表及资源备份按官方算法重算 release 为 `84da73bef60b9c8bdb80bd4c576fc69da27121c9018efdab00c193120433814a`，对应 `d84da7`，与设备一致。此项仍不是独立导出 NAND 的逐字节校验，也没有通过安装其他应用来覆盖测试完整恢复路径。
@@ -108,6 +108,12 @@ Vibe 保存了当前应用、分区表和原布局中的 model/font/product_asse
 从新条目点击「运行」后，正常业务 USB 与 `Preparing → Device` 恢复；用户确认“显示和触摸都正常”，真实宠物、状态、用量和淡入淡出通过。新启动 `1c2904d083b4-2ab1bdadb40cc1d7` 在 uptime 60,157 ms 发出六会话活动亮屏样本，固件标记仍为 `6d208cf`，内存采样正常恢复；该启动单独计时，不拼接到之前的长期测试。电脑常驻应用二进制未变化，官方 Gateway 已释放，未上传社区。
 
 本轮应用副本、组件摘要、截图、原始操作日志及 `verification.json` 保存在本机 `~/Library/Application Support/red-green/mosaico-backups/20261112-local-idea-6d208cf/`。今后进入 Vibe 后，选择「我的 IDEA → red_green_6d208cf → 运行」即可打开本次验收版本。
+
+### 2026-11-12 旧本地副本清理
+
+用户明确授权后，在 Vibe Mode 中核对名称、版本和编号，仅删除旧条目 `red_green_mosaico / 23ea7a0 / dcd1bf`。删除完成后的目录剩两个 Idea：新版 `red_green_6d208cf / 6d208cf / d84da7` 和「望潮 / 6.18.0 / 688018」，两者详情均已核对；随后从新版条目启动，业务 USB 与 `Preparing → Device` 恢复，官方 Gateway 已释放。
+
+Mac 上的历史恢复备份未删除，旧应用文件 SHA256 复核仍为 `0de499b8218405553bc242f1ad99776659317239ea9a5c054ea9d984492dedf2`。本轮目标详情、删除确认/结果、保留条目及重新打开截图保存在本机 `~/Library/Application Support/red-green/mosaico-backups/20261112-remove-old-idea/`。
 
 ## 每分钟内存观测（#24）
 
