@@ -5,9 +5,12 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "demo:mosaico": "python3 -m http.server 8768 --bind 127.0.0.1 --directory ."
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@resvg/resvg-js": "2.6.2",
+    "@tauri-apps/cli": "^2",
+    "lv_font_conv": "1.5.3"
   }
 }

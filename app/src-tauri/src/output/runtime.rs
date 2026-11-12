@@ -1,0 +1,611 @@
+use super::coordinator::{Coordinator, Decision, Mode};
+use super::model::opaque_id;
+use super::model::{Call, OutputSnapshot};
+use serde_json::json;
+use serde_json::Value;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc::{Receiver, SyncSender},
+};
+use std::time::Duration;
+pub const RESOURCE_VERSION: &str =
+    include_str!("../../../../firmware/mosaico/main/generated/version.txt");
+pub trait Desktop {
+    fn reconcile(&mut self, snapshot: &OutputSnapshot) -> Result<(), String>;
+    fn quiesce(&mut self) -> Result<(), String>;
+    fn play(&mut self, name: &str) -> Result<(), String>;
+}
+pub struct Engine<D: Desktop> {
+    pub desktop: D,
+    coordinator: Coordinator,
+    snapshot: OutputSnapshot,
+    version: u64,
+    generation: String,
+    boot: Option<String>,
+    dirty: bool,
+    event: u64,
+    nonce: u64,
+    memory: Option<super::memory::MemoryObservation>,
+    memory_uptime: Option<u64>,
+}
+impl<D: Desktop> Engine<D> {
+    pub fn new(desktop: D, now: u64) -> Self {
+        Self {
+            desktop,
+            coordinator: Coordinator::new(now),
+            snapshot: OutputSnapshot::default(),
+            version: 0,
+            generation: String::new(),
+            boot: None,
+            dirty: true,
+            event: 0,
+            nonce: 0,
+            memory: None,
+            memory_uptime: None,
+        }
+    }
+    pub fn take_memory(&mut self) -> Option<super::memory::MemoryObservation> {
+        self.memory.take()
+    }
+    pub fn mode(&self) -> Mode {
+        self.coordinator.mode()
+    }
+    pub fn has_peer(&self) -> bool {
+        self.boot.is_some()
+    }
+    pub fn refresh(&mut self) {
+        self.dirty = true;
+    }
+    pub fn sent(&mut self, now: u64) {
+        self.coordinator.sent(now);
+    }
+    fn visible(&self) -> bool {
+        matches!(self.mode(), Mode::Desktop | Mode::Preparing)
+    }
+    pub fn submit(
+        &mut self,
+        s: OutputSnapshot,
+        calls: Vec<Call>,
+        now: u64,
+        submitted: u64,
+    ) -> Result<Vec<Value>, String> {
+        if std::env::var_os("RED_GREEN_MOSAICO_TRACE").is_some() {
+            eprintln!("mosaico model now={now} submitted={submitted}");
+        }
+        let changed = self.snapshot != s || self.version == 0;
+        self.snapshot = s;
+        if changed {
+            self.version += 1;
+            self.dirty = true;
+        }
+        self.coordinator.model(submitted, self.version);
+        self.tick(now)?;
+        let mut out = vec![];
+        let mut wire_error = None;
+        if changed && self.has_peer() {
+            match self.snapshot.wire(&self.generation, self.version) {
+                Ok(wire) => out.push(wire),
+                Err(e) => {
+                    self.disconnected(now);
+                    wire_error = Some(e);
+                }
+            }
+        }
+        if now.saturating_sub(submitted) > 2000 {
+            return wire_error.map_or(Ok(out), Err);
+        }
+        for call in calls {
+            let Some(pet) = self.snapshot.pets.iter().find(|p| p.sid == call.sid) else {
+                continue;
+            };
+            let Some((skin, state)) = call.name.split_once('-') else {
+                continue;
+            };
+            if !["robot", "crab", "cat"].contains(&skin)
+                || !["awaiting", "aborted", "your_turn", "completed"].contains(&state)
+                || pet.model["skin"] != skin
+            {
+                continue;
+            }
+            self.event += 1;
+            if self.mode() == Mode::Device {
+                out.push(json!({"type":"call","boot":self.boot,"generation":self.generation,"nonce":self.nonce,"event":self.event,"session":opaque_id(&call.sid),"name":call.name}));
+            } else if self.visible() {
+                self.desktop.play(&call.name)?;
+            }
+            // 交接/回退期间的叫声丢弃，不能稍后补发。
+        }
+        wire_error.map_or(Ok(out), Err)
+    }
+    pub fn message(&mut self, message: Value, now: u64) -> Result<Vec<Value>, String> {
+        match message["type"].as_str() {
+            Some("hello") => {
+                let compatible = message["app"] == super::protocol::APP_ID
+                    && message["protocol"] == super::protocol::PROTOCOL_VERSION
+                    && message["assets"] == RESOURCE_VERSION
+                    && message["board"] == "v1.2"
+                    && message["display_ok"] == true
+                    && message["audio_ok"] == true;
+                if !compatible {
+                    return Err("Mosaico 应用、资源或硬件不兼容".into());
+                }
+                let boot = message["boot"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && s.len() <= 64)
+                    .ok_or("设备启动 ID 无效")?;
+                if self.boot.as_deref() == Some(boot) {
+                    return Ok(vec![]);
+                }
+                if self.has_peer() {
+                    self.disconnected(now);
+                    return Err("设备启动代次变化".into());
+                }
+                if !self.coordinator.ready(now, true) {
+                    return Ok(vec![]);
+                }
+                static GENERATIONS: AtomicU64 = AtomicU64::new(1);
+                self.generation = format!(
+                    "g{now:x}-{:x}-{:x}",
+                    std::process::id(),
+                    GENERATIONS.fetch_add(1, Ordering::Relaxed)
+                );
+                self.boot = Some(boot.into());
+                self.nonce = 0;
+                self.memory = None;
+                self.memory_uptime = None;
+                let snapshot = self.snapshot.wire(&self.generation, self.version)?;
+                Ok(vec![
+                    json!({"type":"bind","boot":boot,"generation":self.generation,"protocol":1,"assets":RESOURCE_VERSION}),
+                    snapshot,
+                ])
+            }
+            Some("lease_request") => {
+                if !self.has_peer()
+                    || message["generation"] != self.generation
+                    || message["boot"].as_str() != self.boot.as_deref()
+                {
+                    return Ok(vec![]);
+                }
+                let nonce = message["nonce"].as_u64().ok_or("nonce 无效")?;
+                let version = message["version"].as_u64().ok_or("快照版本无效")?;
+                let decision =
+                    self.coordinator
+                        .request(now, nonce, version, message["healthy"] == true);
+                if decision == Decision::None {
+                    return Ok(vec![]);
+                }
+                let stopped = decision == Decision::Grant || self.desktop.quiesce().is_ok();
+                if let Some((nonce, version)) = self.coordinator.grant(now, stopped) {
+                    self.nonce = nonce;
+                    if let Some(sample) = super::memory::MemorySample::parse(&message["memory"]) {
+                        if self
+                            .memory_uptime
+                            .is_none_or(|last| sample.uptime_ms >= last.saturating_add(60_000))
+                        {
+                            self.memory_uptime = Some(sample.uptime_ms);
+                            self.memory = Some(super::memory::MemoryObservation {
+                                boot: self.boot.clone().unwrap(),
+                                generation: self.generation.clone(),
+                                sample,
+                            });
+                        }
+                    }
+                    return Ok(vec![
+                        json!({"type":"grant","boot":self.boot,"generation":self.generation,"nonce":nonce,"version":version}),
+                    ]);
+                }
+                self.dirty = true;
+                self.tick(now)?;
+                Ok(vec![])
+            }
+            Some("release") => {
+                if message["generation"] == self.generation
+                    && message["boot"].as_str() == self.boot.as_deref()
+                {
+                    self.disconnected(now);
+                }
+                Ok(vec![])
+            }
+            Some("applied") => Ok(vec![]),
+            _ => Err("未知设备消息".into()),
+        }
+    }
+    pub fn tick(&mut self, now: u64) -> Result<(), String> {
+        let previous = self.mode();
+        self.coordinator.tick(now);
+        if self.mode() != previous {
+            self.dirty = true;
+        }
+        if matches!(self.mode(), Mode::Desktop | Mode::Fallback) {
+            self.boot = None;
+            self.memory = None;
+        }
+        if self.visible() && self.dirty {
+            self.desktop.reconcile(&self.snapshot)?;
+            self.dirty = false;
+        }
+        Ok(())
+    }
+    pub fn disconnected(&mut self, now: u64) {
+        self.coordinator.disconnect(now);
+        self.boot = None;
+        self.memory = None;
+        self.dirty = true;
+    }
+}
+
+pub enum Command {
+    Submit {
+        snapshot: OutputSnapshot,
+        calls: Vec<Call>,
+        at: u64,
+    },
+    Refresh,
+}
+pub struct Control(pub SyncSender<Command>);
+
+fn process_commands<D: Desktop>(
+    engine: &mut Engine<D>,
+    rx: &Receiver<Command>,
+    clock: impl Fn() -> u64,
+) -> Result<Vec<Value>, String> {
+    let mut out = vec![];
+    // 先消费更新，避免旧窗口持续失败时阻塞能移除它的新快照。
+    // 每轮最多处理 8 条，submit/tick 仍检查授权期限。
+    for _ in 0..8 {
+        match rx.try_recv() {
+            Ok(Command::Submit {
+                snapshot,
+                calls,
+                at,
+            }) => {
+                out.extend(engine.submit(snapshot, calls, clock(), at)?);
+            }
+            Ok(Command::Refresh) => engine.refresh(),
+            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err("输出控制通道已关闭".into())
+            }
+        }
+    }
+    engine.tick(clock())?;
+    Ok(out)
+}
+
+// Darwin RAW 包含睡眠时间；UPTIME_RAW/Instant 在睡眠期间停走，不能用于授权。
+pub fn now_ms() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    #[cfg(target_os = "macos")]
+    let clock = libc::CLOCK_MONOTONIC_RAW;
+    #[cfg(not(target_os = "macos"))]
+    let clock = libc::CLOCK_BOOTTIME;
+    unsafe {
+        libc::clock_gettime(clock, &mut ts);
+    }
+    ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
+}
+
+pub fn run<D: Desktop>(desktop: D, rx: Receiver<Command>, log: impl Fn(&str)) {
+    use super::transport::Link;
+    let mut engine = Engine::new(desktop, now_ms());
+    let recorder = super::memory::Recorder::start()
+        .map_err(|e| log(&format!("mosaico 内存记录未启用: {e}")))
+        .ok();
+    let mut link: Option<Link> = None;
+    let mut next_scan = 0;
+    let mut opened = 0;
+    let mut last_mode = engine.mode();
+    let mut last_error = String::new();
+    loop {
+        let started = now_ms();
+        let result = (|| -> Result<(), String> {
+            let had_peer = engine.has_peer();
+            let out = process_commands(&mut engine, &rx, now_ms)?;
+            if had_peer && !engine.has_peer() {
+                link = None;
+                next_scan = started + 1000;
+            }
+            if let Some(l) = link.as_mut() {
+                for v in out {
+                    l.send(&v)?;
+                }
+            }
+            if link.is_none() && engine.mode() == Mode::Desktop && started >= next_scan {
+                next_scan = started + 1000;
+                if let Some(path) = super::transport::discover().into_iter().next() {
+                    link = Some(Link::open(&path)?);
+                    opened = started;
+                }
+            }
+            if let Some(l) = link.as_mut() {
+                for message in l.read()? {
+                    if std::env::var_os("RED_GREEN_MOSAICO_TRACE").is_some() {
+                        eprintln!("mosaico RX now={} {message}", now_ms());
+                    }
+                    for v in engine.message(message, now_ms())? {
+                        let grant = v["type"] == "grant";
+                        let result = l.send(&v);
+                        if grant {
+                            engine.sent(now_ms());
+                        } // 包括失败与可能部分写入的时刻。
+                        result?;
+                    }
+                    if let Some(observation) = engine.take_memory() {
+                        if let Some(recorder) = &recorder {
+                            recorder.submit(observation);
+                        }
+                    }
+                }
+                if !engine.has_peer() && now_ms().saturating_sub(opened) > 2000 {
+                    return Err("设备应用未就绪".into());
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            if e != last_error {
+                log(&format!("mosaico: {e}"));
+                last_error = e;
+            }
+            engine.disconnected(now_ms());
+            link = None;
+            next_scan = now_ms() + 1000;
+        }
+        if engine.mode() != last_mode {
+            log(&format!("mosaico output: {:?}", engine.mode()));
+            last_mode = engine.mode();
+        }
+        std::thread::sleep(Duration::from_millis(
+            50u64.saturating_sub(now_ms().saturating_sub(started)),
+        ));
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::super::model::Pet;
+    use super::*;
+    use serde_json::json;
+    #[derive(Default)]
+    struct Screen {
+        visible: bool,
+        ids: Vec<String>,
+        calls: usize,
+        fail_hide: bool,
+        fail_if_present: Option<String>,
+    }
+    impl Desktop for Screen {
+        fn reconcile(&mut self, s: &OutputSnapshot) -> Result<(), String> {
+            if s.pets
+                .iter()
+                .any(|p| Some(&p.sid) == self.fail_if_present.as_ref())
+            {
+                return Err("window creation failed".into());
+            }
+            self.visible = true;
+            self.ids = s.pets.iter().map(|p| p.sid.clone()).collect();
+            Ok(())
+        }
+        fn quiesce(&mut self) -> Result<(), String> {
+            if self.fail_hide {
+                return Err("hide failed".into());
+            }
+            self.visible = false;
+            Ok(())
+        }
+        fn play(&mut self, _: &str) -> Result<(), String> {
+            self.calls += 1;
+            Ok(())
+        }
+    }
+    fn snapshot(id: &str) -> OutputSnapshot {
+        OutputSnapshot {
+            pets: vec![Pet {
+                sid: id.into(),
+                slot: 0,
+                model: json!({"project":"工具箱","source":"codex","skin":"cat","state":"running"}),
+            }],
+            ..Default::default()
+        }
+    }
+    fn call(id: &str) -> Call {
+        Call {
+            sid: id.into(),
+            name: "cat-awaiting".into(),
+        }
+    }
+    fn hello() -> Value {
+        json!({"type":"hello","app":"red-green.mosaico","protocol":1,"assets":RESOURCE_VERSION,"boot":"boot1","board":"v1.2","display_ok":true,"audio_ok":true})
+    }
+    fn request(g: &str, nonce: u64) -> Value {
+        json!({"type":"lease_request","boot":"boot1","generation":g,"nonce":nonce,"version":1,"healthy":true})
+    }
+    fn connect(e: &mut Engine<Screen>) -> String {
+        e.submit(snapshot("a"), vec![], 2500, 2500).unwrap();
+        e.tick(2500).unwrap();
+        let out = e.message(hello(), 2500).unwrap();
+        let g = out.iter().find(|v| v["type"] == "bind").unwrap()["generation"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(e.message(request(&g, 1), 2500).unwrap().is_empty());
+        g
+    }
+    #[test]
+    fn hides_before_grant_and_restores_only_latest_snapshot_without_replay() {
+        let mut e = Engine::new(Screen::default(), 0);
+        let g = connect(&mut e);
+        assert!(e.desktop.visible);
+        let out = e.message(request(&g, 2), 3000).unwrap();
+        assert!(out.iter().any(|v| v["type"] == "grant"));
+        assert!(!e.desktop.visible);
+        let calls = e
+            .submit(snapshot("b"), vec![call("b")], 3200, 3200)
+            .unwrap();
+        assert!(!e.desktop.visible);
+        assert_eq!(e.desktop.calls, 0);
+        assert_eq!(calls.iter().filter(|v| v["type"] == "call").count(), 1);
+        e.disconnected(3300);
+        e.tick(5499).unwrap();
+        assert!(!e.desktop.visible);
+        e.tick(5500).unwrap();
+        assert!(e.desktop.visible);
+        assert_eq!(e.desktop.ids, vec!["b"]);
+        assert_eq!(e.desktop.calls, 0);
+    }
+    #[test]
+    fn failed_hide_and_wrong_generation_never_authorize() {
+        let mut e = Engine::new(
+            Screen {
+                fail_hide: true,
+                ..Default::default()
+            },
+            0,
+        );
+        let g = connect(&mut e);
+        assert!(e
+            .message(request("old-generation", 2), 3000)
+            .unwrap()
+            .is_empty());
+        assert!(e.message(request(&g, 2), 3000).unwrap().is_empty());
+        assert!(e.desktop.visible);
+        e.submit(snapshot("a"), vec![call("a")], 3100, 3100)
+            .unwrap();
+        assert_eq!(e.desktop.calls, 1);
+    }
+    #[test]
+    fn stale_queued_calls_and_mismatched_resources_stay_silent() {
+        let mut e = Engine::new(Screen::default(), 0);
+        e.tick(2500).unwrap();
+        e.submit(snapshot("a"), vec![call("a")], 5000, 2500)
+            .unwrap();
+        assert_eq!(e.desktop.calls, 0);
+        let mut h = hello();
+        h["assets"] = json!("old");
+        assert!(e.message(h, 5000).is_err());
+        assert!(e.desktop.visible);
+    }
+    #[test]
+    fn device_capacity_limits_do_not_silence_desktop_calls() {
+        let mut e = Engine::new(Screen::default(), 0);
+        let mut s = snapshot("a");
+        s.pets[0].model["project"] = json!("长".repeat(70));
+        let result = e.submit(s, vec![call("a")], 2500, 2500);
+        assert_eq!(e.desktop.calls, 1, "设备不支持的名称不能阻止电脑发声");
+        assert!(result.is_ok());
+        assert!(e.desktop.visible);
+        assert!(!e.has_peer());
+    }
+    #[test]
+    fn failed_old_window_does_not_block_a_new_snapshot_that_removes_it() {
+        let mut e = Engine::new(
+            Screen {
+                fail_if_present: Some("a".into()),
+                ..Default::default()
+            },
+            0,
+        );
+        assert!(e.submit(snapshot("a"), vec![], 2500, 2500).is_err());
+        e.disconnected(2500);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        tx.send(Command::Submit {
+            snapshot: OutputSnapshot::default(),
+            calls: vec![],
+            at: 2600,
+        })
+        .unwrap();
+        let result = process_commands(&mut e, &rx, || 2600);
+        assert!(
+            result.is_ok(),
+            "新快照必须能替换导致建窗失败的旧快照: {result:?}"
+        );
+        assert!(e.desktop.visible);
+        assert!(e.snapshot.pets.is_empty());
+        assert!(e.desktop.ids.is_empty());
+    }
+    #[test]
+    fn rejected_device_snapshot_preserves_desktop_sound_but_respects_active_lease() {
+        for active in [false, true] {
+            let mut e = Engine::new(Screen::default(), 0);
+            let g = connect(&mut e);
+            if active {
+                e.message(request(&g, 2), 3000).unwrap();
+            }
+            let mut s = snapshot("a");
+            s.pets[0].model["project"] = json!("长".repeat(70));
+            assert!(e.submit(s, vec![call("a")], 3100, 3100).is_err());
+            assert_eq!(e.desktop.calls, usize::from(!active));
+            assert!(!e.has_peer());
+            e.tick(5500).unwrap();
+            assert!(e.desktop.visible);
+            assert_eq!(e.desktop.calls, usize::from(!active));
+        }
+    }
+    fn memory_sample(uptime: u64) -> Value {
+        json!({"uptime_ms":uptime,"firmware":"test-build","sessions":1,
+            "idle":true,"screen_on":false,
+            "internal":{"free":100000,"largest":50000,"minimum":90000},
+            "psram":{"free":3000000,"largest":2500000,"minimum":2900000}})
+    }
+    #[test]
+    fn memory_diagnostics_preserve_grants_and_reject_untrusted_or_invalid_samples() {
+        let mut e = Engine::new(Screen::default(), 0);
+        let g = connect(&mut e);
+        let mut req = request(&g, 2);
+        req["memory"] = memory_sample(60000);
+        assert_eq!(e.message(req.clone(), 3000).unwrap()[0]["type"], "grant");
+        let sample = e
+            .take_memory()
+            .expect("accepted lease must yield memory sample");
+        assert_eq!(sample.boot, "boot1");
+        assert_eq!(sample.sample.internal.free, 100000);
+        assert!(!sample.sample.screen_on);
+        assert!(e.take_memory().is_none());
+        e.sent(3000);
+        for (index, mutation) in [
+            "duplicate",
+            "old_boot",
+            "old_generation",
+            "invalid_heap",
+            "malformed",
+            "too_soon",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let now = 3500 + index as u64 * 500;
+            e.submit(snapshot("a"), vec![], now, now).unwrap();
+            let mut req = request(&g, index as u64 + 3);
+            req["memory"] = memory_sample(120000);
+            match *mutation {
+                "duplicate" => req["memory"]["uptime_ms"] = json!(60000),
+                "old_boot" => req["boot"] = json!("old"),
+                "old_generation" => req["generation"] = json!("old"),
+                "invalid_heap" => req["memory"]["internal"]["largest"] = json!(200000),
+                "malformed" => req["memory"]["psram"]["free"] = json!(-1),
+                "too_soon" => req["memory"]["uptime_ms"] = json!(60001),
+                _ => unreachable!(),
+            }
+            let out = e.message(req, now).unwrap();
+            if mutation.starts_with("old_") {
+                assert!(out.is_empty());
+                assert!(e.take_memory().is_none());
+                assert_eq!(
+                    e.message(request(&g, index as u64 + 3), now).unwrap()[0]["type"],
+                    "grant"
+                );
+            } else {
+                assert_eq!(out[0]["type"], "grant", "{mutation}");
+            }
+            e.sent(now);
+            assert!(e.take_memory().is_none(), "{mutation}");
+        }
+        e.submit(snapshot("a"), vec![], 6500, 6500).unwrap();
+        let mut req = request(&g, 10);
+        req["memory"] = memory_sample(120000);
+        assert_eq!(e.message(req, 6500).unwrap()[0]["type"], "grant");
+        assert_eq!(e.take_memory().unwrap().sample.uptime_ms, 120000);
+    }
+}

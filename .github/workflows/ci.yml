@@ -15,6 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: 安装资源导出工具
+        run: pnpm --dir app install --frozen-lockfile
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -28,6 +35,13 @@ jobs:
         run: |
           cargo test --manifest-path app/src-tauri/Cargo.toml --lib
           node --test app/tests/*.test.js
+
+      - name: Mosaico 设备核心与真实串口集成
+        run: |
+          sh firmware/mosaico/tests/run.sh
+          cargo build --manifest-path app/src-tauri/Cargo.toml --example mosaico_probe
+          python3 scripts/mosaico-simulator.py
+          python3 -m unittest discover -s scripts/tests -p 'test_mosaico_memory_report.py'
 
       - name: JS/Shell 语法检查
         run: |

@@ -14,3 +14,4 @@ notify = "6"
 libc = "0.2"
 tungstenite = "0.28"
 toml_edit = "0.25"
+serialport = { version = "4.10.1", default-features = false }

@@ -11,7 +11,12 @@ use std::sync::{LazyLock, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 mod codex_terminals;
+mod desktop_output;
 mod ghostty;
+use red_green::output::{
+    model::{Call, OutputSnapshot},
+    runtime::{self, Control},
+};
 
 static CODEX: LazyLock<Mutex<Snapshot>> = LazyLock::new(|| Mutex::new(Snapshot::default()));
 
@@ -161,7 +166,6 @@ fn ambient_window(
     Ok(())
 }
 
-#[tauri::command]
 fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
     let label = format!("pet-{sid}");
     if app.get_webview_window(&label).is_some() {
@@ -182,7 +186,6 @@ fn ensure_pet(app: AppHandle, sid: String, slot: u32) -> Result<(), String> {
 }
 
 // 用量表只有一个：列的最上面，下缘与 slot 0 宠物窗口隔一个槽位间隙
-#[tauri::command]
 fn ensure_gauge(app: AppHandle) -> Result<(), String> {
     if app.get_webview_window(GAUGE_LABEL).is_some() {
         return Ok(());
@@ -200,11 +203,11 @@ fn ensure_gauge(app: AppHandle) -> Result<(), String> {
     )
 }
 
-#[tauri::command]
-fn remove_gauge(app: AppHandle) {
+fn remove_gauge(app: AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window(GAUGE_LABEL) {
-        let _ = w.close();
+        w.close().map_err(|e| e.to_string())?;
     }
+    Ok(())
 }
 
 // 光标在用量表窗口内时给出窗口内的逻辑坐标，否则 None。
@@ -221,13 +224,6 @@ fn gauge_cursor_local(app: &AppHandle, w: &tauri::WebviewWindow) -> Option<Value
         return None;
     }
     Some(serde_json::json!({ "x": dx, "y": dy }))
-}
-
-#[tauri::command]
-fn remove_pet(app: AppHandle, sid: String) {
-    if let Some(w) = app.get_webview_window(&format!("pet-{sid}")) {
-        let _ = w.close();
-    }
 }
 
 // 日志不能落在 status_dir：那是被 watch 的契约目录（协议规定 app 只读），
@@ -491,23 +487,27 @@ fn frontmost_tty() -> Option<String> {
     frontmost_tty_impl()
 }
 
-// 叫声文件名 = 皮肤-状态（如 crab-your_turn），产物由 scripts/gen-calls.mjs 生成、
-// 随 bundle resources 打包；afplay 需要真实文件路径，所以不走前端资源而走 Resource 目录
 #[tauri::command]
-fn play_call(app: AppHandle, name: String) {
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return;
-    }
-    let Ok(path) = app.path().resolve(
-        format!("calls/{name}.wav"),
-        tauri::path::BaseDirectory::Resource,
-    ) else {
-        return;
-    };
-    let _ = Command::new("afplay").arg(path).spawn();
+fn submit_output(
+    control: tauri::State<'_, Control>,
+    snapshot: OutputSnapshot,
+    calls: Vec<Call>,
+) -> Result<(), String> {
+    control
+        .0
+        .try_send(runtime::Command::Submit {
+            snapshot,
+            calls,
+            at: runtime::now_ms(),
+        })
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn refresh_output(control: tauri::State<'_, Control>) -> Result<(), String> {
+    control
+        .0
+        .try_send(runtime::Command::Refresh)
+        .map_err(|e| e.to_string())
 }
 
 fn codex_home() -> PathBuf {
@@ -609,22 +609,24 @@ fn main() {
         }
         return;
     }
+    let (output_tx, output_rx) = std::sync::mpsc::sync_channel(8);
     tauri::Builder::default()
+        .manage(Control(output_tx))
         .invoke_handler(tauri::generate_handler![
             get_sessions,
             get_usage,
-            ensure_pet,
-            remove_pet,
-            ensure_gauge,
-            remove_gauge,
             focus_terminal,
             frontmost_tty,
-            play_call
+            submit_output,
+            refresh_output
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // pets are ambient: no dock icon, no app switcher entry
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let desktop = desktop_output::DesktopOutput::new(app.handle().clone());
+            std::thread::spawn(move || runtime::run(desktop, output_rx, dbg_log));
 
             let dir = status_dir();
             std::fs::create_dir_all(&dir).ok();

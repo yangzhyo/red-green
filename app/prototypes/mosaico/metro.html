@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- 一次性视觉原型：纯黑＋用量进度条；比较等高条块与大小磁贴。仅模拟数据。 -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mosaico · 黑底与色块 Demo</title>
+  <link rel="stylesheet" href="metro.css?v=screen-corners">
+  <script src="../../ui/sprites.js" defer></script>
+  <script src="../../ui/skins.js" defer></script>
+  <script src="metro.js?v=hero-transition-sync" defer></script>
+</head>
+<body>
+  <header class="page-header"><a href="metro.html">red-green <span>/ Mosaico</span></a><span>视觉 Demo · 模拟数据</span></header>
+  <main>
+    <section class="preview" aria-label="Mosaico 设计预览">
+      <div class="intro"><h1>黑底与色块</h1><p>用量看长度，会话看颜色。主角＋总览保持 61.8 / 38.2。</p></div>
+      <div id="device-space"><div id="device"><div id="screen" aria-label="480×480 模拟设备屏幕"></div></div></div>
+      <div class="caption"><span>480 × 480</span><span id="size-caption">100%</span><span id="corner-caption">圆角近似 R80</span></div>
+      <p class="preview-note">2.16 英寸 AMOLED，有效显示区 38.39 × 38.39 mm。圆角按<a href="https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32s31/esp-mosaico/user_guide.html#related-documents" target="_blank" rel="noopener">官方规格图</a>近似，实际字形与亮度以设备为准。</p>
+    </section>
+    <aside class="controls" aria-label="演示控制">
+      <div class="control-heading"><h2 id="variant-title">A · 等高条块</h2><button id="pause" type="button" aria-pressed="false">暂停动画</button></div>
+      <p id="variant-description"></p>
+      <section id="motion-controls" hidden aria-label="宠物过渡演示">
+        <button id="replay-transition" type="button">立即演示下一次切换</button>
+        <p id="motion-phase" class="live-state" aria-live="off"></p>
+      </section>
+      <label>会话场景<select id="scene"><option value="mixed">五种状态</option><option value="running">全部运行中</option><option value="quiet">完成与空闲</option><option value="attention">异常与待确认</option></select></label>
+      <div class="control-pair"><label>会话数量<select id="count"><option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option></select></label><label>用量来源<select id="source"><option value="0">Codex</option><option value="1">Claude</option></select></label></div>
+      <label>当前主角<select id="focus"></select></label>
+      <label>用量场景<select id="usage-mode"><option value="normal">正常用量</option><option value="high">接近上限 · 92% / 86%</option><option value="unknown">缺失 · 未知</option><option value="stale">过期 · 待更新</option></select></label>
+      <label class="check"><input id="long-name" type="checkbox"> 测试中文长名称</label>
+      <label class="check"><input id="rotate" type="checkbox"> 自动轮播主角与用量</label>
+      <label class="size-label">预览宽度 <output id="size-value">480 px</output><input id="size" type="range" min="160" max="560" step="10" value="480"></label>
+      <section class="geometry-controls" aria-label="屏幕边界预览">
+        <label>屏幕圆角<select id="corner-mode"><option value="80">规格图近似 · R80（16.7%）</option><option value="96">较大圆角校核 · R96（20%）</option></select></label>
+        <label class="check"><input id="safe-area" type="checkbox"> 显示文字安全边界</label>
+        <p class="geometry-note">R80 为图纸近似，R96 用于检查更大的裁切范围。顶部、底部与用量文字已向内留白；虚线距屏幕边界 8 px。</p>
+      </section>
+      <div class="legend" aria-label="状态颜色"><span data-state="awaiting">待确认</span><span data-state="running">运行中</span><span data-state="your_turn">轮到你</span><span data-state="completed">已完成</span><span data-state="aborted">异常中止</span><span data-state="idle">空闲</span></div>
+      <p class="control-note">显示 2 秒 → 淡出 0.4 秒 → 消失 0.2 秒 → 淡入 0.4 秒。整个色块与文字同步变化，位置固定。右侧控件仅用于演示。</p>
+      <p class="live-state" id="live-state" aria-live="polite"></p>
+      <a class="old-demo" href="index.html?variant=hybrid">查看原版布局</a>
+    </aside>
+  </main>
+  <nav class="variant-switcher" aria-label="切换色块布局">
+    <button id="previous" type="button" aria-label="上一个方案">←</button>
+    <button type="button" data-variant="rows">A · 等高条块（已选）</button>
+    <button type="button" data-variant="tiles">B · 大小磁贴</button>
+    <button id="next" type="button" aria-label="下一个方案">→</button>
+  </nav>
+</body>
+</html>
