@@ -62,20 +62,27 @@ fn current_directory_and_incremental_claude_history() {
     let mut reader = LiveSource::new(
         || {
             vec![
-                json!({"project":"同名项目","session_id":"one"}),
+                json!({"project":"同名项目","session_id":"one","state":"awaiting"}),
                 json!({"project":"同名项目","session_id":"two"}),
             ]
         },
         root.clone(),
         root.join("unused"),
     );
-    assert_eq!(reader.sessions().as_array().unwrap().len(), 1);
+    assert_eq!(
+        reader.sessions(),
+        json!([{
+            "key":"claude-one", "project":"同名项目", "source":"Claude Code", "state":"awaiting"
+        }])
+    );
     let page = reader.messages("claude-one", "").unwrap();
+    assert_eq!(page["state"], "awaiting");
     assert_eq!(page["messages"][0]["text"], "第一行");
     let since = format!("since={}", page["since"].as_str().unwrap());
     let answer = "一段中文".repeat(150);
     writeln!(fs::OpenOptions::new().append(true).open(&transcript).unwrap(),"{}",json!({"type":"assistant","sessionId":"one","uuid":"a","parentUuid":"q","message":{"role":"assistant","content":answer}})).unwrap();
     let new = reader.messages("claude-one", &since).unwrap();
+    assert_eq!(new["state"], "awaiting");
     assert_eq!(new["messages"].as_array().unwrap().len(), 1);
     assert_eq!(new["messages"][0]["text"], answer);
     fs::write(&transcript, "").unwrap();

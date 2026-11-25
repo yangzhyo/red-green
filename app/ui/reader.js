@@ -15,6 +15,26 @@ let timer;
 let wantEarlier = false;
 let stopped = false;
 let interrupted = false;
+let currentEntry = null;
+const stateNames = new Map([
+  ['running', '运行中'], ['awaiting', '待确认'], ['your_turn', '轮到你'],
+  ['completed', '已完成'], ['aborted', '异常中止'], ['idle', '空闲'],
+]);
+
+function portrait(entry) {
+  const canvas = document.createElement('canvas');
+  const skin = window.SKINS.pick(entry.project);
+  const pose = stateNames.has(entry.state) ? entry.state : 'idle';
+  // Each view takes one frame so idle pages remain still on e-ink.
+  const frame = window.SPRITES.spec(skin, pose).frames[0];
+  window.SPRITES.draw(canvas, frame, 4);
+  return canvas;
+}
+
+function showPortrait(entry) {
+  el('portrait').replaceChildren(portrait(entry));
+  el('state').textContent = stateNames.get(entry.state) || '';
+}
 
 function status(text) {
   if (el('status').textContent !== text) el('status').textContent = text;
@@ -44,12 +64,19 @@ function display(entry) {
   status('');
   el('latest').hidden = true;
   el('back').hidden = footer.hidden = !entry;
-  el('title').textContent = entry ? entry.project + ' · ' + entry.source : '会话列表';
+  currentEntry = entry;
+  el('portrait').hidden = el('meta').hidden = !entry;
+  el('title').textContent = entry ? entry.project : '会话列表';
+  if (entry) {
+    el('source').textContent = entry.source;
+    showPortrait(entry);
+  }
   if (entry) state.open(entry.key);
   else state.back();
 }
 
 function showList(entries) {
+  if (el('title').textContent !== '会话列表') el('title').textContent = '会话列表';
   status(entries.length ? '' : '等待可读会话');
   const key = state.autoOpen(entries);
   if (key) {
@@ -62,7 +89,19 @@ function showList(entries) {
   directory = signature;
   const buttons = entries.map(entry => {
     const button = document.createElement('button');
-    button.textContent = entry.project + ' · ' + entry.source + ' · ' + entry.key.slice(-8);
+    const avatar = document.createElement('span');
+    avatar.className = 'portrait';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.append(portrait(entry));
+    const name = document.createElement('strong');
+    name.className = 'session-project';
+    name.textContent = entry.project;
+    const detail = document.createElement('span');
+    detail.className = 'session-detail';
+    detail.textContent = [entry.source, entry.key.slice(-8), stateNames.get(entry.state)].filter(Boolean).join(' · ');
+    const identity = document.createElement('span');
+    identity.append(name, detail);
+    button.append(avatar, identity);
     button.onclick = () => { display(entry); poll(); };
     return button;
   });
@@ -99,6 +138,7 @@ function render(message) {
     article.append(document.createElement('h2'));
   }
   article.firstChild.textContent = message.role === 'user' ? '你' : '助手';
+  article.dataset.role = message.role;
   const lines = message.text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     let line = article.children[i + 1];
@@ -120,6 +160,10 @@ async function tick() {
   const query = earlier ? '?before=' + before : since ? '?since=' + since : '';
   const page = await request('/sessions/' + encodeURIComponent(state.key) + '/messages' + query);
   if (generation !== state.generation) return;
+  if ('state' in page && currentEntry.state !== page.state) {
+    currentEntry.state = page.state;
+    showPortrait(currentEntry);
+  }
   const saved = following ? null : anchor();
   if (page.reset) {
     // Rebuild the visible history before replacing the DOM when the source resets its cursor.
@@ -166,6 +210,7 @@ async function poll() {
         display(null);
         state.manualList = false;
         el('pair').hidden = false;
+        el('title').textContent = '设备配对';
         status('');
       } else if (error.message === '409') {
         display(null);

@@ -122,6 +122,8 @@ fn handle(mut request: Request, pairing: &Mutex<Pairing>, source: &mut impl Sour
                 "text/javascript",
                 include_str!("../../../ui/reader-model.js"),
             )),
+            "/skins.js" => Some(("text/javascript", include_str!("../../../ui/skins.js"))),
+            "/sprites.js" => Some(("text/javascript", include_str!("../../../ui/sprites.js"))),
             "/reader.css" => Some(("text/css", include_str!("../../../ui/reader.css"))),
             _ => None,
         };

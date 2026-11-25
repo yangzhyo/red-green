@@ -5,10 +5,22 @@ use std::{
     sync::Mutex,
 };
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    App,
+    App, Listener,
 };
+
+fn session_summary(sessions: &[serde_json::Value]) -> String {
+    if sessions.is_empty() {
+        return "当前没有会话".into();
+    }
+    let pending = sessions.iter().filter(|s| s["state"] == "awaiting").count();
+    let mut text = format!("当前 {} 个会话", sessions.len());
+    if pending > 0 {
+        text.push_str(&format!(" · {pending} 个待确认"));
+    }
+    text
+}
 
 fn wifi_address() -> Result<SocketAddr, String> {
     let ports = Command::new("/usr/sbin/networksetup")
@@ -45,6 +57,13 @@ fn wifi_address() -> Result<SocketAddr, String> {
 pub fn install(app: &App) -> tauri::Result<()> {
     let item =
         |id: &str, label: &str, enabled| MenuItem::with_id(app, id, label, enabled, None::<&str>);
+    let brand = item("app-name", "red-green", false)?;
+    let summary = item(
+        "app-sessions",
+        &session_summary(&super::read_snapshot()),
+        false,
+    )?;
+    let divider = PredefinedMenuItem::separator(app)?;
     let notice = item(
         "reader-notice",
         "配对设备可阅读当前 Claude Code 和 Codex CLI 会话",
@@ -54,12 +73,25 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let address = item("reader-address", "共享已关闭", false)?;
     let code = item("reader-code", "生成新的配对码", false)?;
     let revoke = item("reader-revoke", "解除设备配对", false)?;
-    let menu = Menu::with_items(app, &[&notice, &toggle, &address, &code, &revoke])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &brand, &summary, &divider, &notice, &toggle, &address, &code, &revoke,
+        ],
+    )?;
+    app.listen("sessions-changed", move |event| {
+        if let Ok(sessions) = serde_json::from_str::<Vec<serde_json::Value>>(event.payload()) {
+            let next = session_summary(&sessions);
+            if summary.text().ok().as_ref() != Some(&next) {
+                let _ = summary.set_text(next);
+            }
+        }
+    });
     let service = Mutex::new(None::<Reader>);
-    TrayIconBuilder::with_id("nomad-reader")
-        .icon(tauri::include_image!("icons/reader-menu.png"))
+    TrayIconBuilder::with_id("red-green")
+        .icon(tauri::include_image!("icons/app-menu-template.png"))
         .icon_as_template(true)
-        .tooltip("red-green 会话阅读")
+        .tooltip("red-green · 会话桌面宠物")
         .menu(&menu)
         .on_menu_event(move |_, event| {
             let mut active = service.lock().unwrap();

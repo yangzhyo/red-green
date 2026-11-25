@@ -16,6 +16,16 @@ pub struct LiveSource {
     socket: PathBuf,
     selected: HashMap<String, Selection>,
 }
+#[derive(serde::Serialize)]
+struct DirectoryEntry {
+    key: String,
+    project: String,
+    source: &'static str,
+    state: Option<String>,
+    #[serde(skip)]
+    path: Option<PathBuf>,
+}
+
 struct Selection {
     body: Conversation,
     history: History,
@@ -205,30 +215,31 @@ impl LiveSource {
             .map(|s| s.trim_end_matches('\n').into())
     }
 
-    fn directory(&self) -> Vec<(String, String, String, Option<PathBuf>)> {
+    fn directory(&self) -> Vec<DirectoryEntry> {
         (self.snapshot)()
             .into_iter()
-            .filter_map(|s| {
-                let sid = s["session_id"].as_str()?;
-                let project = s["project"].as_str().unwrap_or("?").to_owned();
-                if s["source"] == "codex" {
-                    if s["reader_has_turn"] == false {
+            .filter_map(|session| {
+                let sid = session["session_id"].as_str()?;
+                let (key, source, path) = if session["source"] == "codex" {
+                    if session["reader_has_turn"] == false {
                         return None;
                     }
-                    let id = sid.strip_prefix("codex-")?;
-                    Some((format!("codex-{id}"), project, "Codex CLI".into(), None))
+                    sid.strip_prefix("codex-")?;
+                    (sid.to_owned(), "Codex CLI", None)
                 } else {
                     let path = PathBuf::from(self.mapping(sid)?);
                     if !path.is_absolute() || !path.is_file() {
                         return None;
                     }
-                    Some((
-                        format!("claude-{sid}"),
-                        project,
-                        "Claude Code".into(),
-                        Some(path),
-                    ))
-                }
+                    (format!("claude-{sid}"), "Claude Code", Some(path))
+                };
+                Some(DirectoryEntry {
+                    key,
+                    source,
+                    path,
+                    project: session["project"].as_str().unwrap_or("?").to_owned(),
+                    state: session["state"].as_str().map(str::to_owned),
+                })
             })
             .collect()
     }
@@ -236,18 +247,10 @@ impl LiveSource {
 
 impl Source for LiveSource {
     fn sessions(&mut self) -> Value {
-        json!(self
-            .directory()
-            .into_iter()
-            .map(
-                |(key, project, source, _)| json!({ "key":key, "project":project, "source":source })
-            )
-            .collect::<Vec<_>>())
+        json!(self.directory())
     }
     fn messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
-        let Some((_, project, source, path)) =
-            self.directory().into_iter().find(|row| row.0 == key)
-        else {
+        let Some(entry) = self.directory().into_iter().find(|row| row.key == key) else {
             if key
                 .strip_prefix("claude-")
                 .and_then(|id| self.mapping(id))
@@ -287,17 +290,17 @@ impl Source for LiveSource {
             .selected
             .entry(key.to_owned())
             .or_insert_with(|| Selection {
-                body: Conversation::new(key, &project, &source),
-                history: if path.is_some() {
+                body: Conversation::new(key, &entry.project, entry.source),
+                history: if entry.path.is_some() {
                     History::Claude(ClaudeFile::default())
                 } else {
                     History::Codex(CodexHistory::default())
                 },
             });
-        match &mut selection.history {
+        let mut page = match &mut selection.history {
             History::Claude(file) => {
                 file.refresh(
-                    &path.ok_or(UNAVAILABLE)?,
+                    &entry.path.ok_or(UNAVAILABLE)?,
                     key.strip_prefix("claude-").ok_or(UNAVAILABLE)?,
                     &mut selection.body,
                 )?;
@@ -315,6 +318,8 @@ impl Source for LiveSource {
                 }
                 result
             }
-        }
+        }?;
+        page["state"] = json!(entry.state);
+        Ok(page)
     }
 }

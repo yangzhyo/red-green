@@ -1,9 +1,40 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>会话阅读</title><link rel="stylesheet" href="/reader.css"></head><body>
-<header><button id="back" hidden>‹ 会话列表</button><h1 id="title">会话阅读</h1></header>
-<p id="status" role="status">正在连接 Mac…</p>
-<form id="pair" hidden><label for="code">输入 Mac 上的六位配对码</label><input id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required><button>配对</button></form>
-<main id="view" tabindex="0"><div id="list"></div><div id="messages"></div></main>
-<footer hidden><button id="prev">上一屏</button><button id="latest" hidden>有新消息 ↓</button><button id="next">下一屏</button></footer>
-<script type="module" src="/reader.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>red-green · 会话阅读</title>
+  <link rel="stylesheet" href="/reader.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="wordmark"><span class="signal" aria-hidden="true"><i></i><i></i><i></i></span>red-green</div>
+    <span class="section-name">会话阅读</span>
+  </header>
+  <section class="session-head" aria-labelledby="title">
+    <div id="portrait" class="portrait" hidden aria-hidden="true"></div>
+    <div class="identity">
+      <h1 id="title">会话列表</h1>
+      <div id="meta" hidden><span id="source"></span><span id="state"></span></div>
+    </div>
+    <button id="back" hidden>‹ 会话列表</button>
+  </section>
+  <p id="status" role="status">正在连接 Mac…</p>
+  <form id="pair" hidden>
+    <label for="code">输入 Mac 上的六位配对码</label>
+    <div class="pair-controls">
+      <input id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
+      <button>配对</button>
+    </div>
+  </form>
+  <main id="view" tabindex="0"><div id="list"></div><div id="messages"></div></main>
+  <footer hidden>
+    <button id="prev">上一屏</button>
+    <button id="latest" hidden>有新消息 ↓</button>
+    <button id="next">下一屏</button>
+  </footer>
+  <script src="/skins.js"></script>
+  <script src="/sprites.js"></script>
+  <script type="module" src="/reader.js"></script>
+</body>
+</html>
