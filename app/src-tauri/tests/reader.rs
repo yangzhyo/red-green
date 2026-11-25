@@ -20,7 +20,12 @@ fn reader_pairing_and_revocation() {
         Arc::new(Mutex::new(Library::default())),
     )
     .unwrap();
-    for path in ["/sessions", "/sessions/demo/messages"] {
+    for path in [
+        "/sessions",
+        "/sessions/demo/messages",
+        "/history",
+        "/history/codex-one/messages",
+    ] {
         assert!(request(&reader, "GET", path, "", "").starts_with("HTTP/1.1 401"));
     }
     let code = reader.new_code();
@@ -226,6 +231,21 @@ fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
         fn messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
             Ok(json!({}))
         }
+        fn history(&mut self, cursor: Option<&str>) -> Result<Value, u16> {
+            Ok(json!({"entries":[],"nextCursor":cursor}))
+        }
+        fn history_messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
+            Ok(json!({"live":false}))
+        }
+        fn resume(
+            &mut self,
+            key: &str,
+            admit: impl FnOnce() -> Result<(), u16>,
+        ) -> Result<Value, u16> {
+            admit()?;
+            self.0.lock().unwrap().push(format!("恢复 {key}"));
+            Ok(json!({"ready":false}))
+        }
         fn send_reply(
             &mut self,
             _: &str,
@@ -258,6 +278,13 @@ fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
     };
     let post =
         |path, body: &Value, cookie| request(&reader, "POST", path, &body.to_string(), cookie);
+    let historical = "/history/codex-one/messages";
+    let resume = "/history/codex-one/resume";
+    assert_eq!(
+        page("/history?cursor=opaque%2B%26%25")["nextCursor"],
+        "opaque+&%"
+    );
+    assert!(page(historical)["resumeTicket"].is_null());
     assert!(page(one)["replyTicket"].is_null());
     assert_eq!(reader.toggle_replies(), Some(true));
     assert!(page(claude)["replyTicket"].is_null());
@@ -267,9 +294,23 @@ fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
     assert!(post(two, &body, cookie).starts_with("HTTP/1.1 412"));
     assert!(post(one, &body, cookie).starts_with("HTTP/1.1 200"));
     assert!(post(one, &body, cookie).starts_with("HTTP/1.1 412"));
+    let historical_page = page(historical);
+    assert!(historical_page["replyTicket"].is_null());
+    let activation = json!({"ticket":historical_page["resumeTicket"]});
+    let wrong_action = json!({"ticket":activation["ticket"],"text":"不能跨用途"});
+    assert!(post(one, &wrong_action, cookie).starts_with("HTTP/1.1 412"));
+    let wrong_ticket = json!({"ticket":page(one)["replyTicket"]});
+    assert!(post(resume, &wrong_ticket, cookie).starts_with("HTTP/1.1 412"));
+    assert!(post("/history/codex-two/resume", &activation, cookie).starts_with("HTTP/1.1 412"));
+    assert!(post(resume, &wrong_action, cookie).starts_with("HTTP/1.1 400"));
+    assert!(post(resume, &activation, "").starts_with("HTTP/1.1 401"));
+    assert!(post(resume, &activation, cookie).starts_with("HTTP/1.1 200"));
+    assert!(post(resume, &activation, cookie).starts_with("HTTP/1.1 412"));
+    let disabled_activation = json!({"ticket":page(historical)["resumeTicket"]});
     let next = json!({"text":"再问", "ticket":page(one)["replyTicket"]});
     assert_eq!(reader.toggle_replies(), Some(false));
     assert!(post(one, &next, cookie).starts_with("HTTP/1.1 403"));
+    assert!(post(resume, &disabled_activation, cookie).starts_with("HTTP/1.1 403"));
     reader.toggle_replies();
     assert!(post(one, &next, cookie).starts_with("HTTP/1.1 412"));
     reader.new_code();
@@ -277,7 +318,7 @@ fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
     reader.toggle_replies();
     reader.revoke().unwrap();
     assert!(post(one, &next, cookie).starts_with("HTTP/1.1 401"));
-    assert_eq!(*sent.lock().unwrap(), ["你好"]);
+    assert_eq!(*sent.lock().unwrap(), ["你好", "恢复 codex-one"]);
 }
 
 #[test]

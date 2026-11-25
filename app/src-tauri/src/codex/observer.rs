@@ -118,7 +118,7 @@ impl Observer {
     }
 }
 
-fn project_name(cwd: &str) -> String {
+pub(crate) fn project_name(cwd: &str) -> String {
     let root = Command::new("git")
         .args(["-C", cwd, "rev-parse", "--show-toplevel"])
         .output()

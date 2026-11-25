@@ -1,0 +1,290 @@
+use red_green::reader::{live::LiveSource, Source};
+use serde_json::{json, Value};
+use std::{
+    cell::RefCell,
+    fs,
+    io::Write,
+    os::unix::net::{UnixListener, UnixStream},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+};
+
+const ID: &str = "019a1234-1234-7123-8123-123456789abc";
+const OTHER: &str = "019a1234-1234-7123-8123-123456789abd";
+const KEY: &str = "codex-019a1234-1234-7123-8123-123456789abc";
+
+thread_local! {
+    static SNAPSHOT: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
+}
+
+struct Backend {
+    root: PathBuf,
+    socket: PathBuf,
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+// 用真实 Unix WebSocket 验证 Reader 与 App Server 的请求边界。
+impl Backend {
+    fn new(handler: impl Fn(&str, &Value, &Path) -> (Value, bool) + Send + Sync + 'static) -> Self {
+        let root = PathBuf::from("/tmp").join(format!("rg-history-{:x}", rand::random::<u64>()));
+        fs::create_dir(&root).unwrap();
+        let socket = root.join("backend.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let cwd = root.clone();
+        let worker = thread::spawn(move || {
+            let handler = Arc::new(handler);
+            let mut clients = Vec::new();
+            for stream in listener.incoming() {
+                if done.load(Ordering::Acquire) {
+                    break;
+                }
+                let stream = stream.unwrap();
+                let handler = handler.clone();
+                let cwd = cwd.clone();
+                clients.push(thread::spawn(move || {
+                    let mut ws = tungstenite::accept(stream).unwrap();
+                    while let Ok(message) = ws.read() {
+                        let r: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                        let (data, switched) = match r["method"].as_str().unwrap() {
+                            "initialize" => (json!({}), false),
+                            "initialized" => continue,
+                            method => handler(method, &r["params"], &cwd),
+                        };
+                        if switched {
+                            ws.send(tungstenite::Message::text(
+                                json!({"method":"account/updated"}).to_string(),
+                            ))
+                            .unwrap();
+                        }
+                        ws.send(tungstenite::Message::text(
+                            json!({"id":r["id"],"result":data}).to_string(),
+                        ))
+                        .unwrap();
+                    }
+                }));
+            }
+            for client in clients {
+                client.join().unwrap();
+            }
+        });
+        Self {
+            root,
+            socket,
+            stop,
+            worker: Some(worker),
+        }
+    }
+
+    fn reader(&self) -> LiveSource {
+        SNAPSHOT.with_borrow_mut(Vec::clear);
+        LiveSource::new(
+            || SNAPSHOT.with_borrow(Clone::clone),
+            self.root.clone(),
+            self.socket.clone(),
+        )
+    }
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = UnixStream::connect(&self.socket);
+        let result = self.worker.take().unwrap().join();
+        fs::remove_dir_all(&self.root).unwrap();
+        if !thread::panicking() {
+            result.unwrap();
+        }
+    }
+}
+
+fn row(id: &str, cwd: &Path) -> Value {
+    json!({"id":id,"cwd":cwd,"name":"会话标题","preview":"初始问题","updatedAt":1234,
+        "source":"cli","ephemeral":false,"parentThreadId":null,"attachedToThreadId":null,
+        "status":{"type":"notLoaded"}})
+}
+
+fn account_scope(params: &Value) {
+    assert_eq!(params["currentAccountOnly"], true);
+    assert_eq!(params["archived"], false);
+    assert_eq!(params["sourceKinds"], json!(["cli", "vscode"]));
+}
+
+#[test]
+fn lists_only_persisted_main_cli_threads_and_preserves_the_server_cursor() {
+    let server = Backend::new(|method, params, _| {
+        assert_eq!(method, "thread/list");
+        account_scope(params);
+        assert_eq!(params["sortKey"], "updated_at");
+        assert_eq!(params["sortDirection"], "desc");
+        assert!(params["limit"].as_u64().is_some_and(|n| n > 0));
+        let main = row(ID, Path::new("/removed/project"));
+        if params["cursor"].is_null() {
+            let mut gui = main;
+            gui["source"] = "vscode".into();
+            gui["originator"] = "readmate-history".into();
+            return (json!({"data":[gui],"nextCursor":"cli-page"}), false);
+        }
+        if params["cursor"] == "older+page" {
+            let mut second = main;
+            second["id"] = OTHER.into();
+            second["name"] = Value::Null;
+            second["source"] = "vscode".into();
+            second["originator"] = "codex-tui".into();
+            return (json!({"data":[second],"nextCursor":null}), false);
+        }
+        assert_eq!(params["cursor"], "cli-page");
+        let mut rows = vec![main.clone()];
+        for (field, value) in [
+            ("source", json!("exec")),
+            ("source", json!({"subagent":"review"})),
+            ("ephemeral", json!(true)),
+            ("parentThreadId", json!(ID)),
+            ("attachedToThreadId", json!(ID)),
+            ("id", json!("bad-id")),
+        ] {
+            let mut skip = main.clone();
+            skip[field] = value;
+            rows.push(skip);
+        }
+        (json!({"data":rows,"nextCursor":"older+page"}), false)
+    });
+    let mut reader = server.reader();
+    assert_eq!(
+        reader.history(None).unwrap(),
+        json!({"entries":[{"key":KEY,"project":"project",
+        "title":"会话标题","updatedAt":1234,"source":"Codex CLI"}],"nextCursor":"older+page"})
+    );
+    let next = reader.history(Some("older+page")).unwrap();
+    assert_eq!(next["entries"][0]["title"], "初始问题");
+    assert_eq!(next["entries"][0]["key"], format!("codex-{OTHER}"));
+    assert!(next["nextCursor"].is_null());
+    assert_eq!(reader.sessions(), json!([]));
+}
+
+#[test]
+fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
+    let directory_exists = Arc::new(AtomicBool::new(false));
+    let exists = directory_exists.clone();
+    let server = Backend::new(move |method, params, cwd| {
+        assert_eq!(method, "thread/list");
+        account_scope(params);
+        assert_eq!(params["includedThreadIds"], json!([ID]));
+        let mut thread = row(ID, cwd);
+        thread["source"] = "vscode".into();
+        thread["originator"] = "codex-tui".into();
+        if !exists.load(Ordering::Acquire) {
+            thread["cwd"] = json!(cwd.join("missing"));
+        }
+        (json!({"data":[thread]}), false)
+    });
+    fn launch(cwd: &Path, id: &str, socket: &Path) -> Result<(), u16> {
+        assert_eq!(cwd.join("backend.sock"), socket);
+        assert_eq!(id, ID);
+        if !cwd.join("allow-launch").is_file() {
+            return Err(424);
+        }
+        writeln!(
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(cwd.join("launches"))
+                .unwrap(),
+            "{id}"
+        )
+        .unwrap();
+        Ok(())
+    }
+    let mut reader = server.reader().with_terminal_launcher(launch);
+    assert_eq!(reader.resume(KEY, || panic!("无目录不应启动")), Err(422));
+    // 观察器已绑定终端但还没有读到首个回合，等待该终端即可。
+    SNAPSHOT.with_borrow_mut(|sessions| {
+        sessions.push(
+            json!({"source":"codex","session_id":KEY,"tty":"/dev/ttys001",
+            "reader_has_turn":false}),
+        )
+    });
+    assert_eq!(reader.resume(KEY, || Ok(())), Ok(json!({"ready":false})));
+    SNAPSHOT.with_borrow_mut(Vec::clear);
+    directory_exists.store(true, Ordering::Release);
+    assert_eq!(reader.resume(KEY, || Ok(())), Err(424));
+    fs::write(server.root.join("allow-launch"), "").unwrap();
+    assert_eq!(reader.resume(KEY, || Err(403)), Err(403));
+    assert!(!server.root.join("launches").exists());
+    for _ in 0..2 {
+        assert_eq!(
+            reader.resume(KEY, || Ok(())).unwrap(),
+            json!({"ready":false})
+        );
+    }
+    SNAPSHOT.with_borrow_mut(|sessions| {
+        sessions.push(json!({"source":"codex","session_id":KEY,
+        "project":"已绑定","tty":"/dev/ttys001","state":"idle","reader_has_turn":true}))
+    });
+    assert_eq!(reader.resume(KEY, || Err(403)), Err(403));
+    assert_eq!(
+        reader.resume(KEY, || Ok(())).unwrap(),
+        json!({"ready":true})
+    );
+    assert_eq!(
+        fs::read_to_string(server.root.join("launches")).unwrap(),
+        format!("{ID}\n")
+    );
+}
+
+#[test]
+fn reading_older_turns_rechecks_membership_and_discards_an_account_change_during_content_read() {
+    let access = Arc::new(Mutex::new("visible"));
+    let mode = access.clone();
+    let server = Backend::new(move |method, params, cwd| {
+        let mode = *mode.lock().unwrap();
+        match method {
+            "thread/list" => {
+                account_scope(params);
+                assert_eq!(params["includedThreadIds"], json!([ID]));
+                let id = if mode == "hidden" { OTHER } else { ID };
+                (json!({"data":[row(id,cwd)]}), false)
+            }
+            "thread/turns/list" => {
+                assert_ne!(mode, "hidden", "账号范围以外不能取正文");
+                assert_eq!(params["threadId"], ID);
+                assert_eq!(params["itemsView"], "full");
+                let (id, text, next) = if params["cursor"] == "before" {
+                    ("1", "上文", None)
+                } else {
+                    ("2", "**答复**", Some("before"))
+                };
+                (
+                    json!({"data":[{"id":id,"items":[{"type":"agentMessage","id":"a","text":text}]}],
+                    "nextCursor":next}),
+                    mode == "change",
+                )
+            }
+            method => panic!("历史阅读不应调用 {method}"),
+        }
+    });
+    let mut reader = server.reader();
+    let first = reader.history_messages(KEY, "").unwrap();
+    assert_eq!(first["live"], false);
+    assert_eq!(
+        first["messages"][0]["html"],
+        "<p><strong>答复</strong></p>\n"
+    );
+    let older = format!("before={}", first["before"].as_str().unwrap());
+    assert_eq!(
+        reader.history_messages(KEY, &older).unwrap()["messages"][0]["text"],
+        "上文"
+    );
+    *access.lock().unwrap() = "change";
+    assert_eq!(reader.history_messages(KEY, ""), Err(409));
+    *access.lock().unwrap() = "hidden";
+    assert_eq!(reader.history_messages(KEY, ""), Err(404));
+    assert_eq!(reader.resume(KEY, || panic!("其他账号的会话")), Err(404));
+    assert_eq!(reader.history_messages("codex-invalid", ""), Err(404));
+}
