@@ -6,18 +6,19 @@
   <title>red-green · 会话阅读</title>
   <link rel="stylesheet" href="/reader.css">
 </head>
-<body>
+<body data-page="list">
   <header class="masthead">
-    <div class="wordmark"><span class="signal" aria-hidden="true"><i></i><i></i><i></i></span>red-green</div>
+    <div class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green</div>
     <span class="section-name">会话阅读</span>
   </header>
   <section class="session-head" aria-labelledby="title">
-    <div id="portrait" class="portrait" hidden aria-hidden="true"></div>
-    <div class="identity">
-      <h1 id="title">会话列表</h1>
-      <div id="meta" hidden><span id="source"></span><span id="state"></span></div>
-    </div>
     <button id="back" hidden>‹ 会话列表</button>
+    <div class="head-line">
+      <h1 id="title">桌面伙伴</h1>
+      <span id="count" hidden></span>
+      <span id="state"></span>
+    </div>
+    <div id="source" hidden></div>
   </section>
   <p id="status" role="status">正在连接 Mac…</p>
   <form id="pair" hidden>

@@ -4,6 +4,7 @@ const state = new ReaderState();
 const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
+window.SPRITES.draw(el('brand-crab'), window.SPRITES.spec('crab', 'completed').frames[0], 4);
 const nodes = new Map();
 const sessionRows = new Map();
 let before = null;
@@ -27,13 +28,8 @@ function portrait(entry) {
   const pose = stateNames.has(entry.state) ? entry.state : 'idle';
   // Each view takes one frame so idle pages remain still on e-ink.
   const frame = window.SPRITES.spec(skin, pose).frames[0];
-  window.SPRITES.draw(canvas, frame, 4);
+  window.SPRITES.draw(canvas, frame, 6);
   return canvas;
-}
-
-function showPortrait(entry) {
-  el('portrait').replaceChildren(portrait(entry));
-  el('state').textContent = stateNames.get(entry.state) || '';
 }
 
 function status(text) {
@@ -65,14 +61,15 @@ function display(entry) {
   el('latest').hidden = true;
   el('back').hidden = footer.hidden = !entry;
   currentEntry = entry;
-  el('portrait').hidden = el('meta').hidden = !entry;
-  el('title').textContent = entry ? entry.project : '会话列表';
+  document.body.dataset.page = entry ? 'thread' : 'list';
+  el('count').hidden = true;
+  el('source').hidden = !entry;
+  el('title').textContent = entry ? entry.project : '桌面伙伴';
+  el('state').textContent = entry ? stateNames.get(entry.state) || '' : '';
   if (entry) {
-    el('source').textContent = entry.source;
-    showPortrait(entry);
-  }
-  if (entry) state.open(entry.key);
-  else state.back();
+    el('source').textContent = entry.source + ' / ' + entry.key.slice(-8);
+    state.open(entry.key);
+  } else state.back();
 }
 
 function sessionRow(entry) {
@@ -84,17 +81,22 @@ function sessionRow(entry) {
   name.className = 'session-project';
   const detail = document.createElement('span');
   detail.className = 'session-detail';
+  const shortId = document.createElement('span');
+  shortId.className = 'session-id';
+  shortId.textContent = entry.key.slice(-8);
   const identity = document.createElement('span');
-  identity.append(name, detail);
-  button.append(avatar, identity);
-  const row = { button, name, detail, avatar, entry: null };
+  identity.className = 'identity';
+  identity.append(name, detail, shortId);
+  const badge = document.createElement('span');
+  badge.className = 'session-state';
+  button.append(badge, avatar, identity);
+  const row = { button, name, detail, badge, avatar, entry: null };
   button.onclick = () => { display(row.entry); poll(); };
   sessionRows.set(entry.key, row);
   return row;
 }
 
 function showList(entries) {
-  if (el('title').textContent !== '会话列表') el('title').textContent = '会话列表';
   status(entries.length ? '' : '等待可读会话');
   const key = state.autoOpen(entries);
   if (key) {
@@ -102,6 +104,10 @@ function showList(entries) {
     queued = true;
     return;
   }
+  if (el('title').textContent !== '桌面伙伴') el('title').textContent = '桌面伙伴';
+  const count = entries.length + ' 个会话';
+  if (el('count').textContent !== count) el('count').textContent = count;
+  if (el('count').hidden) el('count').hidden = false;
   const keys = new Set(entries.map(entry => entry.key));
   const list = el('list');
   for (const [key, row] of sessionRows) {
@@ -116,8 +122,9 @@ function showList(entries) {
       row.avatar.replaceChildren(portrait(entry));
     }
     if (!previous || previous.project !== entry.project) row.name.textContent = entry.project;
-    if (!previous || previous.source !== entry.source || previous.state !== entry.state) {
-      row.detail.textContent = [entry.source, entry.key.slice(-8), stateNames.get(entry.state)].filter(Boolean).join(' · ');
+    if (!previous || previous.source !== entry.source) row.detail.textContent = entry.source;
+    if (!previous || previous.state !== entry.state) {
+      row.badge.textContent = stateNames.get(entry.state) || '';
     }
     row.entry = entry;
     if (list.children[i] !== row.button) list.insertBefore(row.button, list.children[i] || null);
@@ -178,7 +185,7 @@ async function tick() {
   if (generation !== state.generation) return;
   if ('state' in page && currentEntry.state !== page.state) {
     currentEntry.state = page.state;
-    showPortrait(currentEntry);
+    el('state').textContent = stateNames.get(page.state) || '';
   }
   const saved = following ? null : anchor();
   if (page.reset) {
@@ -226,6 +233,7 @@ async function poll() {
         display(null);
         state.manualList = false;
         el('pair').hidden = false;
+        document.body.dataset.page = 'pair';
         el('title').textContent = '设备配对';
         status('');
       } else if (error.message === '409') {
@@ -234,7 +242,6 @@ async function poll() {
         queued = true;
       } else if (error.message === '410') {
         stopped = true;
-        el('portrait').hidden = true;
         el('state').textContent = '';
         status(interrupted ? '会话已结束，离线期间可能还有未同步的消息' : '会话已结束');
       } else if (error.message === '404' || error.message === '503') status('会话暂不可用');
@@ -253,6 +260,8 @@ el('pair').onsubmit = async event => {
   try {
     await request('/pair', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:el('code').value})});
     el('pair').hidden = true;
+    document.body.dataset.page = 'list';
+    el('title').textContent = '桌面伙伴';
     el('code').value = '';
     await poll();
   } catch (error) {
