@@ -150,6 +150,25 @@ function showList(entries) {
 }
 
 const readingBlocks = 'p, li, tr, pre, h1, h2, h3, h4, h5, h6, hr';
+function scrolledTables(body) {
+  const positions = [];
+  const tables = body.getElementsByTagName('table');
+  for (let i = 0; i < tables.length; i++) {
+    const table = tables[i];
+    if (table.scrollLeft) positions.push({index: i, heading: table.tHead?.textContent, left: table.scrollLeft});
+  }
+  return positions;
+}
+
+function restoreColumns(body, positions) {
+  const tables = body.getElementsByTagName('table');
+  for (const {index, heading, left} of positions) {
+    let table = tables[index];
+    if (table?.tHead?.textContent !== heading) table = [...tables].find(t => t.tHead?.textContent === heading);
+    if (table && table.scrollLeft !== left) table.scrollLeft = left;
+  }
+}
+
 function anchor() {
   const top = view.getBoundingClientRect().top;
   for (const article of el('messages').children) {
@@ -164,7 +183,7 @@ function anchor() {
       if (rect.top > top) break;
     }
     const node = blocks[index] || article;
-    return {id: article.dataset.id, node, index, offset: node.getBoundingClientRect().top - top};
+    return {id: article.dataset.id, node, index, offset: node.getBoundingClientRect().top - top, tables: scrolledTables(article)};
   }
   return null;
 }
@@ -173,6 +192,7 @@ function restore(saved) {
   if (!saved) return;
   const article = nodes.get(saved.id);
   if (!article) return;
+  restoreColumns(article, saved.tables);
   let node = saved.node;
   if (!article.contains(node)) {
     const blocks = [...article.lastElementChild.querySelectorAll(readingBlocks)];
@@ -183,6 +203,7 @@ function restore(saved) {
 }
 
 function renderBody(body, message) {
+  const columns = scrolledTables(body);
   const template = document.createElement('template');
   if (typeof message.html === 'string') {
     // The Mac escapes raw transcript HTML before serializing the rendered Markdown.
@@ -205,6 +226,7 @@ function renderBody(body, message) {
     else if (!existing.isEqualNode(block)) existing.replaceWith(block);
   });
   while (body.children.length > blocks.length) body.lastElementChild.remove();
+  restoreColumns(body, columns);
 }
 
 function render(message) {
