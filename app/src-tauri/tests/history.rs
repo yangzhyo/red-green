@@ -31,6 +31,16 @@ struct Backend {
 // 用真实 Unix WebSocket 验证 Reader 与 App Server 的请求边界。
 impl Backend {
     fn new(handler: impl Fn(&str, &Value, &Path) -> (Value, bool) + Send + Sync + 'static) -> Self {
+        Self::with_agent(
+            Some("codex-tui/0.171.0 (Mac OS; arm64) (red_green; 0.1.0)"),
+            handler,
+        )
+    }
+
+    fn with_agent(
+        agent: Option<&'static str>,
+        handler: impl Fn(&str, &Value, &Path) -> (Value, bool) + Send + Sync + 'static,
+    ) -> Self {
         let root = PathBuf::from("/tmp").join(format!("rg-history-{:x}", rand::random::<u64>()));
         fs::create_dir(&root).unwrap();
         let socket = root.join("backend.sock");
@@ -53,7 +63,7 @@ impl Backend {
                     while let Ok(message) = ws.read() {
                         let r: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
                         let (data, switched) = match r["method"].as_str().unwrap() {
-                            "initialize" => (json!({}), false),
+                            "initialize" => (json!({"userAgent":agent}), false),
                             "initialized" => continue,
                             method => handler(method, &r["params"], &cwd),
                         };
@@ -114,6 +124,23 @@ fn account_scope(params: &Value) {
     assert_eq!(params["currentAccountOnly"], true);
     assert_eq!(params["archived"], false);
     assert_eq!(params["sourceKinds"], json!(["cli", "vscode"]));
+}
+
+#[test]
+fn unknown_or_older_servers_cannot_read_or_activate_history() {
+    for agent in [
+        None,
+        Some("red_green/0.162.1 (Mac OS; arm64)"),
+        Some("red_green/0.171.0-alpha.1 (Mac OS; arm64)"),
+    ] {
+        let server = Backend::with_agent(agent, |method, _, _| {
+            panic!("未确认账号筛选能力时不能调用 {method}")
+        });
+        let mut reader = server.reader();
+        assert_eq!(reader.history(None), Err(501));
+        assert_eq!(reader.history_messages(KEY, ""), Err(501));
+        assert_eq!(reader.resume(KEY, || panic!("不能启动终端")), Err(501));
+    }
 }
 
 #[test]

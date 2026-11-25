@@ -24,6 +24,10 @@ fn eligible_id(thread: &Value) -> Option<&str> {
 }
 
 fn page(rpc: &mut Rpc, cursor: Option<&str>, id: Option<&str>, fresh: bool) -> Result<Value, u16> {
+    // 旧服务可能静默忽略不认识的 JSON 字段。0.171.0 已验证同时支持账号和 ID 筛选。
+    if rpc.server_version.is_none_or(|v| v < (0, 171, 0)) {
+        return Err(501);
+    }
     let mut params = json!({"currentAccountOnly":true, "archived":false, "sourceKinds":["cli","vscode"],
         "cursor":cursor, "sortKey":"updated_at", "sortDirection":"desc", "limit":24});
     if let Some(id) = id {
