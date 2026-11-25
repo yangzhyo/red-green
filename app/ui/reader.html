@@ -30,10 +30,20 @@
     </div>
   </form>
   <main id="view" tabindex="0"><div id="list"></div><div id="messages"></div></main>
+  <form id="composer" hidden>
+    <label for="reply-text">回复当前 Codex 会话</label>
+    <textarea id="reply-text" rows="2" maxlength="8192" required></textarea>
+    <div class="reply-actions">
+      <span id="reply-info" role="status"></span>
+      <button type="button" id="cancel-reply">收起</button>
+      <button id="send-reply" type="submit">发送</button>
+    </div>
+  </form>
   <footer hidden>
     <button id="prev" disabled>上一屏</button>
     <button id="latest" hidden>有新消息 ↓</button>
     <span id="position" title="当前已经载入的正文"></span>
+    <button id="open-reply" aria-controls="composer" hidden>回复</button>
     <button id="next" disabled>下一屏</button>
   </footer>
   <script src="/skins.js"></script>

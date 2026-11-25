@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tungstenite::{Message, WebSocket};
 
-/// 只读客户端；不会 resume/subscribe，也不会响应用户的审批请求。
+/// 使用本机共享连接，审批请求交给已订阅会话的终端。
 pub struct Rpc {
     ws: WebSocket<UnixStream>,
     next_id: u64,
@@ -89,7 +89,7 @@ impl Rpc {
             {
                 self.thread_closed = true;
             }
-            if v["id"].as_u64() != Some(id) {
+            if v.get("method").is_some() || v["id"].as_u64() != Some(id) {
                 continue;
             }
             if let Some(error) = v.get("error") {

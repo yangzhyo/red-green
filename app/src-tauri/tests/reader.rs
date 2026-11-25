@@ -7,7 +7,7 @@ use std::{
 
 fn request(server: &Reader, method: &str, path: &str, body: &str, cookie: &str) -> String {
     let mut stream = TcpStream::connect(server.address()).unwrap();
-    write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\n\r\n{body}", server.address(), body.len()).unwrap();
+    write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: application/json\r\nOrigin: http://{}\r\nCookie: {cookie}\r\n\r\n{body}", server.address(), body.len(), server.address()).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
@@ -167,6 +167,72 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
     drop(reader);
     responder.join().unwrap();
     std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
+    use red_green::reader::Source;
+    use serde_json::{json, Value};
+    struct Replies(Arc<Mutex<Vec<String>>>);
+    impl Source for Replies {
+        fn sessions(&mut self) -> Value {
+            json!([])
+        }
+        fn messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
+            Ok(json!({}))
+        }
+        fn send_reply(
+            &mut self,
+            _: &str,
+            text: &str,
+            admit: impl FnOnce() -> Result<(), u16>,
+        ) -> Result<(), u16> {
+            admit()?;
+            self.0.lock().unwrap().push(text.into());
+            Ok(())
+        }
+    }
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let reader = Reader::start("127.0.0.1:0".parse().unwrap(), Replies(sent.clone())).unwrap();
+    assert_eq!(reader.toggle_replies(), None);
+    let code = json!({"code":reader.new_code()}).to_string();
+    let response = request(&reader, "POST", "/pair", &code, "");
+    let cookie = response
+        .lines()
+        .find_map(|l| l.strip_prefix("Set-Cookie: "))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let one = "/sessions/codex-one/messages";
+    let two = "/sessions/codex-two/messages";
+    let claude = "/sessions/claude-three/messages";
+    let page = |path| -> Value {
+        let response = request(&reader, "GET", path, "", cookie);
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let post =
+        |path, body: &Value, cookie| request(&reader, "POST", path, &body.to_string(), cookie);
+    assert!(page(one)["replyTicket"].is_null());
+    assert_eq!(reader.toggle_replies(), Some(true));
+    assert!(page(claude)["replyTicket"].is_null());
+    let body = json!({"text":"你好", "ticket":page(one)["replyTicket"]});
+    assert!(post(one, &body, "").starts_with("HTTP/1.1 401"));
+    assert!(post(claude, &body, cookie).starts_with("HTTP/1.1 405"));
+    assert!(post(two, &body, cookie).starts_with("HTTP/1.1 412"));
+    assert!(post(one, &body, cookie).starts_with("HTTP/1.1 200"));
+    assert!(post(one, &body, cookie).starts_with("HTTP/1.1 412"));
+    let next = json!({"text":"再问", "ticket":page(one)["replyTicket"]});
+    assert_eq!(reader.toggle_replies(), Some(false));
+    assert!(post(one, &next, cookie).starts_with("HTTP/1.1 403"));
+    reader.toggle_replies();
+    assert!(post(one, &next, cookie).starts_with("HTTP/1.1 412"));
+    reader.new_code();
+    assert!(page(one)["replyTicket"].is_null());
+    reader.toggle_replies();
+    reader.revoke().unwrap();
+    assert!(post(one, &next, cookie).starts_with("HTTP/1.1 401"));
+    assert_eq!(*sent.lock().unwrap(), ["你好"]);
 }
 
 #[test]
