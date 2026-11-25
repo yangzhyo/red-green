@@ -16,16 +16,21 @@ test('输入法覆盖页面底部时，仍能编辑回复并点到发送和收�
   try {
     const html = await readFile(new URL('reader.html', ui), 'utf8');
     const fixture = `<base href="${ui.href}"><script>
+      const messages = Array.from({length: 45}, (_, i) => ({
+        id: String(i), order: i, role: 'user', text: '这是一段可回看的消息。'
+      }));
       window.fetch = async path => ({
         ok: true, json: async () => path === '/sessions'
           ? [{key:'codex-sample', source:'Codex CLI', project:'示例', state:'idle'}]
-          : {messages:[], replyTicket:'sample'}
+          : {messages, replyTicket:'sample'}
       });
       window.addEventListener('load', () => {
         const open = document.getElementById('open-reply');
         const check = () => {
           if (open.hidden) return setTimeout(check, 10);
           open.click();
+          const view = document.getElementById('view');
+          document.body.dataset.followedTail = view.scrollHeight - view.clientHeight - view.scrollTop < 2;
           const field = document.getElementById('reply-text');
           field.value = '在墨水屏上输入中文';
           field.dispatchEvent(new Event('input'));
@@ -51,6 +56,7 @@ test('输入法覆盖页面底部时，仍能编辑回复并点到发送和收�
       '--user-data-dir=' + join(dir, 'profile'), pathToFileURL(file).href,
     ], {timeout: 20000});
     assert.equal(stdout.match(/<body[^>]*data-ime-result="([^"]+)"/)?.[1], 'pass');
+    assert.equal(stdout.match(/<body[^>]*data-followed-tail="([^"]+)"/)?.[1], 'true', '展开输入框后仍跟随正文末尾');
   } finally {
     await rm(dir, {recursive: true, force: true, maxRetries: 3});
   }

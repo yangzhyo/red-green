@@ -387,6 +387,7 @@ el('open-reply').onclick = () => {
   composer.hidden = false;
   el('open-reply').textContent = '回复';
   updateReply();
+  if (following) view.scrollTop = view.scrollHeight;
   draft.focus();
 };
 el('cancel-reply').onclick = () => {
@@ -452,7 +453,10 @@ view.onscroll = () => {
   if (following) el('latest').hidden = true;
   updateNavigation();
 };
-window.addEventListener('resize', updateNavigation);
+window.addEventListener('resize', () => {
+  if (!composer.hidden && following) view.scrollTop = view.scrollHeight;
+  updateNavigation();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.key) interrupted = true;
   poll();
