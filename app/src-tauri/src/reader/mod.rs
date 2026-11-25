@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+mod markdown;
 mod model;
 mod pairing;
 mod server;

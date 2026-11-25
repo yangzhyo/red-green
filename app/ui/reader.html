@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
   <title>red-green · 会话阅读</title>
   <link rel="stylesheet" href="/reader.css">
 </head>
@@ -12,7 +13,7 @@
     <span class="section-name">会话阅读</span>
   </header>
   <section class="session-head" aria-labelledby="title">
-    <button id="back" hidden>‹ 会话列表</button>
+    <button id="back" aria-label="返回会话列表" hidden><span aria-hidden="true">‹</span><canvas id="back-crab" aria-hidden="true"></canvas><span>列表</span></button>
     <div class="head-line">
       <h1 id="title">桌面伙伴</h1>
       <span id="count" hidden></span>

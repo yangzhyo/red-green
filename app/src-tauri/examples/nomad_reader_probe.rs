@@ -27,17 +27,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "我可以在前面读一段，再回到最新消息吗？".into(),
     );
     let mut long_text = String::from(
-        "可以。用「上一屏」回看代码，记住屏幕最上方的一行。新消息到达后，你仍能从这里继续读。\n",
+        "可以。用「上一屏」回看代码，记住屏幕最上方的一行。新消息到达后，你仍能从这里继续读。\n\n```text\n",
     );
     for n in 1..=60 {
         long_text.push_str(&format!("    第 {n:02} 行    阅读位置示例\n"));
     }
+    long_text.push_str("```");
     demo.put("a1", "assistant", long_text);
     demo.put("q2", "user", "页面保持打开时能收到更新吗？".into());
     demo.put(
         "a2",
         "assistant",
-        "样本将在接下来每隔 12 秒自动追加一段文字。".into(),
+        "### 自动刷新\n\n样本将在接下来每隔 12 秒自动追加一段文字。\n\n1. 在末尾等待，观察**新回复**。\n2. 翻到上一屏，观察阅读位置。\n\n| 阅读位置 | 新消息到达时 |\n| --- | --- |\n| 末尾 | 跟随更新 |\n| 前文 | 留在原处 |".into(),
     );
     let mut library = Library::default();
     library.add(demo);

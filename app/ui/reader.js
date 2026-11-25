@@ -4,7 +4,9 @@ const state = new ReaderState();
 const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
-window.SPRITES.draw(el('brand-crab'), window.SPRITES.spec('crab', 'completed').frames[0], 4);
+const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
+window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
+window.SPRITES.draw(el('back-crab'), brandFrame, 3);
 const nodes = new Map();
 const sessionRows = new Map();
 let before = null;
@@ -79,6 +81,7 @@ function display(entry) {
   el('count').hidden = true;
   el('source').hidden = !entry;
   el('title').textContent = entry ? entry.project : '桌面伙伴';
+  el('title').title = entry ? entry.project : '';
   el('state').textContent = entry ? stateNames.get(entry.state) || '' : '';
   if (entry) {
     el('source').textContent = entry.source + ' / ' + entry.key.slice(-8);
@@ -146,12 +149,22 @@ function showList(entries) {
   });
 }
 
+const readingBlocks = 'p, li, tr, pre, h1, h2, h3, h4, h5, h6, hr';
 function anchor() {
   const top = view.getBoundingClientRect().top;
   for (const article of el('messages').children) {
     if (article.getBoundingClientRect().bottom <= top) continue;
-    const line = [...article.children].find(node => node.getBoundingClientRect().bottom > top);
-    if (line) return {id: article.dataset.id, index: [...article.children].indexOf(line), offset: line.getBoundingClientRect().top - top};
+    const blocks = article.lastElementChild.querySelectorAll(readingBlocks);
+    let index = -1;
+    for (let i = 0; i < blocks.length; i++) {
+      const rect = blocks[i].getBoundingClientRect();
+      if (rect.bottom <= top) continue;
+      if (index !== -1 && rect.top > top) break;
+      index = i;
+      if (rect.top > top) break;
+    }
+    const node = blocks[index] || article;
+    return {id: article.dataset.id, node, index, offset: node.getBoundingClientRect().top - top};
   }
   return null;
 }
@@ -160,8 +173,38 @@ function restore(saved) {
   if (!saved) return;
   const article = nodes.get(saved.id);
   if (!article) return;
-  const line = article.children[Math.min(saved.index, article.children.length - 1)];
-  view.scrollTop += line.getBoundingClientRect().top - view.getBoundingClientRect().top - saved.offset;
+  let node = saved.node;
+  if (!article.contains(node)) {
+    const blocks = [...article.lastElementChild.querySelectorAll(readingBlocks)];
+    const nearest = blocks[Math.min(saved.index, blocks.length - 1)];
+    node = nearest?.isEqualNode(node) ? nearest : blocks.find(block => block.isEqualNode(node)) || nearest || article;
+  }
+  view.scrollTop += node.getBoundingClientRect().top - view.getBoundingClientRect().top - saved.offset;
+}
+
+function renderBody(body, message) {
+  const template = document.createElement('template');
+  if (typeof message.html === 'string') {
+    // The Mac escapes raw transcript HTML before serializing the rendered Markdown.
+    template.innerHTML = message.html;
+    for (const cell of template.content.querySelectorAll('th[style], td[style]')) {
+      cell.dataset.align = cell.style.textAlign;
+      cell.removeAttribute('style');
+    }
+  } else {
+    const plain = document.createElement('p');
+    plain.className = 'plain-text';
+    plain.textContent = message.text;
+    template.content.append(plain);
+  }
+  // Keep finished blocks attached while a streaming reply changes its last block.
+  const blocks = [...template.content.children];
+  blocks.forEach((block, i) => {
+    const existing = body.children[i];
+    if (!existing) body.append(block);
+    else if (!existing.isEqualNode(block)) existing.replaceWith(block);
+  });
+  while (body.children.length > blocks.length) body.lastElementChild.remove();
 }
 
 function render(message) {
@@ -173,17 +216,14 @@ function render(message) {
     const next = [...el('messages').children].find(node => Number(node.dataset.order) > message.order);
     el('messages').insertBefore(article, next || null);
     nodes.set(message.id, article);
-    article.append(document.createElement('h2'));
+    const body = document.createElement('div');
+    body.className = 'markdown';
+    article.append(document.createElement('h2'), body);
   }
-  article.firstChild.textContent = message.role === 'user' ? '你' : '助手';
+  const speaker = message.role === 'user' ? '你' : '助手';
+  if (article.firstChild.textContent !== speaker) article.firstChild.textContent = speaker;
   article.dataset.role = message.role;
-  const lines = message.text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    let line = article.children[i + 1];
-    if (!line) { line = document.createElement('p'); article.append(line); }
-    if (line.textContent !== lines[i]) line.textContent = lines[i];
-  }
-  while (article.children.length > lines.length + 1) article.lastChild.remove();
+  renderBody(article.lastElementChild, message);
 }
 
 async function tick() {
@@ -202,7 +242,7 @@ async function tick() {
     currentEntry.state = page.state;
     el('state').textContent = stateNames.get(page.state) || '';
   }
-  const saved = following ? null : anchor();
+  const saved = !following && (page.reset || page.messages.length) ? anchor() : null;
   if (page.reset) {
     // Rebuild the visible history before replacing the DOM when the source resets its cursor.
     const cursors = new Set();

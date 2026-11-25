@@ -11,14 +11,20 @@ pub struct Listing {
     pub source: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone)]
 pub struct Message {
     pub id: String,
     pub role: String,
     pub text: String,
     pub order: i64,
-    #[serde(skip)]
     version: u64,
+}
+
+impl Message {
+    fn for_reader(&self) -> Value {
+        json!({ "id": self.id, "role": self.role, "text": self.text, "order": self.order,
+            "html": super::markdown::render(&self.text) })
+    }
 }
 
 pub struct Conversation {
@@ -136,6 +142,7 @@ impl Conversation {
                 .messages
                 .iter()
                 .filter(|m| m.version > version)
+                .map(Message::for_reader)
                 .collect();
             return json!({"messages": messages, "since":self.cursor(self.version)});
         }
@@ -145,7 +152,11 @@ impl Conversation {
             .map(|order| self.messages.partition_point(|m| m.order < order));
         let end = before.unwrap_or(self.messages.len());
         let start = end.saturating_sub(PAGE);
-        json!({"messages":&self.messages[start..end], "before": (start > 0 || has_older).then(||self.cursor(self.messages.get(start).map_or(0, |m| m.order))),
+        let messages: Vec<_> = self.messages[start..end]
+            .iter()
+            .map(Message::for_reader)
+            .collect();
+        json!({"messages":messages, "before": (start > 0 || has_older).then(||self.cursor(self.messages.get(start).map_or(0, |m| m.order))),
             "since":self.cursor(self.version), "reset": !query.is_empty() && before.is_none()})
     }
 }
