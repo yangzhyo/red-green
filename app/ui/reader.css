@@ -60,6 +60,10 @@ main { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; }
 .session-project, .session-detail, .session-id { display: block; }
 .session-project { font: 700 1.06rem/1.45 var(--mono); }
 .session-id { font-size: .8rem; }
+body[data-page="thread"] { padding-inline: .375rem; }
+@media (pointer: coarse), (hover: none) {
+  body[data-page="thread"] { max-width: none; }
+}
 body[data-page="thread"] .masthead { display: none; }
 body[data-page="thread"] .session-head {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: .65rem;
@@ -80,7 +84,7 @@ body[data-page="thread"] #state {
 }
 #source { grid-area: 2 / 2; align-self: start; font-size: .75rem; line-height: 1.25; }
 article {
-  display: grid; grid-template-columns: 2.1rem minmax(0, 1fr); column-gap: .7rem;
+  display: grid; grid-template-columns: 1.8rem minmax(0, 1fr); column-gap: .25rem;
   align-items: start; padding: .9rem 0; overflow-wrap: anywhere;
 }
 article[data-role="assistant"] { border-block: 1px solid var(--rule); }
@@ -121,5 +125,4 @@ footer button:disabled { color: #737773; cursor: default; }
   .session-head { padding-block: .65rem; }
   h1 { font-size: 1.22rem; }
   #list button:first-child { gap: .4rem; padding-inline: .45rem; }
-  article { grid-template-columns: 1.8rem minmax(0,1fr); column-gap: .45rem; }
 }
