@@ -110,6 +110,7 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
     let responder = std::thread::spawn(move || {
         let mut ws = tungstenite::accept(listener.accept().unwrap().0).unwrap();
         let mut reads = 0;
+        let mut preflights = 0;
         while let Ok(frame) = ws.read() {
             let r: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
             let data = match r["method"].as_str().unwrap() {
@@ -135,6 +136,29 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
                         }
                         4 => json!({"data":[turn("t3","后续回复"),turn("t2","完整一句")]}),
                         _ => panic!("unexpected read"),
+                    }
+                }
+                "thread/read" => {
+                    preflights += 1;
+                    let status = if preflights == 1 { "active" } else { "idle" };
+                    json!({"thread":{"id":"one","status":{"type":status}}})
+                }
+                "turn/start" => {
+                    assert_eq!(r["params"]["threadId"], "one");
+                    let input = &r["params"]["input"][0];
+                    assert_eq!(input["type"], "text");
+                    match input["text"].as_str().unwrap() {
+                        "明确拒绝" => {
+                            ws.send(tungstenite::Message::text(
+                                json!({"id":r["id"],"error":{"code":-32602,"message":"invalid"}})
+                                    .to_string(),
+                            ))
+                            .unwrap();
+                            continue;
+                        }
+                        "回执丢失" => break,
+                        "追问" => json!({"turn":{"id":"t4"}}),
+                        other => panic!("unexpected input {other}"),
                     }
                 }
                 other => panic!("unexpected RPC {other}"),
@@ -164,6 +188,27 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
         .unwrap();
     assert_eq!(new["messages"][0]["text"], "完整一句");
     assert_eq!(new["messages"][1]["text"], "后续回复");
+    assert_eq!(
+        reader.send_reply("codex-gone", "不可用", || panic!("未派发")),
+        Err(503)
+    );
+    assert_eq!(
+        reader.send_reply("codex-one", "运行中", || panic!("未派发")),
+        Err(409)
+    );
+    assert_eq!(
+        reader.send_reply("codex-one", "提交前撤销", || Err(403)),
+        Err(403)
+    );
+    assert_eq!(
+        reader.send_reply("codex-one", "明确拒绝", || Ok(())),
+        Err(424)
+    );
+    assert_eq!(reader.send_reply("codex-one", "追问", || Ok(())), Ok(()));
+    assert_eq!(
+        reader.send_reply("codex-one", "回执丢失", || Ok(())),
+        Err(502)
+    );
     drop(reader);
     responder.join().unwrap();
     std::fs::remove_file(socket).unwrap();

@@ -21,8 +21,15 @@ let interrupted = false;
 let currentEntry = null;
 let replyTicket = null;
 let sending = false;
-let uncertain = false;
-let replyNotice = '';
+let replyError = '';
+const replyErrors = {
+  '401':'请重新配对', '403':'请在 Mac 上开启回复', '409':'请等待当前回合结束',
+  '410':'会话已结束', '412':'发送凭据已更新，请核对正文后再点发送',
+  '422':'请输入 1 至 8192 个字', '503':'会话暂不可用，可稍后重试',
+  '424':'Codex 未受理，可稍后重试',
+  'unknown':'发送结果待核对，请先查看正文。修改文字后可再发送。',
+};
+const drafts = new Map();
 const composer = el('composer');
 const draft = el('reply-text');
 
@@ -30,11 +37,17 @@ function updateReply() {
   const active = !stopped && !!replyTicket;
   el('open-reply').hidden = !active || !composer.hidden;
   const unavailable = !active || ['running', 'awaiting'].includes(currentEntry?.state);
-  el('send-reply').disabled = sending || uncertain || unavailable || !draft.value.trim();
+  el('send-reply').disabled = sending || replyError === 'unknown' || unavailable || !draft.value.trim();
   draft.readOnly = sending;
+  el('back').disabled = sending;
   el('cancel-reply').disabled = sending;
-  if (!composer.hidden && !sending && !uncertain) {
-    const hint = replyNotice || (!active ? '回复暂不可用' : unavailable ? '请等待当前回合结束' : '');
+  if (!composer.hidden && !sending) {
+    let hint = replyErrors[replyError] || '';
+    if (replyError !== 'unknown') {
+      if (!active && !hint) hint = '回复暂不可用';
+      else if (active && unavailable) hint = '请等待当前回合结束';
+      else if (active && ['401','403','409','503'].includes(replyError)) hint = '上次未发送，可重试';
+    }
     if (el('reply-info').textContent !== hint) el('reply-info').textContent = hint;
   }
 }
@@ -84,6 +97,9 @@ async function request(path, options) {
 }
 
 function display(entry) {
+  if (currentEntry && draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
+  else if (currentEntry) drafts.delete(currentEntry.key);
+  const savedDraft = entry && drafts.get(entry.key);
   el('messages').replaceChildren();
   el('list').replaceChildren();
   sessionRows.clear();
@@ -99,11 +115,11 @@ function display(entry) {
   currentEntry = entry;
   composer.hidden = true;
   replyTicket = null;
-  sending = uncertain = false;
-  replyNotice = '';
-  el('open-reply').textContent = '回复';
-  draft.value = '';
-  el('reply-info').textContent = '';
+  sending = false;
+  replyError = savedDraft?.replyError || '';
+  el('open-reply').textContent = replyError === 'unknown' ? '核对回复' : '回复';
+  draft.value = savedDraft?.text || '';
+  el('reply-info').textContent = replyErrors[replyError] || '';
   updateReply();
   document.body.dataset.page = entry ? 'thread' : 'list';
   el('count').hidden = true;
@@ -340,6 +356,7 @@ async function poll() {
       updateReply();
       if (error.message === '401') {
         display(null);
+        drafts.clear();
         state.manualList = false;
         el('pair').hidden = false;
         document.body.dataset.page = 'pair';
@@ -347,6 +364,7 @@ async function poll() {
         status('');
       } else if (error.message === '409') {
         display(null);
+        drafts.clear();
         status('会话来源已变更，请重新选择');
         queued = true;
       } else if (error.message === '410') {
@@ -376,13 +394,13 @@ el('cancel-reply').onclick = () => {
   updateReply();
   el('open-reply').focus();
 };
-draft.oninput = () => { uncertain = false; replyNotice = ''; updateReply(); };
+draft.oninput = () => { replyError = ''; updateReply(); };
 composer.onsubmit = async event => {
   event.preventDefault();
   if (el('send-reply').disabled) return;
   const generation = state.generation;
   const ticket = replyTicket;
-  replyNotice = '';
+  replyError = '';
   sending = true;
   el('reply-info').textContent = '正在发送…';
   updateReply();
@@ -398,12 +416,7 @@ composer.onsubmit = async event => {
     el('open-reply').textContent = '已发送 · 回复';
   } catch (error) {
     if (state.generation !== generation) return;
-    const known = {'401':'请重新配对', '403':'请在 Mac 上开启回复', '409':'请等待当前回合结束',
-      '410':'会话已结束', '422':'请输入 1 至 8192 个字', '503':'会话暂不可用'};
-    const hint = known[error.message];
-    uncertain = !hint;
-    replyNotice = hint || '发送结果待核对，请先查看正文。修改文字后可再发送。';
-    el('reply-info').textContent = replyNotice;
+    replyError = Object.prototype.hasOwnProperty.call(replyErrors, error.message) ? error.message : 'unknown';
   } finally {
     if (state.generation === generation) {
       sending = false;

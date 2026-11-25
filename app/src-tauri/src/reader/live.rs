@@ -254,7 +254,7 @@ impl Source for LiveSource {
     ) -> Result<(), u16> {
         let id = key.strip_prefix("codex-").ok_or(405u16)?;
         if !self.directory().iter().any(|entry| entry.key == key) {
-            return Err(410);
+            return Err(UNAVAILABLE);
         }
         let Some(Selection {
             history: History::Codex(history),
@@ -267,7 +267,10 @@ impl Source for LiveSource {
         let info = rpc
             .call("thread/read", json!({"threadId":id, "includeTurns":false}))
             .map_err(|_| UNAVAILABLE)?;
-        if rpc.account_changed || rpc.thread_closed || info["thread"]["id"] != id {
+        if rpc.account_changed || info["thread"]["id"] != id {
+            return Err(412);
+        }
+        if rpc.thread_closed {
             return Err(410);
         }
         match info["thread"]["status"]["type"].as_str() {
@@ -278,13 +281,22 @@ impl Source for LiveSource {
         admit()?;
         // Leave the Mac terminal subscribed and responsible for approval requests.
         // Once dispatched, a transport failure is ambiguous. Never replay turn/start.
-        let result = rpc
-            .call(
+        let response = rpc
+            .call_response(
                 "turn/start",
                 json!({"threadId":id, "input":[{"type":"text","text":text,"text_elements":[]}]}),
             )
             .map_err(|_| 502u16)?;
-        result["turn"]["id"].as_str().map(|_| ()).ok_or(502)
+        if matches!(
+            response["error"]["code"].as_i64(),
+            Some(-32600 | -32601 | -32602 | -32001)
+        ) {
+            return Err(424);
+        }
+        response["result"]["turn"]["id"]
+            .as_str()
+            .map(|_| ())
+            .ok_or(502)
     }
 
     fn sessions(&mut self) -> Value {
