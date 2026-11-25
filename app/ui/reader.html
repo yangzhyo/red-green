@@ -12,6 +12,14 @@
     <div class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green</div>
     <span class="section-name">会话阅读</span>
   </header>
+  <form id="composer" hidden>
+    <textarea id="reply-text" aria-label="回复当前 Codex 会话" placeholder="输入回复…" rows="2" maxlength="8192" required></textarea>
+    <div class="reply-actions">
+      <span id="reply-info" role="status"></span>
+      <button type="button" id="cancel-reply">收起</button>
+      <button id="send-reply" type="submit">发送</button>
+    </div>
+  </form>
   <section class="session-head" aria-labelledby="title">
     <button id="back" aria-label="返回会话列表" hidden><span aria-hidden="true">‹</span><canvas id="back-crab" aria-hidden="true"></canvas><span>列表</span></button>
     <div class="head-line">
@@ -30,15 +38,6 @@
     </div>
   </form>
   <main id="view" tabindex="0"><div id="list"></div><div id="messages"></div></main>
-  <form id="composer" hidden>
-    <label for="reply-text">回复当前 Codex 会话</label>
-    <textarea id="reply-text" rows="2" maxlength="8192" required></textarea>
-    <div class="reply-actions">
-      <span id="reply-info" role="status"></span>
-      <button type="button" id="cancel-reply">收起</button>
-      <button id="send-reply" type="submit">发送</button>
-    </div>
-  </form>
   <footer hidden>
     <button id="prev" disabled>上一屏</button>
     <button id="latest" hidden>有新消息 ↓</button>
