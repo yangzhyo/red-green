@@ -5,10 +5,10 @@ const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
 const nodes = new Map();
+const sessionRows = new Map();
 let before = null;
 let since = null;
 let following = true;
-let directory = '';
 let busy = false;
 let queued = false;
 let timer;
@@ -54,7 +54,7 @@ async function request(path, options) {
 function display(entry) {
   el('messages').replaceChildren();
   el('list').replaceChildren();
-  directory = '';
+  sessionRows.clear();
   nodes.clear();
   before = since = null;
   wantEarlier = false;
@@ -75,6 +75,24 @@ function display(entry) {
   else state.back();
 }
 
+function sessionRow(entry) {
+  const button = document.createElement('button');
+  const avatar = document.createElement('span');
+  avatar.className = 'portrait';
+  avatar.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('strong');
+  name.className = 'session-project';
+  const detail = document.createElement('span');
+  detail.className = 'session-detail';
+  const identity = document.createElement('span');
+  identity.append(name, detail);
+  button.append(avatar, identity);
+  const row = { button, name, detail, avatar, entry: null };
+  button.onclick = () => { display(row.entry); poll(); };
+  sessionRows.set(entry.key, row);
+  return row;
+}
+
 function showList(entries) {
   if (el('title').textContent !== '会话列表') el('title').textContent = '会话列表';
   status(entries.length ? '' : '等待可读会话');
@@ -84,28 +102,26 @@ function showList(entries) {
     queued = true;
     return;
   }
-  const signature = JSON.stringify(entries);
-  if (directory === signature) return;
-  directory = signature;
-  const buttons = entries.map(entry => {
-    const button = document.createElement('button');
-    const avatar = document.createElement('span');
-    avatar.className = 'portrait';
-    avatar.setAttribute('aria-hidden', 'true');
-    avatar.append(portrait(entry));
-    const name = document.createElement('strong');
-    name.className = 'session-project';
-    name.textContent = entry.project;
-    const detail = document.createElement('span');
-    detail.className = 'session-detail';
-    detail.textContent = [entry.source, entry.key.slice(-8), stateNames.get(entry.state)].filter(Boolean).join(' · ');
-    const identity = document.createElement('span');
-    identity.append(name, detail);
-    button.append(avatar, identity);
-    button.onclick = () => { display(entry); poll(); };
-    return button;
+  const keys = new Set(entries.map(entry => entry.key));
+  const list = el('list');
+  for (const [key, row] of sessionRows) {
+    if (keys.has(key)) continue;
+    row.button.remove();
+    sessionRows.delete(key);
+  }
+  entries.forEach((entry, i) => {
+    const row = sessionRows.get(entry.key) || sessionRow(entry);
+    const previous = row.entry;
+    if (!previous || previous.project !== entry.project || previous.state !== entry.state) {
+      row.avatar.replaceChildren(portrait(entry));
+    }
+    if (!previous || previous.project !== entry.project) row.name.textContent = entry.project;
+    if (!previous || previous.source !== entry.source || previous.state !== entry.state) {
+      row.detail.textContent = [entry.source, entry.key.slice(-8), stateNames.get(entry.state)].filter(Boolean).join(' · ');
+    }
+    row.entry = entry;
+    if (list.children[i] !== row.button) list.insertBefore(row.button, list.children[i] || null);
   });
-  el('list').replaceChildren(...buttons);
 }
 
 function anchor() {
@@ -218,6 +234,8 @@ async function poll() {
         queued = true;
       } else if (error.message === '410') {
         stopped = true;
+        el('portrait').hidden = true;
+        el('state').textContent = '';
         status(interrupted ? '会话已结束，离线期间可能还有未同步的消息' : '会话已结束');
       } else if (error.message === '404' || error.message === '503') status('会话暂不可用');
       else { interrupted = true; status('正在重连 Mac…'); }

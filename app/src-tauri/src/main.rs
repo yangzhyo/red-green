@@ -493,6 +493,7 @@ fn submit_output(
     control: tauri::State<'_, Control>,
     snapshot: OutputSnapshot,
     calls: Vec<Call>,
+    acknowledged: Option<reader_menu::Acknowledged>,
 ) -> Result<(), String> {
     control
         .0
@@ -501,7 +502,9 @@ fn submit_output(
             calls,
             at: runtime::now_ms(),
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    reader_menu::update_acknowledged(acknowledged.unwrap_or_default());
+    Ok(())
 }
 #[tauri::command]
 fn refresh_output(control: tauri::State<'_, Control>) -> Result<(), String> {

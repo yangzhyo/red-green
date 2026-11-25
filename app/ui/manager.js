@@ -18,7 +18,14 @@ function allocSlot() {
 async function publish(calls = []) {
   const sources = new Set([...pets.values()].map((p) => p.model.source ?? "claude"));
   const now = Date.now();
+  const acknowledged = {};
+  for (const [sid, pet] of pets) {
+    if (pet.acked && pet.model.state === "idle" && pet.since != null) {
+      acknowledged[sid] = pet.since;
+    }
+  }
   await invoke("submit_output", {
+    acknowledged,
     snapshot: {
       pets: [...pets].map(([sid, p]) => ({ sid, slot: p.slot, model: p.model })),
       desktop_usage: USAGE.groups(lastUsage, sources, now),

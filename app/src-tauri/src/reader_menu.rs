@@ -1,14 +1,47 @@
 use red_green::reader::{live::LiveSource, Reader};
 use std::{
+    collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
     process::Command,
-    sync::Mutex,
+    sync::{LazyLock, Mutex},
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     App, Listener,
 };
+
+pub(super) type Acknowledged = HashMap<String, serde_json::Value>;
+static ACKNOWLEDGED: LazyLock<Mutex<Acknowledged>> = LazyLock::new(Mutex::default);
+
+pub fn update_acknowledged(acknowledged: Acknowledged) {
+    *ACKNOWLEDGED.lock().unwrap_or_else(|e| e.into_inner()) = acknowledged;
+}
+
+fn reader_snapshot() -> Vec<serde_json::Value> {
+    let mut sessions = super::read_snapshot();
+    let acknowledged = ACKNOWLEDGED.lock().unwrap_or_else(|e| e.into_inner());
+    apply_acknowledged(&mut sessions, &acknowledged);
+    sessions
+}
+
+fn apply_acknowledged(sessions: &mut [serde_json::Value], acknowledged: &Acknowledged) {
+    for session in sessions {
+        if !matches!(session["state"].as_str(), Some("completed" | "aborted")) {
+            continue;
+        }
+        let Some(sid) = session["session_id"].as_str() else {
+            continue;
+        };
+        let source = session["source"].as_str().unwrap_or("claude");
+        if acknowledged
+            .get(&format!("{source}-{sid}"))
+            .is_some_and(|since| since == &session["since"])
+        {
+            session["state"] = "idle".into();
+        }
+    }
+}
 
 fn session_summary(sessions: &[serde_json::Value]) -> String {
     if sessions.is_empty() {
@@ -115,7 +148,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                     } else {
                         let result = wifi_address().and_then(|addr| {
                             let source = LiveSource::new(
-                                super::read_snapshot,
+                                reader_snapshot,
                                 super::status_dir(),
                                 super::codex_home()
                                     .join("app-server-control/app-server-control.sock"),
@@ -167,4 +200,32 @@ pub fn install(app: &App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reader_shows_only_the_acknowledged_event_as_idle() {
+        let mut sessions = vec![
+            json!({"session_id":"one", "state":"completed", "since":"1"}),
+            json!({"source":"codex", "session_id":"codex-two", "state":"aborted", "since":"2"}),
+            json!({"session_id":"three", "state":"completed", "since":"new"}),
+            json!({"session_id":"four", "state":"your_turn", "since":"4"}),
+        ];
+        let acknowledged = Acknowledged::from([
+            ("claude-one".into(), "1".into()),
+            ("codex-codex-two".into(), "2".into()),
+            ("claude-three".into(), "old".into()),
+            ("claude-four".into(), "4".into()),
+        ]);
+        apply_acknowledged(&mut sessions, &acknowledged);
+        let states: Vec<_> = sessions
+            .iter()
+            .map(|s| s["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, ["idle", "idle", "completed", "your_turn"]);
+    }
 }
