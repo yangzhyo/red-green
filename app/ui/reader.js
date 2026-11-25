@@ -37,6 +37,20 @@ function status(text) {
   if (el('status').hidden !== !text) el('status').hidden = !text;
 }
 
+function updateNavigation() {
+  if (footer.hidden || view.clientHeight === 0) return;
+  const end = view.scrollHeight - view.clientHeight;
+  const atEnd = end - view.scrollTop < 2;
+  const step = view.clientHeight * 0.9;
+  const pages = 1 + Math.ceil(Math.max(0, end - 1) / step);
+  const page = atEnd ? pages : Math.min(pages, 1 + Math.floor((view.scrollTop + 1) / step));
+  const position = nodes.size ? (before ? '本段 ' : '') + page + ' / ' + pages : '';
+  if (el('position').textContent !== position) el('position').textContent = position;
+  const atStart = view.scrollTop <= 1 && (!before || stopped);
+  if (el('prev').disabled !== atStart) el('prev').disabled = atStart;
+  if (el('next').disabled !== atEnd) el('next').disabled = atEnd;
+}
+
 async function request(path, options) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
@@ -69,6 +83,7 @@ function display(entry) {
   if (entry) {
     el('source').textContent = entry.source + ' / ' + entry.key.slice(-8);
     state.open(entry.key);
+    updateNavigation();
   } else state.back();
 }
 
@@ -248,6 +263,7 @@ async function poll() {
       else { interrupted = true; status('正在重连 Mac…'); }
     }
   } finally {
+    updateNavigation();
     busy = false;
     const delay = queued ? 0 : 3000;
     queued = false;
@@ -279,7 +295,9 @@ el('latest').onclick = () => { following = true; el('latest').hidden = true; vie
 view.onscroll = () => {
   following = view.scrollHeight - view.scrollTop - view.clientHeight < 3;
   if (following) el('latest').hidden = true;
+  updateNavigation();
 };
+window.addEventListener('resize', updateNavigation);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.key) interrupted = true;
   poll();

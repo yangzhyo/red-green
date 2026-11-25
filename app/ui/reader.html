@@ -30,9 +30,10 @@
   </form>
   <main id="view" tabindex="0"><div id="list"></div><div id="messages"></div></main>
   <footer hidden>
-    <button id="prev">上一屏</button>
+    <button id="prev" disabled>上一屏</button>
     <button id="latest" hidden>有新消息 ↓</button>
-    <button id="next">下一屏</button>
+    <span id="position" title="当前已经载入的正文"></span>
+    <button id="next" disabled>下一屏</button>
   </footer>
   <script src="/skins.js"></script>
   <script src="/sprites.js"></script>
