@@ -1,3 +1,5 @@
+pub mod claude;
+pub mod codex;
 mod model;
 mod pairing;
 mod server;
