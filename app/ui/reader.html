@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>会话阅读</title><link rel="stylesheet" href="/reader.css"></head><body>
+<header><button id="back" hidden>‹ 会话列表</button><h1 id="title">会话阅读</h1></header>
+<p id="status" role="status">正在连接 Mac…</p>
+<form id="pair" hidden><label for="code">输入 Mac 上的六位配对码</label><input id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required><button>配对</button></form>
+<main id="view" tabindex="0"><div id="list"></div><div id="messages"></div></main>
+<footer hidden><button id="prev">上一屏</button><button id="latest" hidden>有新消息 ↓</button><button id="next">下一屏</button></footer>
+<script type="module" src="/reader.js"></script></body></html>
