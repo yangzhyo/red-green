@@ -57,7 +57,8 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&notice, &toggle, &address, &code, &revoke])?;
     let service = Mutex::new(None::<Reader>);
     TrayIconBuilder::with_id("nomad-reader")
-        .title("读")
+        .icon(tauri::include_image!("icons/reader-menu.png"))
+        .icon_as_template(true)
         .tooltip("red-green 会话阅读")
         .menu(&menu)
         .on_menu_event(move |_, event| {
