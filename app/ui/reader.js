@@ -14,6 +14,7 @@ let queued = false;
 let timer;
 let wantEarlier = false;
 let stopped = false;
+let interrupted = false;
 
 function status(text) {
   if (el('status').textContent !== text) el('status').textContent = text;
@@ -39,6 +40,7 @@ function display(entry) {
   wantEarlier = false;
   following = true;
   stopped = false;
+  interrupted = false;
   status('');
   el('latest').hidden = true;
   el('back').hidden = footer.hidden = !entry;
@@ -120,6 +122,16 @@ async function tick() {
   if (generation !== state.generation) return;
   const saved = following ? null : anchor();
   if (page.reset) {
+    // Rebuild the visible history before replacing the DOM when the source resets its cursor.
+    const cursors = new Set();
+    while (saved && page.before && !page.messages.some(m => m.id === saved.id)) {
+      if (cursors.has(page.before)) break;
+      cursors.add(page.before);
+      const older = await request('/sessions/' + encodeURIComponent(state.key) + '/messages?before=' + page.before);
+      if (generation !== state.generation) return;
+      page.before = older.before;
+      page.messages = older.messages.concat(page.messages);
+    }
     state.messages.clear();
     nodes.clear();
     el('messages').replaceChildren();
@@ -137,6 +149,7 @@ async function tick() {
     }
   }
   if (earlier && saved) view.scrollTop -= view.clientHeight * 0.9;
+  interrupted = false;
 }
 
 async function poll() {
@@ -160,9 +173,9 @@ async function poll() {
         queued = true;
       } else if (error.message === '410') {
         stopped = true;
-        status('会话已结束，离线期间可能还有未同步的消息');
+        status(interrupted ? '会话已结束，离线期间可能还有未同步的消息' : '会话已结束');
       } else if (error.message === '404' || error.message === '503') status('会话暂不可用');
-      else status('正在重连 Mac…');
+      else { interrupted = true; status('正在重连 Mac…'); }
     }
   } finally {
     busy = false;
@@ -195,7 +208,11 @@ view.onscroll = () => {
   following = view.scrollHeight - view.scrollTop - view.clientHeight < 3;
   if (following) el('latest').hidden = true;
 };
-document.addEventListener('visibilitychange', poll);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.key) interrupted = true;
+  poll();
+});
+window.addEventListener('offline', () => { interrupted = true; });
 window.addEventListener('online', poll);
 window.addEventListener('pageshow', poll);
 poll();

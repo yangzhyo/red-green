@@ -9,6 +9,8 @@ pub struct Rpc {
     ws: WebSocket<UnixStream>,
     next_id: u64,
     pub account_changed: bool,
+    watched_thread: Option<String>,
+    pub thread_closed: bool,
 }
 
 impl Rpc {
@@ -28,6 +30,8 @@ impl Rpc {
             ws,
             next_id: 0,
             account_changed: false,
+            watched_thread: None,
+            thread_closed: false,
         };
         rpc.call(
             "initialize",
@@ -38,6 +42,10 @@ impl Rpc {
             .send(Message::text(json!({"method":"initialized"}).to_string()))
             .map_err(|e| e.to_string())?;
         Ok(rpc)
+    }
+
+    pub fn watch_for_close(&mut self, id: &str) {
+        self.watched_thread = Some(id.to_owned());
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -72,6 +80,14 @@ impl Rpc {
                 .map_err(|e| e.to_string())?;
             if v["method"] == "account/updated" {
                 self.account_changed = true;
+            }
+            if matches!(
+                v["method"].as_str(),
+                Some("thread/closed" | "thread/archived")
+            ) && self.watched_thread.is_some()
+                && v["params"]["threadId"].as_str() == self.watched_thread.as_deref()
+            {
+                self.thread_closed = true;
             }
             if v["id"].as_u64() != Some(id) {
                 continue;

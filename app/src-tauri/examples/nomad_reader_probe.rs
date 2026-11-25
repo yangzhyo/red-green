@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match line.trim() {
             "/quit" => break,
             "/code" => println!("一次性配对码 {}", reader.new_code()),
-            "/revoke" => reader.revoke(),
+            "/revoke" => reader.revoke()?,
             "" => (),
             _ => library
                 .lock()

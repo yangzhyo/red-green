@@ -65,10 +65,16 @@ pub fn install(app: &App) -> tauri::Result<()> {
             match event.id.as_ref() {
                 "reader-toggle" => {
                     if let Some(reader) = active.take() {
-                        reader.revoke();
+                        reader.suspend();
                         // An in-flight source read may take time. Keep the macOS event loop responsive.
-                        std::thread::spawn(move || drop(reader));
-                        let _ = toggle.set_text("开启局域网阅读");
+                        let _ = toggle.set_enabled(false);
+                        let _ = toggle.set_text("正在关闭…");
+                        let stopped = toggle.clone();
+                        std::thread::spawn(move || {
+                            drop(reader);
+                            let _ = stopped.set_text("开启局域网阅读");
+                            let _ = stopped.set_enabled(true);
+                        });
                         let _ = address.set_text("共享已关闭");
                         let _ = code.set_text("生成新的配对码");
                         let _ = code.set_enabled(false);
@@ -81,7 +87,17 @@ pub fn install(app: &App) -> tauri::Result<()> {
                                 super::codex_home()
                                     .join("app-server-control/app-server-control.sock"),
                             );
-                            Reader::start(addr, source).map_err(|e| e.to_string())
+                            Reader::with_store(
+                                addr,
+                                source,
+                                Some(
+                                    std::path::PathBuf::from(
+                                        std::env::var_os("HOME").ok_or("未找到用户目录")?,
+                                    )
+                                    .join(".config/red-green/nomad-device"),
+                                ),
+                            )
+                            .map_err(|e| e.to_string())
                         });
                         match result {
                             Ok(reader) => {
@@ -106,8 +122,11 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 }
                 "reader-revoke" => {
                     if let Some(reader) = active.as_ref() {
-                        reader.revoke();
-                        let _ = code.set_text("已解除配对 · 点此生成配对码");
+                        let label = match reader.revoke() {
+                            Ok(()) => "已解除配对 · 点此生成配对码".into(),
+                            Err(e) => format!("撤销未保存：{e}"),
+                        };
+                        let _ = code.set_text(label);
                     }
                 }
                 _ => (),

@@ -36,7 +36,7 @@ fn reader_pairing_and_revocation() {
         .unwrap();
     assert!(request(&reader, "POST", "/pair", &body, "").starts_with("HTTP/1.1 403"));
     assert!(request(&reader, "GET", "/sessions", "", cookie).starts_with("HTTP/1.1 200"));
-    reader.revoke();
+    reader.revoke().unwrap();
     assert!(request(&reader, "GET", "/sessions", "", cookie).starts_with("HTTP/1.1 401"));
 }
 
@@ -78,6 +78,10 @@ fn current_directory_and_incremental_claude_history() {
     let new = reader.messages("claude-one", &since).unwrap();
     assert_eq!(new["messages"].as_array().unwrap().len(), 1);
     assert_eq!(new["messages"][0]["text"], answer);
+    fs::write(&transcript, "").unwrap();
+    let cleared = reader.messages("claude-one", &since).unwrap();
+    assert_eq!(cleared["reset"], true);
+    assert!(cleared["messages"].as_array().unwrap().is_empty());
     fs::write(mapping, "ended\n").unwrap();
     assert_eq!(reader.messages("claude-one", ""), Err(410));
     assert!(reader.sessions().as_array().unwrap().is_empty());
@@ -105,12 +109,19 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
                     reads += 1;
                     let turn = |id: &str, text: &str| json!({"id":id,"items":[{"type":"agentMessage","id":"a","text":text}]});
                     match reads {
-                        1 => json!({"data":[turn("t2","半句")],"nextCursor":"earlier"}),
-                        2 => {
+                        1 => {
+                            ws.send(tungstenite::Message::text(
+                                json!({"method":"account/updated"}).to_string(),
+                            ))
+                            .unwrap();
+                            json!({"data":[turn("discard","作废")]})
+                        }
+                        2 => json!({"data":[turn("t2","半句")],"nextCursor":"earlier"}),
+                        3 => {
                             assert_eq!(r["params"]["cursor"], "earlier");
                             json!({"data":[turn("t1","先前回复")]})
                         }
-                        3 => json!({"data":[turn("t3","后续回复"),turn("t2","完整一句")]}),
+                        4 => json!({"data":[turn("t3","后续回复"),turn("t2","完整一句")]}),
                         _ => panic!("unexpected read"),
                     }
                 }
@@ -128,6 +139,7 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
         socket.clone(),
     );
     let first = reader.messages("codex-one", "").unwrap();
+    assert_eq!(first["messages"][0]["text"], "半句");
     let before = format!("before={}", first["before"].as_str().unwrap());
     let earlier = reader.messages("codex-one", &before).unwrap();
     assert_eq!(earlier["messages"][0]["text"], "先前回复");
@@ -143,4 +155,19 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
     drop(reader);
     responder.join().unwrap();
     std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn an_unmaterialized_codex_session_waits_outside_the_readable_directory() {
+    use red_green::reader::{live::LiveSource, Source};
+    let mut reader = LiveSource::new(
+        || {
+            vec![
+                serde_json::json!({"source":"codex","project":"尚无回合","session_id":"codex-one","reader_has_turn":false}),
+            ]
+        },
+        std::env::temp_dir(),
+        "unused".into(),
+    );
+    assert_eq!(reader.sessions(), serde_json::json!([]));
 }

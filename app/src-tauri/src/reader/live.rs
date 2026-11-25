@@ -2,7 +2,7 @@ use super::{claude::Transcript, codex::visible_items, Conversation, Source};
 use crate::codex::rpc::Rpc;
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufReader, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
@@ -14,10 +14,9 @@ pub struct LiveSource {
     snapshot: fn() -> Vec<Value>,
     status_dir: PathBuf,
     socket: PathBuf,
-    selected: Option<Selection>,
+    selected: HashMap<String, Selection>,
 }
 struct Selection {
-    key: String,
     body: Conversation,
     history: History,
 }
@@ -44,6 +43,7 @@ impl ClaudeFile {
             || meta.len() < self.offset
             || (meta.len() == self.offset && self.modified != modified)
         {
+            body.reconcile(vec![]);
             *self = Self {
                 identity,
                 ..Self::default()
@@ -81,13 +81,25 @@ impl CodexHistory {
         cursor: Option<&str>,
     ) -> Result<(Vec<Value>, Option<String>), u16> {
         if self.rpc.is_none() {
-            self.rpc = Some(Rpc::connect(socket).map_err(|_| UNAVAILABLE)?);
+            let mut rpc = Rpc::connect(socket).map_err(|_| UNAVAILABLE)?;
+            rpc.watch_for_close(id);
+            self.rpc = Some(rpc);
         }
         let rpc = self.rpc.as_mut().unwrap();
-        let result = rpc.call("thread/turns/list",json!({"threadId":id,"cursor":cursor,"limit":16,"sortDirection":"desc","itemsView":"full"}));
+        let params = json!({"threadId":id,"cursor":cursor,"limit":16,"sortDirection":"desc","itemsView":"full"});
+        let mut result = rpc.call("thread/turns/list", params.clone());
+        if rpc.account_changed && self.latest_turn.is_none() {
+            // App Server announces the initial account after initialization. Discard the
+            // overlapping response and establish a fresh baseline on this same connection.
+            rpc.account_changed = false;
+            result = rpc.call("thread/turns/list", params);
+        }
         if rpc.account_changed {
             self.rpc = None;
             return Err(409);
+        }
+        if rpc.thread_closed {
+            return Err(410);
         }
         let page = result.map_err(|_| {
             self.rpc = None;
@@ -176,7 +188,7 @@ impl LiveSource {
             snapshot,
             status_dir,
             socket,
-            selected: None,
+            selected: HashMap::new(),
         }
     }
 
@@ -200,6 +212,9 @@ impl LiveSource {
                 let sid = s["session_id"].as_str()?;
                 let project = s["project"].as_str().unwrap_or("?").to_owned();
                 if s["source"] == "codex" {
+                    if s["reader_has_turn"] == false {
+                        return None;
+                    }
                     let id = sid.strip_prefix("codex-")?;
                     Some((format!("codex-{id}"), project, "Codex CLI".into(), None))
                 } else {
@@ -239,14 +254,39 @@ impl Source for LiveSource {
                 .as_deref()
                 == Some("ended")
             {
-                self.selected = None;
+                self.selected.remove(key);
                 return Err(410);
+            }
+            if let Some(Selection {
+                history: History::Codex(history),
+                ..
+            }) = self.selected.get_mut(key)
+            {
+                if let Some(rpc) = history.rpc.as_mut() {
+                    // Drain pending notifications without reading an unlisted thread's content.
+                    let ping = rpc.call("thread/loaded/list", json!({"limit":1}));
+                    let status = if rpc.account_changed {
+                        409
+                    } else if rpc.thread_closed {
+                        410
+                    } else {
+                        UNAVAILABLE
+                    };
+                    if status != UNAVAILABLE {
+                        self.selected.remove(key);
+                        return Err(status);
+                    }
+                    if ping.is_err() {
+                        history.rpc = None;
+                    }
+                }
             }
             return Err(UNAVAILABLE);
         };
-        if self.selected.as_ref().is_none_or(|s| s.key != key) {
-            self.selected = Some(Selection {
-                key: key.into(),
+        let selection = self
+            .selected
+            .entry(key.to_owned())
+            .or_insert_with(|| Selection {
                 body: Conversation::new(key, &project, &source),
                 history: if path.is_some() {
                     History::Claude(ClaudeFile::default())
@@ -254,8 +294,6 @@ impl Source for LiveSource {
                     History::Codex(CodexHistory::default())
                 },
             });
-        }
-        let selection = self.selected.as_mut().unwrap();
         match &mut selection.history {
             History::Claude(file) => {
                 file.refresh(
@@ -272,8 +310,8 @@ impl Source for LiveSource {
                     query,
                     &mut selection.body,
                 );
-                if matches!(result, Err(409)) {
-                    self.selected = None;
+                if matches!(result, Err(409 | 410)) {
+                    self.selected.remove(key);
                 }
                 result
             }

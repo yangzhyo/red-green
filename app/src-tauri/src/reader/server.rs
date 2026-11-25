@@ -34,11 +34,18 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn start(address: SocketAddr, mut source: impl Source) -> io::Result<Self> {
+    pub fn start(address: SocketAddr, source: impl Source) -> io::Result<Self> {
+        Self::with_store(address, source, None)
+    }
+    pub fn with_store(
+        address: SocketAddr,
+        mut source: impl Source,
+        store: Option<std::path::PathBuf>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
         let address = listener.local_addr()?;
         let server = Arc::new(Server::from_listener(listener, None).map_err(io::Error::other)?);
-        let pairing = Arc::new(Mutex::new(Pairing::default()));
+        let pairing = Arc::new(Mutex::new(Pairing::load(store)?));
         let running = Arc::new(AtomicBool::new(true));
         let worker = {
             let server = server.clone();
@@ -65,7 +72,10 @@ impl Reader {
     pub fn new_code(&self) -> String {
         self.pairing.lock().unwrap().issue()
     }
-    pub fn revoke(&self) {
+    pub fn revoke(&self) -> io::Result<()> {
+        self.pairing.lock().unwrap().revoke()
+    }
+    pub fn suspend(&self) {
         *self.pairing.lock().unwrap() = Pairing::default();
     }
 }
@@ -140,12 +150,13 @@ fn handle(mut request: Request, pairing: &Mutex<Pairing>, source: &mut impl Sour
         {
             serde_json::from_slice::<Attempt>(&bytes)
                 .ok()
-                .and_then(|v| pairing.lock().unwrap().exchange(&v.code))
+                .map(|v| pairing.lock().unwrap().exchange(&v.code))
+                .transpose()
         } else {
-            None
+            Ok(None)
         };
         return match token {
-            Some(token) => reply(
+            Ok(Some(Some(token))) => reply(
                 request,
                 200,
                 JSON,
@@ -154,7 +165,8 @@ fn handle(mut request: Request, pairing: &Mutex<Pairing>, source: &mut impl Sour
                     "nomad_reader={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000"
                 )),
             ),
-            None => reply(request, 403, JSON, "{}".into(), None),
+            Err(_) => reply(request, 503, JSON, "{}".into(), None),
+            _ => reply(request, 403, JSON, "{}".into(), None),
         };
     }
     let cookie = request
