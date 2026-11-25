@@ -39,3 +39,108 @@ fn reader_pairing_and_revocation() {
     reader.revoke();
     assert!(request(&reader, "GET", "/sessions", "", cookie).starts_with("HTTP/1.1 401"));
 }
+
+#[test]
+fn current_directory_and_incremental_claude_history() {
+    use red_green::reader::{live::LiveSource, Source};
+    use serde_json::json;
+    use std::fs;
+    let root = std::env::temp_dir().join(format!("reader-{}", rand::random::<u64>()));
+    fs::create_dir_all(root.join(".reader")).unwrap();
+    let transcript = root.join("fixture.jsonl");
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({"type":"user","sessionId":"one","uuid":"q",
+        "message":{"role":"user","content":"第一行"}})
+        ),
+    )
+    .unwrap();
+    let mapping = root.join(".reader/one");
+    fs::write(&mapping, transcript.to_str().unwrap()).unwrap();
+    let mut reader = LiveSource::new(
+        || {
+            vec![
+                json!({"project":"同名项目","session_id":"one"}),
+                json!({"project":"同名项目","session_id":"two"}),
+            ]
+        },
+        root.clone(),
+        root.join("unused"),
+    );
+    assert_eq!(reader.sessions().as_array().unwrap().len(), 1);
+    let page = reader.messages("claude-one", "").unwrap();
+    assert_eq!(page["messages"][0]["text"], "第一行");
+    let since = format!("since={}", page["since"].as_str().unwrap());
+    let answer = "一段中文".repeat(150);
+    writeln!(fs::OpenOptions::new().append(true).open(&transcript).unwrap(),"{}",json!({"type":"assistant","sessionId":"one","uuid":"a","parentUuid":"q","message":{"role":"assistant","content":answer}})).unwrap();
+    let new = reader.messages("claude-one", &since).unwrap();
+    assert_eq!(new["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(new["messages"][0]["text"], answer);
+    fs::write(mapping, "ended\n").unwrap();
+    assert_eq!(reader.messages("claude-one", ""), Err(410));
+    assert!(reader.sessions().as_array().unwrap().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
+    use red_green::reader::{live::LiveSource, Source};
+    use serde_json::{json, Value};
+    use std::os::unix::net::UnixListener;
+    let socket = std::env::temp_dir().join(format!("rg-{:x}.sock", rand::random::<u64>()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let responder = std::thread::spawn(move || {
+        let mut ws = tungstenite::accept(listener.accept().unwrap().0).unwrap();
+        let mut reads = 0;
+        while let Ok(frame) = ws.read() {
+            let r: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+            let data = match r["method"].as_str().unwrap() {
+                "initialize" => json!({}),
+                "initialized" => continue,
+                "thread/turns/list" => {
+                    assert_eq!(r["params"]["itemsView"], "full");
+                    assert_eq!(r["params"]["threadId"], "one");
+                    reads += 1;
+                    let turn = |id: &str, text: &str| json!({"id":id,"items":[{"type":"agentMessage","id":"a","text":text}]});
+                    match reads {
+                        1 => json!({"data":[turn("t2","半句")],"nextCursor":"earlier"}),
+                        2 => {
+                            assert_eq!(r["params"]["cursor"], "earlier");
+                            json!({"data":[turn("t1","先前回复")]})
+                        }
+                        3 => json!({"data":[turn("t3","后续回复"),turn("t2","完整一句")]}),
+                        _ => panic!("unexpected read"),
+                    }
+                }
+                other => panic!("unexpected RPC {other}"),
+            };
+            ws.send(tungstenite::Message::text(
+                json!({"id":r["id"],"result":data}).to_string(),
+            ))
+            .unwrap();
+        }
+    });
+    let mut reader = LiveSource::new(
+        || vec![json!({"source":"codex","project":"示例","session_id":"codex-one"})],
+        std::env::temp_dir(),
+        socket.clone(),
+    );
+    let first = reader.messages("codex-one", "").unwrap();
+    let before = format!("before={}", first["before"].as_str().unwrap());
+    let earlier = reader.messages("codex-one", &before).unwrap();
+    assert_eq!(earlier["messages"][0]["text"], "先前回复");
+    assert!(earlier["before"].is_null());
+    let new = reader
+        .messages(
+            "codex-one",
+            &format!("since={}", first["since"].as_str().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(new["messages"][0]["text"], "完整一句");
+    assert_eq!(new["messages"][1]["text"], "后续回复");
+    drop(reader);
+    responder.join().unwrap();
+    std::fs::remove_file(socket).unwrap();
+}

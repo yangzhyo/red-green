@@ -11,6 +11,20 @@ use std::{
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+pub trait Source: Send + 'static {
+    fn sessions(&mut self) -> serde_json::Value;
+    fn messages(&mut self, key: &str, query: &str) -> Result<serde_json::Value, u16>;
+}
+
+impl Source for Arc<Mutex<Library>> {
+    fn sessions(&mut self) -> serde_json::Value {
+        self.lock().unwrap().list()
+    }
+    fn messages(&mut self, key: &str, query: &str) -> Result<serde_json::Value, u16> {
+        self.lock().unwrap().messages(key, query).ok_or(404)
+    }
+}
+
 pub struct Reader {
     address: SocketAddr,
     server: Arc<Server>,
@@ -20,7 +34,7 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn start(address: SocketAddr, library: Arc<Mutex<Library>>) -> io::Result<Self> {
+    pub fn start(address: SocketAddr, mut source: impl Source) -> io::Result<Self> {
         let listener = TcpListener::bind(address)?;
         let address = listener.local_addr()?;
         let server = Arc::new(Server::from_listener(listener, None).map_err(io::Error::other)?);
@@ -33,7 +47,7 @@ impl Reader {
             thread::spawn(move || {
                 while running.load(Ordering::Acquire) {
                     let Ok(request) = server.recv() else { break };
-                    handle(request, &pairing, &library);
+                    handle(request, &pairing, &mut source);
                 }
             })
         };
@@ -84,7 +98,7 @@ fn reply(request: Request, status: u16, mime: &str, body: String, cookie: Option
     let _ = request.respond(response);
 }
 const JSON: &str = "application/json";
-fn handle(mut request: Request, pairing: &Mutex<Pairing>, library: &Mutex<Library>) {
+fn handle(mut request: Request, pairing: &Mutex<Pairing>, source: &mut impl Source) {
     let url = request.url().to_owned();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     if request.method() == &Method::Get {
@@ -155,18 +169,20 @@ fn handle(mut request: Request, pairing: &Mutex<Pairing>, library: &Mutex<Librar
     if request.method() != &Method::Get {
         return reply(request, 405, JSON, "{}".into(), None);
     }
-    let data = {
-        let library = library.lock().unwrap();
-        match path {
-            "/sessions" => Some(library.list()),
-            _ => path
-                .strip_prefix("/sessions/")
-                .and_then(|p| p.strip_suffix("/messages"))
-                .and_then(|key| library.messages(key, query)),
-        }
+    let data = match path {
+        "/sessions" => Ok(source.sessions()),
+        _ => path
+            .strip_prefix("/sessions/")
+            .and_then(|p| p.strip_suffix("/messages"))
+            .ok_or(404u16)
+            .and_then(|key| source.messages(key, query)),
     };
+    // A slow source read might have overlapped a revocation on the Mac.
+    if !pairing.lock().unwrap().allows(cookie) {
+        return reply(request, 401, JSON, "{}".into(), None);
+    }
     match data {
-        Some(value) => reply(request, 200, JSON, value.to_string(), None),
-        None => reply(request, 404, JSON, "{}".into(), None),
+        Ok(value) => reply(request, 200, JSON, value.to_string(), None),
+        Err(status) => reply(request, status, JSON, "{}".into(), None),
     }
 }

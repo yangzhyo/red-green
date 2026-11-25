@@ -16,7 +16,7 @@ pub struct Message {
     pub id: String,
     pub role: String,
     pub text: String,
-    pub order: usize,
+    pub order: i64,
     #[serde(skip)]
     version: u64,
 }
@@ -56,26 +56,80 @@ impl Conversation {
             id: id.into(),
             role: role.into(),
             text,
-            order: self.messages.len(),
+            order: self.messages.last().map_or(0, |m| m.order + 1),
             version: self.version,
         });
     }
 
-    fn cursor(&self, value: u64) -> String {
+    fn cursor(&self, value: impl std::fmt::Display) -> String {
         format!("{:x}-{value}", self.generation)
     }
 
-    fn position(&self, cursor: &str) -> Option<u64> {
+    fn position<T: std::str::FromStr>(&self, cursor: &str) -> Option<T> {
         let (generation, value) = cursor.split_once('-')?;
         (u64::from_str_radix(generation, 16).ok()? == self.generation)
             .then(|| value.parse().ok())
             .flatten()
     }
 
-    fn page(&self, query: &str) -> Value {
+    pub(super) fn needs_history(&self, query: &str) -> bool {
+        query
+            .strip_prefix("before=")
+            .and_then(|s| self.position::<i64>(s))
+            .is_some_and(|p| p == self.messages.first().map_or(0, |m| m.order))
+    }
+
+    pub(super) fn prepend(&mut self, rows: Vec<(String, &'static str, String)>) {
+        let start = self.messages.first().map_or(0, |m| m.order) - rows.len() as i64;
+        let mut earlier: Vec<_> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, (id, role, text))| Message {
+                id,
+                role: role.into(),
+                text,
+                order: start + i as i64,
+                version: 0,
+            })
+            .collect();
+        earlier.append(&mut self.messages);
+        self.messages = earlier;
+    }
+
+    pub(super) fn reconcile(&mut self, rows: Vec<(&str, &'static str, &str)>) {
+        if self.messages.len() > rows.len()
+            || self.messages.iter().zip(&rows).any(|(m, r)| m.id != r.0)
+        {
+            self.generation = rand::random();
+            self.messages.clear();
+        }
+        for (i, (id, role, text)) in rows.into_iter().enumerate() {
+            if let Some(msg) = self.messages.get_mut(i) {
+                if msg.text != text {
+                    self.version += 1;
+                    msg.version = self.version;
+                    msg.text = text.into();
+                }
+            } else {
+                self.version += 1;
+                self.messages.push(Message {
+                    id: id.into(),
+                    role: role.into(),
+                    text: text.into(),
+                    order: i as i64,
+                    version: self.version,
+                });
+            }
+        }
+    }
+
+    pub(super) fn page(&self, query: &str) -> Value {
+        self.history_page(query, false)
+    }
+    pub(super) fn history_page(&self, query: &str, has_older: bool) -> Value {
         let since = query
             .strip_prefix("since=")
-            .and_then(|s| self.position(s))
+            .and_then(|s| self.position::<u64>(s))
             .filter(|&v| v <= self.version);
         if let Some(version) = since {
             let messages: Vec<_> = self
@@ -87,12 +141,11 @@ impl Conversation {
         }
         let before = query
             .strip_prefix("before=")
-            .and_then(|s| self.position(s))
-            .and_then(|v| usize::try_from(v).ok())
-            .filter(|&v| v <= self.messages.len());
+            .and_then(|s| self.position::<i64>(s))
+            .map(|order| self.messages.partition_point(|m| m.order < order));
         let end = before.unwrap_or(self.messages.len());
         let start = end.saturating_sub(PAGE);
-        json!({"messages":&self.messages[start..end], "before": (start > 0).then(||self.cursor(start as u64)),
+        json!({"messages":&self.messages[start..end], "before": (start > 0 || has_older).then(||self.cursor(self.messages.get(start).map_or(0, |m| m.order))),
             "since":self.cursor(self.version), "reset": !query.is_empty() && before.is_none()})
     }
 }

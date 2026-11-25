@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 mod codex_terminals;
 mod desktop_output;
 mod ghostty;
+mod reader_menu;
 use red_green::output::{
     model::{Call, OutputSnapshot},
     runtime::{self, Control},
@@ -624,6 +625,7 @@ fn main() {
             // pets are ambient: no dock icon, no app switcher entry
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            reader_menu::install(app)?;
 
             let desktop = desktop_output::DesktopOutput::new(app.handle().clone());
             std::thread::spawn(move || runtime::run(desktop, output_rx, dbg_log));

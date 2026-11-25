@@ -154,6 +154,10 @@ async function poll() {
         state.manualList = false;
         el('pair').hidden = false;
         status('');
+      } else if (error.message === '409') {
+        display(null);
+        status('会话来源已变更，请重新选择');
+        queued = true;
       } else if (error.message === '410') {
         stopped = true;
         status('会话已结束，离线期间可能还有未同步的消息');
