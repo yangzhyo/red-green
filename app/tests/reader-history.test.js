@@ -1,15 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
-
-const chrome = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const ui = new URL('../ui/', import.meta.url);
+import { hasChrome, renderReader } from './reader-browser.js';
 
 // Run the real reader against a three-page directory and a controllable Mac terminal.
 function fixture(scenario) {
@@ -20,7 +11,7 @@ function fixture(scenario) {
     for (let i = 0; i < 400 && !condition(); i++) await sleep(20);
     check(condition(), message);
   }
-  const mac = {granted: true, paired: true, live: false, writes: [], reads: [], state: 'idle', fail: 0};
+  const mac = {generation: 'one', granted: true, paired: true, live: false, writes: [], reads: [], state: 'idle', fail: 0};
   const response = data => ({ok: true, json: async () => data});
   const rows = Array.from({length: 24}, (_, i) => ({
     key: 'codex-' + i, title: '会话标题 ' + i, project: i < 8 ? '项目甲' : 'ProjectB',
@@ -39,10 +30,13 @@ function fixture(scenario) {
     }
     mac.reads.push(url);
     if (url === '/sessions') return response([{key: 'codex-home', project: '当前项目', source: 'Codex CLI', state: 'idle'}]);
-    if (url === '/history') return response({entries: rows.slice(0, 4), nextCursor: 'A+B/='});
+    if (url.startsWith('/history/status?generation=')) {
+      return url.endsWith('=' + mac.generation) ? response({}) : {ok: false, status: 409};
+    }
+    if (url === '/history') return response({generation: mac.generation, entries: rows.slice(0, 4), nextCursor: 'A+B/='});
     if (url.startsWith('/history?cursor=') && mac.directoryError) return {ok: false, status: 503};
-    if (url === '/history?cursor=A%2BB%2F%3D') return response({entries: rows.slice(4, 8), nextCursor: 'last'});
-    if (url === '/history?cursor=last') return response({entries: rows.slice(8), nextCursor: null});
+    if (url === '/history?cursor=A%2BB%2F%3D') return response({generation: mac.generation, entries: rows.slice(4, 8), nextCursor: 'last'});
+    if (url === '/history?cursor=last') return response({generation: mac.generation, entries: rows.slice(8), nextCursor: null});
     if (url.startsWith('/history/')) {
       if (mac.removed) return {ok: false, status: 404};
       const older = url.includes('before=');
@@ -74,23 +68,11 @@ function fixture(scenario) {
 }
 
 async function runReader(scenario) {
-  const dir = await mkdtemp(join(tmpdir(), 'nomad-history-'));
-  try {
-    const html = await readFile(new URL('reader.html', ui), 'utf8');
-    const script = '<base href="' + ui.href + '"><script>(' + fixture + ')(' + scenario + ')</script>';
-    const file = join(dir, 'reader.html');
-    await writeFile(file, html.replaceAll('src="/', 'src="').replaceAll('href="/', 'href="').replace('<head>', '<head>' + script));
-    const {stdout} = await promisify(execFile)(chrome, [
-      '--headless', '--disable-gpu', '--no-first-run', '--allow-file-access-from-files', '--window-size=620,440',
-      '--virtual-time-budget=50000', '--dump-dom', '--user-data-dir=' + join(dir, 'profile'), pathToFileURL(file).href,
-    ], {timeout: 20000});
-    assert.equal(stdout.match(/<body[^>]*data-test-result="([^"]+)"/)?.[1], 'pass');
-  } finally {
-    await rm(dir, {recursive: true, force: true, maxRetries: 3});
-  }
+  const stdout = await renderReader('<script>(' + fixture + ')(' + scenario + ')</script>', 50000);
+  assert.equal(stdout.match(/<body[^>]*data-test-result="([^"]+)"/)?.[1], 'pass');
 }
 
-test('历史跨页查项目，正文只读可翻页，继续原会话后可返回原列表位置', {skip: !existsSync(chrome)}, async () => {
+test('历史跨页查项目，正文只读可翻页，继续原会话后可返回原列表位置', {skip: !hasChrome}, async () => {
   await runReader(async ({el, mac, check, until, refresh}) => {
     const query = el('project-filter');
     query.value = 'projectb';
@@ -139,7 +121,7 @@ test('历史跨页查项目，正文只读可翻页，继续原会话后可返�
   });
 });
 
-test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清除列表', {skip: !existsSync(chrome)}, async () => {
+test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清除列表', {skip: !hasChrome}, async () => {
   await runReader(async ({el, mac, check, until, refresh, sleep}) => {
     mac.granted = false;
     el('history-rows').firstChild.click();
@@ -167,7 +149,7 @@ test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清�
   });
 });
 
-test('更多历史可重试，等待超时不会重启，历史不再可见会清除缓存', {skip: !existsSync(chrome)}, async () => {
+test('更多历史可重试，等待超时不会重启，历史不再可见会清除缓存', {skip: !hasChrome}, async () => {
   await runReader(async ({el, mac, check, until, refresh, sleep}) => {
     mac.directoryError = true;
     el('history-more').click();
@@ -186,5 +168,20 @@ test('更多历史可重试，等待超时不会重启，历史不再可见会�
     refresh();
     await until(() => !el('open-history').hidden && document.body.dataset.page === 'list', '没有退出失效的会话');
     check(!el('messages').children.length && !el('history-rows').children.length, '已失效的会话仍然可见');
+  });
+});
+
+test('Mac 切换账号时历史列表和分页一起失效', {skip: !hasChrome}, async () => {
+  await runReader(async ({el, mac, check, until, refresh}) => {
+    mac.generation = 'two';
+    refresh();
+    await until(() => document.body.dataset.page === 'list', '空闲列表没有发现账号切换');
+    check(!el('history-rows').children.length, '旧账号的标题仍然可见');
+    el('open-history').click();
+    await until(() => el('history-rows').children.length === 4, '无法进入新账号目录');
+    mac.generation = 'three';
+    el('history-more').click();
+    await until(() => document.body.dataset.page === 'list', '下一页来自另一个账号时未清空目录');
+    check(!el('history-rows').children.length, '列表混入了其他账号的会话');
   });
 });

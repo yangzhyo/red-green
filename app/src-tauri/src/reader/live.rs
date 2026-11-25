@@ -7,19 +7,27 @@ use std::{
     io::{BufReader, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
 };
 
 pub(super) const UNAVAILABLE: u16 = 503;
-type TerminalLauncher = fn(&Path, &str, &Path) -> Result<(), u16>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResumeTerminal {
+    Ghostty(String),
+    Terminal(String),
+    Unknown,
+}
+type TerminalLauncher = fn(&Path, &str, &Path) -> Result<ResumeTerminal, u16>;
 pub struct LiveSource {
     snapshot: fn() -> Vec<Value>,
     status_dir: PathBuf,
     socket: PathBuf,
     selected: HashMap<String, Selection>,
     stored: Option<StoredConversation>,
+    history_directory: history::Directory,
     launch: TerminalLauncher,
-    launching: HashMap<String, Instant>,
+    terminal_exists: fn(&ResumeTerminal) -> Result<bool, u16>,
+    thread_terminal_exists: fn(&str, &[String]) -> Result<bool, u16>,
+    launching: HashMap<String, ResumeTerminal>,
 }
 
 struct StoredConversation {
@@ -212,13 +220,23 @@ impl LiveSource {
             socket,
             selected: HashMap::new(),
             stored: None,
+            history_directory: history::Directory::default(),
             launch: |_, _, _| Err(424),
+            terminal_exists: |_| Err(503),
+            thread_terminal_exists: |_, _| Err(503),
             launching: HashMap::new(),
         }
     }
 
-    pub fn with_terminal_launcher(mut self, launch: TerminalLauncher) -> Self {
+    pub fn with_terminal_launcher(
+        mut self,
+        launch: TerminalLauncher,
+        terminal_exists: fn(&ResumeTerminal) -> Result<bool, u16>,
+        thread_terminal_exists: fn(&str, &[String]) -> Result<bool, u16>,
+    ) -> Self {
         self.launch = launch;
+        self.terminal_exists = terminal_exists;
+        self.thread_terminal_exists = thread_terminal_exists;
         self
     }
 
@@ -276,7 +294,11 @@ impl LiveSource {
 
 impl Source for LiveSource {
     fn history(&mut self, cursor: Option<&str>) -> Result<Value, u16> {
-        history::list(&self.socket, cursor)
+        self.history_directory.list(&self.socket, cursor)
+    }
+
+    fn history_status(&mut self, generation: &str) -> Result<Value, u16> {
+        self.history_directory.status(generation)
     }
 
     fn history_messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
@@ -312,7 +334,7 @@ impl Source for LiveSource {
     fn resume(&mut self, key: &str, admit: impl FnOnce() -> Result<(), u16>) -> Result<Value, u16> {
         let id = history::thread_id(key)?;
         let mut rpc = Rpc::connect(&self.socket).map_err(|_| UNAVAILABLE)?;
-        let thread = history::find(&mut rpc, id, true)?;
+        history::find(&mut rpc, id, true)?;
         if let Some(ready) = self.terminal_ready(key) {
             admit()?;
             if ready {
@@ -320,19 +342,28 @@ impl Source for LiveSource {
             }
             return Ok(json!({"ready":ready}));
         }
+        if let Some(terminal) = self.launching.get(id) {
+            if (self.terminal_exists)(terminal)? {
+                admit()?;
+                return Ok(json!({"ready":false}));
+            }
+            self.launching.remove(id);
+        }
+        let loaded = history::loaded_threads(&mut rpc)?;
+        if loaded.iter().any(|thread| thread == id) && (self.thread_terminal_exists)(id, &loaded)? {
+            admit()?;
+            return Ok(json!({"ready":false}));
+        }
+        // 查询原生终端可能较慢，在打开标签前再次取得当前账号下的原目录。
+        let thread = history::find(&mut rpc, id, false)?;
         let cwd = thread["cwd"]
             .as_str()
             .map(Path::new)
             .filter(|path| path.is_absolute() && path.is_dir())
             .ok_or(422u16)?;
-        self.launching
-            .retain(|_, since| since.elapsed() < Duration::from_secs(30));
-        let pending = self.launching.entry(id.into());
         admit()?;
-        if let std::collections::hash_map::Entry::Vacant(slot) = pending {
-            (self.launch)(cwd, id, &self.socket)?;
-            slot.insert(Instant::now());
-        }
+        let tab = (self.launch)(cwd, id, &self.socket)?;
+        self.launching.insert(id.into(), tab);
         Ok(json!({"ready":false}))
     }
 

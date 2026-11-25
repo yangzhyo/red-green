@@ -1,6 +1,7 @@
 //! 客户端自己的标题绑定 thread → tty；不使用后台服务继承的终端环境变量。
 use crate::{ghostty, osascript, tmux, tty_host, Host};
 use red_green::codex::model;
+use red_green::reader::live::ResumeTerminal;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt;
@@ -15,19 +16,32 @@ const NEW_GHOSTTY_TAB: &str = r#"on run argv
         set command of cfg to launchCommand
         set initial working directory of cfg to launchDirectory
         if (count windows) > 0 then
-            new tab in front window with configuration cfg
+            set newTab to new tab in front window with configuration cfg
+            try
+                return id of focused terminal of newTab
+            end try
         else
-            new window with configuration cfg
+            set newWindow to new window with configuration cfg
+            try
+                return id of focused terminal of selected tab of newWindow
+            end try
         end if
+        return ""
     end tell
 end run"#;
 
 const NEW_TERMINAL_WINDOW: &str = r#"on run argv
     set launchCommand to item 1 of argv
-    tell application "Terminal" to do script launchCommand
+    tell application "Terminal"
+        set newTab to do script launchCommand
+        try
+            return tty of newTab
+        end try
+        return ""
+    end tell
 end run"#;
 
-pub fn resume(cwd: &Path, id: &str, socket: &Path) -> Result<(), u16> {
+pub fn resume(cwd: &Path, id: &str, socket: &Path) -> Result<ResumeTerminal, u16> {
     if !model::is_thread_id(id) {
         return Err(400);
     }
@@ -37,17 +51,147 @@ pub fn resume(cwd: &Path, id: &str, socket: &Path) -> Result<(), u16> {
     let codex = codex_executable().ok_or(424u16)?;
     let command = resume_command(&codex, cwd, id, socket).ok_or(424u16)?;
     let open = |script: &str| {
-        Command::new("/usr/bin/osascript")
+        let output = Command::new("/usr/bin/osascript")
             .args(["-e", script, &command])
             .arg(cwd)
             .output()
-            .is_ok_and(|out| out.status.success())
+            .ok()?;
+        if output.status.success() {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else if String::from_utf8_lossy(&output.stderr).contains("(-1712)") {
+            // Apple Event 超时仍可能已经创建了标签。保留未知凭证，避免再开一次。
+            Some(String::new())
+        } else {
+            None
+        }
     };
-    if (running("ghostty") || running("Ghostty")) && open(NEW_GHOSTTY_TAB) {
-        return Ok(());
+    if running("Ghostty") {
+        if let Some(id) = open(NEW_GHOSTTY_TAB) {
+            return Ok(if model::is_thread_id(&id) {
+                ResumeTerminal::Ghostty(id)
+            } else {
+                ResumeTerminal::Unknown
+            });
+        }
     }
     // Terminal 的 do script 省略目标会创建新窗口；不会在用户选中的标签内执行。
-    open(NEW_TERMINAL_WINDOW).then_some(()).ok_or(424)
+    let tty = open(NEW_TERMINAL_WINDOW).ok_or(424u16)?;
+    Ok(if tty.starts_with("/dev/tty") {
+        ResumeTerminal::Terminal(tty)
+    } else {
+        ResumeTerminal::Unknown
+    })
+}
+
+pub fn terminal_exists(terminal: &ResumeTerminal) -> Result<bool, u16> {
+    let (script, identity) = match terminal {
+        ResumeTerminal::Ghostty(id) => (
+            r#"on run argv
+            if not (application "Ghostty" is running) then return false
+            set surfaceId to item 1 of argv
+            tell application "Ghostty" to return (exists terminal id surfaceId)
+        end run"#,
+            id,
+        ),
+        ResumeTerminal::Terminal(tty) => (
+            r#"on run argv
+            if not (application "Terminal" is running) then return false
+            set device to item 1 of argv
+            tell application "Terminal"
+                repeat with w in windows
+                    if (tty of tabs of w) contains device then return true
+                end repeat
+                return false
+            end tell
+        end run"#,
+            tty,
+        ),
+        ResumeTerminal::Unknown => return Err(424),
+    };
+    match script_query(script, identity)?.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(424),
+    }
+}
+
+fn script_query(script: &str, arg: &str) -> Result<String, u16> {
+    let out = Command::new("/usr/bin/osascript")
+        .args(["-e", script, arg])
+        .output()
+        .map_err(|_| 424u16)?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        .ok_or(424)
+}
+
+// 桌面快照可能恰好在刷新。只用真实 Codex TTY 上的标题，对照同一服务的已加载线程消歧。
+pub fn thread_terminal_exists(id: &str, loaded: &[String]) -> Result<bool, u16> {
+    if !model::is_thread_id(id) || !loaded.iter().any(|thread| thread == id) {
+        return Ok(false);
+    }
+    let live = live_codex_ttys()?;
+    if live.is_empty() {
+        return Ok(false);
+    }
+    let mut rows = tmux(&["list-panes", "-a", "-F", "#{pane_tty}\t#{pane_title}"])
+        .map_or_else(Vec::new, |out| parse_rows(&out));
+    let mut uncertain = false;
+    for (name, script) in [
+        (
+            "Terminal",
+            r#"on run argv
+            set prefixHint to item 1 of argv
+            set output to ""
+            tell application "Terminal"
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        set titleText to custom title of t
+                        if titleText contains prefixHint then set output to output & tty of t & (ASCII character 9) & titleText & linefeed
+                    end repeat
+                end repeat
+            end tell
+            return output
+        end run"#,
+        ),
+        (
+            "Ghostty",
+            r#"on run argv
+            set prefixHint to item 1 of argv
+            set output to ""
+            tell application "Ghostty"
+                repeat with t in terminals
+                    set titleText to name of t
+                    if titleText contains prefixHint then set output to output & («class Gtty» of t) & (ASCII character 9) & titleText & linefeed
+                end repeat
+            end tell
+            return output
+        end run"#,
+        ),
+    ] {
+        match process_running(name) {
+            Ok(false) => continue,
+            Ok(true) => match script_query(script, &id[..29]) {
+                Ok(out) => rows.extend(parse_rows(&out)),
+                Err(_) => uncertain = true,
+            },
+            Err(_) => uncertain = true,
+        }
+    }
+    for (hint, _) in model::bindings(&rows, &live) {
+        if id.starts_with(&hint) {
+            if model::resolve_id(&hint, loaded).as_deref() == Some(id) {
+                return Ok(true);
+            }
+            uncertain = true;
+        }
+    }
+    if uncertain {
+        Err(424)
+    } else {
+        Ok(false)
+    }
 }
 
 fn codex_executable() -> Option<PathBuf> {
@@ -108,19 +252,26 @@ fn resume_command(codex: &Path, cwd: &Path, id: &str, socket: &Path) -> Option<S
         .then(|| format!("/bin/bash -c '{}'", script.replace('\'', "'\\''")))
 }
 
-pub fn discover() -> BTreeMap<String, String> {
-    let output = match Command::new("ps").args(["-axo", "tty=,comm="]).output() {
-        Ok(o) if o.status.success() => o,
-        _ => return BTreeMap::new(),
-    };
-    let live: HashSet<String> = String::from_utf8_lossy(&output.stdout)
+fn live_codex_ttys() -> Result<HashSet<String>, u16> {
+    let output = Command::new("ps")
+        .args(["-axo", "tty=,comm="])
+        .output()
+        .map_err(|_| 424u16)?;
+    if !output.status.success() {
+        return Err(424);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
             let (tty, command) = line.trim().split_once(char::is_whitespace)?;
             (tty != "??" && std::path::Path::new(command.trim()).file_name()?.to_str()? == "codex")
                 .then(|| format!("/dev/{tty}"))
         })
-        .collect();
+        .collect())
+}
+
+pub fn discover() -> BTreeMap<String, String> {
+    let live = live_codex_ttys().unwrap_or_default();
     if live.is_empty() {
         return BTreeMap::new();
     }
@@ -145,7 +296,7 @@ end tell"#,
             rows.extend(parse_rows(&out));
         }
     }
-    if running("ghostty") || running("Ghostty") {
+    if running("Ghostty") {
         let candidates: Vec<String> = live
             .iter()
             .filter(|tty| tty_host(tty) == Some(Host::Ghostty))
@@ -187,10 +338,19 @@ fn parse_rows(out: &str) -> Vec<(String, String)> {
 }
 
 fn running(name: &str) -> bool {
-    Command::new("pgrep")
-        .args(["-x", name])
+    process_running(name).unwrap_or(false)
+}
+
+fn process_running(name: &str) -> Result<bool, u16> {
+    let output = Command::new("pgrep")
+        .args(["-ix", name])
         .output()
-        .is_ok_and(|o| o.status.success())
+        .map_err(|_| 424u16)?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(424),
+    }
 }
 
 #[cfg(test)]

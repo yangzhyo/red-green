@@ -42,17 +42,21 @@ impl Rpc {
         )?;
         rpc.server_version = init["userAgent"].as_str().and_then(|agent| {
             // 共享服务沿用启动它的客户端名称；首个 product token 才是服务版本。
-            let (originator, release) = agent.split_whitespace().next()?.split_once('/')?;
+            let (originator, release) = agent.split_whitespace().next()?.rsplit_once('/')?;
             if originator.is_empty() {
                 return None;
             }
             let (major, rest) = release.split_once('.')?;
             let (minor, patch) = rest.split_once('.')?;
-            Some((
-                major.parse().ok()?,
-                minor.parse().ok()?,
-                patch.parse().ok()?,
-            ))
+            let number = |part: &str| {
+                if part.len() > 1 && part.starts_with('0')
+                    || !part.bytes().all(|c| c.is_ascii_digit())
+                {
+                    return None;
+                }
+                part.parse().ok()
+            };
+            Some((number(major)?, number(minor)?, number(patch)?))
         });
         rpc.ws
             .send(Message::text(json!({"method":"initialized"}).to_string()))

@@ -1,4 +1,7 @@
-use red_green::reader::{live::LiveSource, Source};
+use red_green::reader::{
+    live::{LiveSource, ResumeTerminal},
+    Source,
+};
 use serde_json::{json, Value};
 use std::{
     cell::RefCell,
@@ -32,7 +35,7 @@ struct Backend {
 impl Backend {
     fn new(handler: impl Fn(&str, &Value, &Path) -> (Value, bool) + Send + Sync + 'static) -> Self {
         Self::with_agent(
-            Some("codex-tui/0.171.0 (Mac OS; arm64) (red_green; 0.1.0)"),
+            Some("codex-tui/0.172.0 (Mac OS; arm64) (red_green; 0.1.0)"),
             handler,
         )
     }
@@ -72,6 +75,9 @@ impl Backend {
                                 json!({"method":"account/updated"}).to_string(),
                             ))
                             .unwrap();
+                        }
+                        if data.is_null() {
+                            break; // 模拟共享服务重启，关闭已有连接。
                         }
                         ws.send(tungstenite::Message::text(
                             json!({"id":r["id"],"result":data}).to_string(),
@@ -132,6 +138,7 @@ fn unknown_or_older_servers_cannot_read_or_activate_history() {
         None,
         Some("red_green/0.162.1 (Mac OS; arm64)"),
         Some("red_green/0.171.0-alpha.1 (Mac OS; arm64)"),
+        Some("red_green/0.+171.0 (Mac OS; arm64)"),
     ] {
         let server = Backend::with_agent(agent, |method, _, _| {
             panic!("未确认账号筛选能力时不能调用 {method}")
@@ -183,12 +190,15 @@ fn lists_only_persisted_main_cli_threads_and_preserves_the_server_cursor() {
         (json!({"data":rows,"nextCursor":"older+page"}), false)
     });
     let mut reader = server.reader();
+    let first = reader.history(None).unwrap();
     assert_eq!(
-        reader.history(None).unwrap(),
-        json!({"entries":[{"key":KEY,"project":"project",
-        "title":"会话标题","updatedAt":1234,"source":"Codex CLI"}],"nextCursor":"older+page"})
+        first["entries"],
+        json!([{"key":KEY,"project":"project",
+        "title":"会话标题","updatedAt":1234,"source":"Codex CLI"}])
     );
-    let next = reader.history(Some("older+page")).unwrap();
+    let next = reader
+        .history(Some(first["nextCursor"].as_str().unwrap()))
+        .unwrap();
     assert_eq!(next["entries"][0]["title"], "初始问题");
     assert_eq!(next["entries"][0]["key"], format!("codex-{OTHER}"));
     assert!(next["nextCursor"].is_null());
@@ -196,10 +206,96 @@ fn lists_only_persisted_main_cli_threads_and_preserves_the_server_cursor() {
 }
 
 #[test]
+fn directory_paging_and_heartbeats_cannot_mix_accounts_or_service_connections() {
+    let state = Arc::new(Mutex::new("initialize"));
+    let mode = state.clone();
+    let server = Backend::new(move |method, params, cwd| {
+        let mut mode = mode.lock().unwrap();
+        let switched = match *mode {
+            "disconnected" => return (Value::Null, false),
+            "initialize" => {
+                *mode = "A";
+                true
+            }
+            "switch" => {
+                *mode = "B";
+                true
+            }
+            _ => false,
+        };
+        match method {
+            "thread/list" => {
+                account_scope(params);
+                let id = if *mode == "A" { ID } else { OTHER };
+                (
+                    json!({"data":[row(id,cwd)],"nextCursor":"same-backend-cursor"}),
+                    switched,
+                )
+            }
+            "thread/loaded/list" => {
+                assert_eq!(params["limit"], 1);
+                (json!({"data":[]}), switched)
+            }
+            other => panic!("目录不应读取正文：{other}"),
+        }
+    });
+    let mut reader = server.reader();
+    assert_eq!(reader.history(Some("obsolete")), Err(409));
+    let first = reader.history(None).unwrap();
+    let cursor_a = first["nextCursor"].as_str().unwrap();
+    let generation_a = first["generation"].as_str().unwrap();
+    assert_eq!(
+        reader.history(None).unwrap()["generation"],
+        generation_a,
+        "第二个页签复用目录"
+    );
+    assert_eq!(reader.history_status(generation_a), Ok(json!({})));
+    *state.lock().unwrap() = "switch";
+    assert_eq!(reader.history(Some(cursor_a)), Err(409));
+    assert_eq!(reader.history_status(generation_a), Err(409));
+    let second = reader.history(None).unwrap();
+    let generation_b = second["generation"].as_str().unwrap();
+    assert_ne!(generation_b, generation_a);
+    assert_eq!(second["entries"][0]["key"], format!("codex-{OTHER}"));
+    assert_eq!(reader.history(Some(cursor_a)), Err(409));
+    assert_eq!(reader.history_status(generation_a), Err(409));
+    assert_eq!(reader.history_status(generation_b), Ok(json!({})));
+    *state.lock().unwrap() = "switch";
+    assert_eq!(reader.history_status(generation_b), Err(409));
+    let third = reader.history(None).unwrap();
+    *state.lock().unwrap() = "disconnected";
+    assert_eq!(
+        reader.history_status(third["generation"].as_str().unwrap()),
+        Err(409)
+    );
+    assert_eq!(
+        reader.history(Some(third["nextCursor"].as_str().unwrap())),
+        Err(409)
+    );
+}
+
+#[test]
 fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
     let directory_exists = Arc::new(AtomicBool::new(false));
     let exists = directory_exists.clone();
     let server = Backend::new(move |method, params, cwd| {
+        if method == "thread/loaded/list" {
+            if cwd.join("switch-during-lookup").exists() {
+                fs::rename(
+                    cwd.join("switch-during-lookup"),
+                    cwd.join("account-switched"),
+                )
+                .unwrap();
+            }
+            if !cwd.join("native-bound").exists() {
+                return (json!({"data":[]}), false);
+            }
+            return if params["cursor"].is_null() {
+                (json!({"data":[OTHER],"nextCursor":"more-ids"}), false)
+            } else {
+                (json!({"data":[ID]}), false)
+            };
+        }
         assert_eq!(method, "thread/list");
         account_scope(params);
         assert_eq!(params["includedThreadIds"], json!([ID]));
@@ -209,9 +305,12 @@ fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
         if !exists.load(Ordering::Acquire) {
             thread["cwd"] = json!(cwd.join("missing"));
         }
-        (json!({"data":[thread]}), false)
+        (
+            json!({"data":[thread]}),
+            cwd.join("account-switched").exists(),
+        )
     });
-    fn launch(cwd: &Path, id: &str, socket: &Path) -> Result<(), u16> {
+    fn launch(cwd: &Path, id: &str, socket: &Path) -> Result<ResumeTerminal, u16> {
         assert_eq!(cwd.join("backend.sock"), socket);
         assert_eq!(id, ID);
         if !cwd.join("allow-launch").is_file() {
@@ -226,9 +325,27 @@ fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
             "{id}"
         )
         .unwrap();
-        Ok(())
+        let tab = cwd.join("tab-open");
+        fs::write(&tab, "").unwrap();
+        Ok(ResumeTerminal::Ghostty(tab.to_str().unwrap().into()))
     }
-    let mut reader = server.reader().with_terminal_launcher(launch);
+    fn tab_exists(tab: &ResumeTerminal) -> Result<bool, u16> {
+        let ResumeTerminal::Ghostty(tab) = tab else {
+            panic!("意外的终端种类")
+        };
+        let tab = Path::new(tab);
+        if tab.with_file_name("probe-error").exists() {
+            return Err(503);
+        }
+        Ok(tab.exists())
+    }
+    let mut reader = server
+        .reader()
+        .with_terminal_launcher(launch, tab_exists, |id, loaded| {
+            assert_eq!(id, ID);
+            assert_eq!(loaded, &[OTHER.to_string(), ID.to_string()]);
+            Ok(true)
+        });
     assert_eq!(reader.resume(KEY, || panic!("无目录不应启动")), Err(422));
     // 观察器已绑定终端但还没有读到首个回合，等待该终端即可。
     SNAPSHOT.with_borrow_mut(|sessions| {
@@ -242,6 +359,12 @@ fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
     directory_exists.store(true, Ordering::Release);
     assert_eq!(reader.resume(KEY, || Ok(())), Err(424));
     fs::write(server.root.join("allow-launch"), "").unwrap();
+    fs::write(server.root.join("switch-during-lookup"), "").unwrap();
+    assert_eq!(
+        reader.resume(KEY, || panic!("切换账号后不能派发")),
+        Err(409)
+    );
+    fs::remove_file(server.root.join("account-switched")).unwrap();
     assert_eq!(reader.resume(KEY, || Err(403)), Err(403));
     assert!(!server.root.join("launches").exists());
     for _ in 0..2 {
@@ -250,6 +373,20 @@ fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
             json!({"ready":false})
         );
     }
+    fs::write(server.root.join("probe-error"), "").unwrap();
+    assert_eq!(reader.resume(KEY, || Ok(())), Err(503));
+    fs::remove_file(server.root.join("probe-error")).unwrap();
+    assert_eq!(reader.resume(KEY, || Ok(())), Ok(json!({"ready":false})));
+    // 关闭首个标签后，若另一个真实终端仍有该线程，即使此刻观察快照为空也要复用。
+    fs::remove_file(server.root.join("tab-open")).unwrap();
+    fs::write(server.root.join("native-bound"), "").unwrap();
+    assert_eq!(reader.resume(KEY, || Ok(())), Ok(json!({"ready":false})));
+    assert_eq!(
+        fs::read_to_string(server.root.join("launches")).unwrap(),
+        format!("{ID}\n")
+    );
+    fs::remove_file(server.root.join("native-bound")).unwrap();
+    assert_eq!(reader.resume(KEY, || Ok(())), Ok(json!({"ready":false})));
     SNAPSHOT.with_borrow_mut(|sessions| {
         sessions.push(json!({"source":"codex","session_id":KEY,
         "project":"已绑定","tty":"/dev/ttys001","state":"idle","reader_has_turn":true}))
@@ -261,7 +398,7 @@ fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
     );
     assert_eq!(
         fs::read_to_string(server.root.join("launches")).unwrap(),
-        format!("{ID}\n")
+        format!("{ID}\n{ID}\n")
     );
 }
 

@@ -15,7 +15,10 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 pub trait Source: Send + 'static {
     fn sessions(&mut self) -> serde_json::Value;
     fn history(&mut self, _cursor: Option<&str>) -> Result<Value, u16> {
-        Ok(json!({"entries": [], "nextCursor": null}))
+        Ok(json!({"entries": [], "nextCursor": null, "generation":"demo"}))
+    }
+    fn history_status(&mut self, generation: &str) -> Result<Value, u16> {
+        (generation == "demo").then(|| json!({})).ok_or(409)
     }
     fn history_messages(&mut self, _key: &str, _query: &str) -> Result<Value, u16> {
         Err(404)
@@ -245,7 +248,13 @@ fn handle(
     }
     let mut data = match (path, live_key, history_key) {
         ("/sessions", _, _) => Ok(source.sessions()),
-        ("/history", _, _) => history_page(source, query),
+        ("/history", _, _) if query.is_empty() => source.history(None),
+        ("/history", _, _) => {
+            query_token(query, "cursor=", 8192).and_then(|v| source.history(Some(&v)))
+        }
+        ("/history/status", _, _) => {
+            query_token(query, "generation=", 128).and_then(|v| source.history_status(&v))
+        }
         (_, Some(key), _) => source.messages(key, query),
         (_, _, Some(key)) => source.history_messages(key, query),
         _ => Err(404u16),
@@ -280,18 +289,18 @@ fn route_key<'a>(path: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty() && !s.contains('/'))
 }
 
-fn history_page(source: &mut impl Source, query: &str) -> Result<Value, u16> {
-    if query.is_empty() {
-        return source.history(None);
-    }
+fn query_token<'a>(
+    query: &'a str,
+    prefix: &str,
+    limit: usize,
+) -> Result<std::borrow::Cow<'a, str>, u16> {
     let encoded = query
-        .strip_prefix("cursor=")
-        .filter(|v| !v.is_empty() && v.len() <= 8192 && !v.contains('&'))
+        .strip_prefix(prefix)
+        .filter(|v| !v.is_empty() && v.len() <= limit && !v.contains('&'))
         .ok_or(400u16)?;
-    let cursor = percent_encoding::percent_decode_str(encoded)
+    percent_encoding::percent_decode_str(encoded)
         .decode_utf8()
-        .map_err(|_| 400u16)?;
-    source.history(Some(&cursor))
+        .map_err(|_| 400u16)
 }
 
 enum Action<'a> {

@@ -24,6 +24,7 @@ fn reader_pairing_and_revocation() {
         "/sessions",
         "/sessions/demo/messages",
         "/history",
+        "/history/status?generation=demo",
         "/history/codex-one/messages",
     ] {
         assert!(request(&reader, "GET", path, "", "").starts_with("HTTP/1.1 401"));
@@ -278,6 +279,18 @@ fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
     };
     let post =
         |path, body: &Value, cookie| request(&reader, "POST", path, &body.to_string(), cookie);
+    assert!(request(
+        &reader,
+        "GET",
+        "/history/status?generation=demo",
+        "",
+        cookie
+    )
+    .starts_with("HTTP/1.1 200"));
+    assert!(
+        request(&reader, "GET", "/history/status?generation=old", "", cookie)
+            .starts_with("HTTP/1.1 409")
+    );
     let historical = "/history/codex-one/messages";
     let resume = "/history/codex-one/resume";
     assert_eq!(

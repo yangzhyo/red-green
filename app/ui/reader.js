@@ -56,7 +56,7 @@ function updateReply() {
     let hint = replyErrors[replyError] || '';
     if (replyError !== 'unknown') {
       if (!active && !hint) hint = '回复暂不可用';
-      else if (active && currentEntry?.state === 'awaiting') hint = '请在 Mac 终端处理审批';
+      else if (active && currentEntry?.state === 'awaiting') hint = '请在 Mac 终端处理提示';
       else if (active && unavailable) hint = '请等待当前回合结束';
       else if (active && ['401','403','409','503'].includes(replyError)) hint = '上次未发送，可重试';
     }
@@ -257,8 +257,9 @@ function renderHistoryList() {
 
 async function tickHistoryList(generation) {
   if (!historyList.load) {
-    // A stationary list still needs to notice when the Mac revokes this device.
-    await request('/sessions');
+    // Check the account and device grant without reloading rows or moving the page.
+    const token = historyList.generation;
+    await request(token ? '/history/status?generation=' + encodeURIComponent(token) : '/sessions');
     if (generation === state.generation && interrupted) {
       interrupted = false;
       renderHistoryList();
@@ -268,6 +269,10 @@ async function tickHistoryList(generation) {
   const cursor = historyList.cursor;
   const page = await request('/history' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
   if (generation !== state.generation) return;
+  if (!page.generation || (historyList.generation && page.generation !== historyList.generation)) {
+    throw new Error('409');
+  }
+  historyList.generation = page.generation;
   if (page.nextCursor && historyList.cursors.has(page.nextCursor)) throw new Error('503');
   if (page.nextCursor) historyList.cursors.add(page.nextCursor);
   const previousCount = historyList.matches;
@@ -588,7 +593,7 @@ el('resume').onclick = async () => {
 };
 
 el('open-history').onclick = () => {
-  historyList = {rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
+  historyList = {generation: null, rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
   display(null, {fromHistory: true});
   poll();
 };

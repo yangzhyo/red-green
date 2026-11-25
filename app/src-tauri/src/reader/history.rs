@@ -57,8 +57,92 @@ pub(super) fn find(rpc: &mut Rpc, id: &str, fresh: bool) -> Result<Value, u16> {
         .ok_or(404)
 }
 
-pub(super) fn list(socket: &Path, cursor: Option<&str>) -> Result<Value, u16> {
-    let mut rpc = Rpc::connect(socket).map_err(|_| UNAVAILABLE)?;
+pub(super) fn loaded_threads(rpc: &mut Rpc) -> Result<Vec<String>, u16> {
+    let mut ids = Vec::new();
+    let mut cursor = None;
+    let mut seen = HashSet::new();
+    loop {
+        let page = rpc
+            .call("thread/loaded/list", json!({"limit":100,"cursor":cursor}))
+            .map_err(|_| UNAVAILABLE)?;
+        if rpc.account_changed {
+            return Err(409);
+        }
+        for id in page["data"].as_array().ok_or(UNAVAILABLE)? {
+            ids.push(id.as_str().ok_or(UNAVAILABLE)?.to_owned());
+        }
+        let Some(next) = page["nextCursor"].as_str() else {
+            return Ok(ids);
+        };
+        if !seen.insert(next.to_owned()) {
+            return Err(UNAVAILABLE);
+        }
+        cursor = Some(next.to_owned());
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Directory {
+    active: Option<(String, Rpc)>,
+}
+
+impl Directory {
+    pub(super) fn list(&mut self, socket: &Path, cursor: Option<&str>) -> Result<Value, u16> {
+        let cursor = match cursor {
+            Some(token) => {
+                let (generation, cursor) = token.split_once(':').ok_or(409u16)?;
+                if !self
+                    .active
+                    .as_ref()
+                    .is_some_and(|(key, _)| key == generation)
+                {
+                    return Err(409);
+                }
+                Some(cursor)
+            }
+            None => None,
+        };
+        let fresh = self.active.is_none();
+        if fresh {
+            self.active = Some((
+                format!("{:032x}", rand::random::<u128>()),
+                Rpc::connect(socket).map_err(|_| UNAVAILABLE)?,
+            ));
+        }
+        let (generation, rpc) = self.active.as_mut().unwrap();
+        match list_pages(rpc, cursor, fresh) {
+            Ok((entries, next)) => Ok(json!({"entries":entries,"generation":generation,
+                "nextCursor":next.map(|cursor|format!("{generation}:{cursor}"))})),
+            Err(status) => {
+                self.active = None;
+                Err(if !fresh && status == UNAVAILABLE {
+                    409
+                } else {
+                    status
+                })
+            }
+        }
+    }
+
+    pub(super) fn status(&mut self, generation: &str) -> Result<Value, u16> {
+        let (_, rpc) = self
+            .active
+            .as_mut()
+            .filter(|(key, _)| key == generation)
+            .ok_or(409u16)?;
+        if rpc.call("thread/loaded/list", json!({"limit":1})).is_err() || rpc.account_changed {
+            self.active = None;
+            return Err(409);
+        }
+        Ok(json!({}))
+    }
+}
+
+fn list_pages(
+    rpc: &mut Rpc,
+    cursor: Option<&str>,
+    fresh: bool,
+) -> Result<(Vec<Value>, Option<String>), u16> {
     let mut cursor = cursor.map(str::to_owned);
     let mut seen = HashSet::new();
     // 桌面客户端的整页都可能被筛掉。限制单个请求的工作量，同时保留下一页。
@@ -66,7 +150,7 @@ pub(super) fn list(socket: &Path, cursor: Option<&str>) -> Result<Value, u16> {
         if !seen.insert(cursor.clone()) {
             return Err(UNAVAILABLE);
         }
-        let page = page(&mut rpc, cursor.as_deref(), None, i == 0)?;
+        let page = page(rpc, cursor.as_deref(), None, fresh && i == 0)?;
         let entries: Vec<_> = page["data"]
             .as_array()
             .ok_or(UNAVAILABLE)?
@@ -75,10 +159,10 @@ pub(super) fn list(socket: &Path, cursor: Option<&str>) -> Result<Value, u16> {
             .collect();
         cursor = page["nextCursor"].as_str().map(str::to_owned);
         if !entries.is_empty() || cursor.is_none() {
-            return Ok(json!({"entries":entries,"nextCursor":cursor}));
+            return Ok((entries, cursor));
         }
     }
-    Ok(json!({"entries":[],"nextCursor":cursor}))
+    Ok((vec![], cursor))
 }
 
 fn list_entry(row: &Value) -> Option<Value> {

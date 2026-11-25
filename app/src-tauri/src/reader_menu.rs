@@ -157,7 +157,11 @@ pub fn install(app: &App) -> tauri::Result<()> {
                                 super::codex_home()
                                     .join("app-server-control/app-server-control.sock"),
                             )
-                            .with_terminal_launcher(super::codex_terminals::resume);
+                            .with_terminal_launcher(
+                                super::codex_terminals::resume,
+                                super::codex_terminals::terminal_exists,
+                                super::codex_terminals::thread_terminal_exists,
+                            );
                             Reader::with_store(
                                 addr,
                                 source,
