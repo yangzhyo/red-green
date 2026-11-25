@@ -13,7 +13,7 @@ pub(super) const UNAVAILABLE: u16 = 503;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResumeTerminal {
     Ghostty(String),
-    Terminal(String),
+    Terminal { tty: String, inode: u64 },
     Unknown,
 }
 type TerminalLauncher = fn(&Path, &str, &Path) -> Result<ResumeTerminal, u16>;
@@ -343,16 +343,27 @@ impl Source for LiveSource {
             return Ok(json!({"ready":ready}));
         }
         if let Some(terminal) = self.launching.get(id) {
-            if (self.terminal_exists)(terminal)? {
-                admit()?;
-                return Ok(json!({"ready":false}));
+            match (self.terminal_exists)(terminal) {
+                Ok(true) => {
+                    admit()?;
+                    return Ok(json!({"ready":false}));
+                }
+                Ok(false) => {
+                    self.launching.remove(id);
+                }
+                // Apple Event may have succeeded without returning a native handle.
+                // Check the exact thread title before asking for recovery on the Mac.
+                Err(428) => (),
+                Err(status) => return Err(status),
             }
-            self.launching.remove(id);
         }
         let loaded = history::loaded_threads(&mut rpc)?;
         if loaded.iter().any(|thread| thread == id) && (self.thread_terminal_exists)(id, &loaded)? {
             admit()?;
             return Ok(json!({"ready":false}));
+        }
+        if self.launching.contains_key(id) {
+            return Err(428);
         }
         // 查询原生终端可能较慢，在打开标签前再次取得当前账号下的原目录。
         let thread = history::find(&mut rpc, id, false)?;

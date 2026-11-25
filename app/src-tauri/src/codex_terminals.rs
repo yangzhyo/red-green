@@ -4,7 +4,7 @@ use red_green::codex::model;
 use red_green::reader::live::ResumeTerminal;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -76,11 +76,15 @@ pub fn resume(cwd: &Path, id: &str, socket: &Path) -> Result<ResumeTerminal, u16
     }
     // Terminal 的 do script 省略目标会创建新窗口；不会在用户选中的标签内执行。
     let tty = open(NEW_TERMINAL_WINDOW).ok_or(424u16)?;
-    Ok(if tty.starts_with("/dev/tty") {
-        ResumeTerminal::Terminal(tty)
-    } else {
-        ResumeTerminal::Unknown
-    })
+    if tty.starts_with("/dev/tty") {
+        if let Ok(metadata) = std::fs::metadata(&tty) {
+            return Ok(ResumeTerminal::Terminal {
+                tty,
+                inode: metadata.ino(),
+            });
+        }
+    }
+    Ok(ResumeTerminal::Unknown)
 }
 
 pub fn terminal_exists(terminal: &ResumeTerminal) -> Result<bool, u16> {
@@ -93,8 +97,16 @@ pub fn terminal_exists(terminal: &ResumeTerminal) -> Result<bool, u16> {
         end run"#,
             id,
         ),
-        ResumeTerminal::Terminal(tty) => (
-            r#"on run argv
+        ResumeTerminal::Terminal { tty, inode } => {
+            // devfs 会把刚释放的 tty 名给下一窗口。原设备已消失或换了 inode 即可重试。
+            match std::fs::metadata(tty) {
+                Ok(meta) if meta.ino() != *inode => return Ok(false),
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(_) => return Err(424),
+            }
+            (
+                r#"on run argv
             if not (application "Terminal" is running) then return false
             set device to item 1 of argv
             tell application "Terminal"
@@ -104,9 +116,10 @@ pub fn terminal_exists(terminal: &ResumeTerminal) -> Result<bool, u16> {
                 return false
             end tell
         end run"#,
-            tty,
-        ),
-        ResumeTerminal::Unknown => return Err(424),
+                tty,
+            )
+        }
+        ResumeTerminal::Unknown => return Err(428),
     };
     match script_query(script, identity)?.trim() {
         "true" => Ok(true),
@@ -360,8 +373,24 @@ mod tests {
     const ID: &str = "01234567-89ab-cdef-8123-456789abcdef";
 
     #[test]
+    fn reused_tty_name_does_not_keep_a_closed_terminal_pending() {
+        let path = std::env::temp_dir().join(format!("rg-tty-{}", rand::random::<u64>()));
+        let original = std::fs::File::create_new(&path).unwrap();
+        let terminal = ResumeTerminal::Terminal {
+            tty: path.to_str().unwrap().into(),
+            inode: original.metadata().unwrap().ino(),
+        };
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(terminal_exists(&terminal), Ok(false));
+        std::fs::File::create_new(&path).unwrap();
+        assert_eq!(terminal_exists(&terminal), Ok(false));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn rejects_bad_id_and_missing_cwd_before_opening_a_terminal() {
         let socket = Path::new("/unused/app-server-control/app-server-control.sock");
+        assert_eq!(terminal_exists(&ResumeTerminal::Unknown), Err(428));
         assert_eq!(resume(Path::new("/"), "--last", socket), Err(400));
         assert_eq!(resume(Path::new("relative"), ID, socket), Err(422));
         assert_eq!(resume(Path::new("/dev/null"), ID, socket), Err(422));

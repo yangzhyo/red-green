@@ -135,13 +135,17 @@ test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清�
     await until(() => el('status').textContent.includes('项目目录'), '目录丢失没有提示');
     check(el('messages').textContent.includes('历史正文') && el('composer').hidden, '失败后没有保留正文');
     await until(() => !el('resume').disabled, '找不到重试入口');
+    mac.fail = 428;
+    el('resume').click();
+    await until(() => el('status').textContent.includes('重新开启局域网阅读'), '系统未返回标签时缺少安全恢复步骤');
+    await until(() => !el('resume').disabled, '完成 Mac 端检查后无法继续');
     mac.fail = 0;
     mac.live = true;
     mac.delay = 250;
     el('resume').click();
     el('back').click();
     await sleep(500);
-    check(document.body.dataset.page === 'history' && el('composer').hidden && mac.writes.length === 2, '离开后迟到结果仍然打开输入框');
+    check(document.body.dataset.page === 'history' && el('composer').hidden && mac.writes.length === 3, '离开后迟到结果仍然打开输入框');
     mac.paired = false;
     refresh();
     await until(() => !el('pair').hidden, '撤销配对后没有清除页面');

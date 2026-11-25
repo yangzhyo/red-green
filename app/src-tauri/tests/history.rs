@@ -403,6 +403,39 @@ fn resumes_the_original_terminal_once_and_only_after_the_final_grant_check() {
 }
 
 #[test]
+fn an_unknown_launch_rechecks_the_thread_and_can_be_reset_on_the_mac() {
+    let bound = Arc::new(AtomicBool::new(false));
+    let observed = bound.clone();
+    let server = Backend::new(move |method, _, cwd| match method {
+        "thread/list" => (json!({"data":[row(ID,cwd)]}), false),
+        "thread/loaded/list" => {
+            let ids = if observed.load(Ordering::Acquire) {
+                vec![ID]
+            } else {
+                vec![]
+            };
+            (json!({"data":ids}), false)
+        }
+        _ => panic!("unexpected method {method}"),
+    });
+    let open = || {
+        server.reader().with_terminal_launcher(
+            |_, _, _| Ok(ResumeTerminal::Unknown),
+            |_| Err(428),
+            |_, _| Ok(true),
+        )
+    };
+    let mut first = open();
+    assert_eq!(first.resume(KEY, || Ok(())), Ok(json!({"ready":false})));
+    assert_eq!(first.resume(KEY, || panic!("不能重复启动")), Err(428));
+    bound.store(true, Ordering::Release);
+    assert_eq!(first.resume(KEY, || Ok(())), Ok(json!({"ready":false})));
+    drop(first);
+    bound.store(false, Ordering::Release);
+    assert_eq!(open().resume(KEY, || Ok(())), Ok(json!({"ready":false})));
+}
+
+#[test]
 fn reading_older_turns_rechecks_membership_and_discards_an_account_change_during_content_read() {
     let access = Arc::new(Mutex::new("visible"));
     let mode = access.clone();
