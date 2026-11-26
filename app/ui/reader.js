@@ -103,14 +103,19 @@ const stateNames = new Map([
 
 function setPageTitle(...parts) {
   const next = parts.filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
-  if (document.title !== next) document.title = next;
+  if (document.title === next) return false;
+  document.title = next;
+  return true;
 }
 
 function updateThreadTitle(stateLabel) {
   const {title, project, source} = currentEntry;
   const name = title?.replace(/\s+/g, ' ').trim() || '未命名会话';
   const projectName = project?.replace(/\s+/g, ' ').trim();
-  setPageTitle(source, stateLabel, projectName, name === projectName ? '' : name);
+  if (setPageTitle(source, stateLabel, projectName, name === projectName ? '' : name)) {
+    // WebView hosts can sample the title on navigation. Neither fragment has a scroll target.
+    location.replace(location.hash === '#status-1' ? '#status-2' : '#status-1');
+  }
 }
 
 function portrait(entry) {
@@ -193,7 +198,6 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   updateReply();
   document.body.dataset.page = entry ? 'thread' : listingHistory ? 'history' : 'list';
   if (entry) {
-    updateThreadTitle(stateNames.get(entry.state) || (readOnly ? '只读' : ''));
     state.open(entry.key);
     updateNavigation();
   } else {
@@ -484,7 +488,8 @@ async function tick() {
       }
     }
     if (!bound && resumeNotice === liveUnavailableNotice) resumeNotice = '';
-    updateThreadTitle('只读');
+    currentEntry.state = bound ? page.state : null;
+    updateThreadTitle(stateNames.get(currentEntry.state) || '只读');
     el('resume').hidden = bound;
   }
   await showMessages(page, earlier, endpoint, generation);

@@ -27,7 +27,7 @@ async function drive(setup, prepare, scenario, data, startPath) {
     for (let i = 0; i < 400 && !condition(); i++) await sleep(20);
     check(condition(), message);
   }
-  const path = () => reader.location.pathname + reader.location.hash;
+  const path = () => reader.location.pathname === '/' ? '/' + reader.location.hash : reader.location.pathname;
   async function navigate(action, target) {
     const old = reader.document;
     action();

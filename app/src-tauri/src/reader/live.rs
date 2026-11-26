@@ -268,9 +268,9 @@ impl LiveSource {
         })
     }
 
-    fn terminal_ready(&self, key: &str) -> Option<bool> {
+    fn ready_terminal(&self, key: &str) -> Option<Value> {
         self.bound_terminal(key)
-            .map(|session| session["reader_has_turn"] != false)
+            .filter(|session| session["reader_has_turn"] != false)
     }
 
     fn mapping(&self, id: &str) -> Option<String> {
@@ -337,10 +337,7 @@ impl Source for LiveSource {
         let mut rpc = Rpc::connect(&self.socket).map_err(|_| UNAVAILABLE)?;
         let thread = history::find(&mut rpc, id, true)?;
         let mut entry = history::list_entry(&thread).ok_or(UNAVAILABLE)?;
-        if let Some(session) = self
-            .bound_terminal(key)
-            .filter(|s| s["reader_has_turn"] != false)
-        {
+        if let Some(session) = self.ready_terminal(key) {
             entry["state"] = session["state"].clone();
         }
         Ok(entry)
@@ -375,10 +372,11 @@ impl Source for LiveSource {
         let mut page = stored
             .history
             .refresh(&self.socket, id, query, &mut stored.body)?;
-        let ready = self.terminal_ready(key) == Some(true);
-        page["live"] = ready.into();
+        let terminal = self.ready_terminal(key);
+        page["live"] = terminal.is_some().into();
         page["title"] = thread_title(&thread).into();
-        if ready {
+        if let Some(session) = terminal {
+            page["state"] = session["state"].clone();
             self.launching.remove(id);
         }
         self.stored = Some(stored);
@@ -389,7 +387,8 @@ impl Source for LiveSource {
         let id = history::thread_id(key)?;
         let mut rpc = Rpc::connect(&self.socket).map_err(|_| UNAVAILABLE)?;
         history::find(&mut rpc, id, true)?;
-        if let Some(ready) = self.terminal_ready(key) {
+        if let Some(session) = self.bound_terminal(key) {
+            let ready = session["reader_has_turn"] != false;
             admit()?;
             if ready {
                 self.launching.remove(id);

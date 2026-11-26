@@ -529,6 +529,23 @@ fn history_keeps_routing_ready_pages_but_discards_account_changes() {
         "<p><strong>答复</strong></p>\n"
     );
     let older = format!("before={}", first["before"].as_str().unwrap());
+    SNAPSHOT.with_borrow_mut(|rows| {
+        rows.push(json!({"source":"codex","session_id":KEY,"tty":"/dev/ttys001","state":"running"}))
+    });
+    let since = format!("since={}", first["since"].as_str().unwrap());
+    let update = reader.history_messages(KEY, &since).unwrap();
+    assert_eq!(update["messages"], json!([]));
+    assert_eq!(update["live"], true);
+    assert_eq!(update["state"], "running");
+    SNAPSHOT.with_borrow_mut(|rows| rows[0]["state"] = json!("awaiting"));
+    assert_eq!(
+        reader.history_messages(KEY, &since).unwrap()["state"],
+        "awaiting"
+    );
+    SNAPSHOT.with_borrow_mut(|rows| rows[0]["reader_has_turn"] = json!(false));
+    let pending = reader.history_messages(KEY, &since).unwrap();
+    assert_eq!(pending["live"], false);
+    assert!(pending["state"].is_null());
     assert_eq!(
         reader.history_messages(KEY, &older).unwrap()["messages"][0]["text"],
         "上文"

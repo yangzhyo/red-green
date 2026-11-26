@@ -42,7 +42,7 @@ function setup({current, rows, paired}, sleep) {
       if (mac.removed) return {ok: false, status: 404};
       const older = url.includes('before=');
       const page = {messages: url.includes('since=') ? [] : [older ? body('0', '较早一页') : body('1', '历史正文')],
-        since: 'history-1', live: mac.live};
+        since: 'history-1', live: mac.live, state: mac.live ? mac.state : null};
       if (!url.includes('since=')) page.before = older ? null : 'history-0';
       if (mac.granted) page.resumeTicket = 'resume-only';
       return response(page);
@@ -50,7 +50,7 @@ function setup({current, rows, paired}, sleep) {
     if (url.startsWith('/sessions/')) {
       if (mac.holdLive) await new Promise(resolve => { mac.releaseLive = resolve; });
       if (url.startsWith('/sessions/codex-0/') && mac.liveError) return {ok: false, status: mac.liveError};
-      const page = {messages: [body('2', '当前正文')], since: 'live-1', state: mac.state};
+      const page = {messages: url.includes('since=') ? [] : [body('2', '当前正文')], since: 'live-1', state: mac.state};
       if (url.startsWith('/sessions/codex-home/')) page.title = mac.sessions[0].title;
       if (mac.granted) page.replyTicket = 'send-only';
       return response(page);
@@ -279,15 +279,22 @@ test('正在阅读的实时会话结束后提示结束，重进历史可继续�
 });
 
 test('已激活会话的实况暂不可用时保留正文，恢复后直接显示回复', {skip: !hasChrome}, async () => {
-  await runReader(async ({el, mac, check, until, refresh, navigate}) => {
+  await runReader(async ({el, mac, check, until, refresh, reader, navigate}) => {
     mac.live = true;
     mac.liveError = 503;
+    mac.state = 'running';
     await navigate(() => el('history-rows').firstChild.click(), '/read/history/codex-0');
     await until(() => el('messages').textContent.includes('历史正文'), '实况暂不可用时丢失正文');
     check(el('resume').hidden && el('open-reply').hidden && el('status').textContent.includes('暂不可用'), '把实况中断当成终端退出');
+    check(reader.document.title === 'Codex CLI · 运行中 · 项目甲 · 会话标题 0', '实况消息中断时丢失已绑定终端的状态');
     el('prev').click();
     await until(() => el('messages').textContent.includes('较早一页'), '断连后不能向前翻页');
     check(el('resume').hidden && el('status').textContent.includes('暂不可用'), '翻页后误显示继续对话或丢失中断提示');
+    mac.state = 'awaiting';
+    const position = el('view').scrollTop;
+    refresh();
+    await until(() => reader.document.title === 'Codex CLI · 待确认 · 项目甲 · 会话标题 0', '回看历史时标题没有更新状态');
+    check(el('view').scrollTop === position && el('messages').textContent.includes('较早一页'), '标题更新时丢失回看位置');
     mac.liveError = 0;
     el('latest').click();
     refresh();
@@ -423,6 +430,35 @@ test('直接打开与刷新当前或历史详情保留 URL、初始标题、正�
   for (const entryPath of ['/read/current/codex-home', '/read/history/codex-1']) {
     await runReader(scenario, {entryPath, startPath: entryPath, prepare: null});
   }
+});
+
+test('没有新消息时浏览器可感知标题状态变化，草稿、焦点与返回路径保留', {skip: !hasChrome}, async () => {
+  const entryPath = '/read/current/codex-home';
+  await runReader(async ({el, reader, mac, until, refresh, check, navigate, sleep}) => {
+    await until(() => !el('open-reply').hidden, '当前会话未就绪');
+    const doc = reader.document;
+    const entries = reader.history.length;
+    const message = el('messages').firstElementChild;
+    const titles = [];
+    reader.addEventListener('hashchange', () => titles.push(doc.title));
+    el('open-reply').click();
+    const field = el('reply-text');
+    field.value = '墨水屏上的草稿';
+    field.setSelectionRange(2, 4);
+    for (const [state, label] of [['running', '运行中'], ['awaiting', '待确认'], ['your_turn', '轮到你']]) {
+      mac.state = state;
+      refresh();
+      await until(() => titles.at(-1) === 'Codex CLI · ' + label + ' · 当前项目 · 正在处理的任务', '浏览器没有收到' + label + '的标题导航');
+      check(reader.document === doc && el('messages').firstElementChild === message, '状态变化重新加载了正文');
+      check(doc.activeElement === field && field.value === '墨水屏上的草稿' && field.selectionStart === 2 && field.selectionEnd === 4, '状态变化打断输入');
+    }
+    const reads = mac.reads.length;
+    refresh();
+    await until(() => mac.reads.length > reads, '未完成重复轮询');
+    await sleep(50);
+    check(titles.length === 3 && reader.history.length === entries, '重复轮询触发导航或增加浏览器返回步骤');
+    await navigate(() => reader.history.back(), '/test-note');
+  }, {entryPath, startPath: entryPath, prepare: null});
 });
 
 test('当前会话卡片及打开的详情跟随改名、空名和与项目同名的情况', {skip: !hasChrome}, async () => {
