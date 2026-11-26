@@ -13,8 +13,27 @@ mkdir -p "$dir"
 event=$(jq -r '.hook_event_name // empty' <<<"$input")
 sid=$(jq -r '.session_id // empty' <<<"$input")
 if [ -z "$event" ] || [ -z "$sid" ]; then exit 0; fi
+case "$sid" in *[!A-Za-z0-9_-]*) exit 0 ;; esac
 
 file="$dir/$sid.json"
+
+# Only the Mac reader resolves these paths. Keep them out of the pet snapshots.
+# Record before the running → running fast path so older sessions can appear.
+reader_path=$(jq -r '.transcript_path // empty' <<<"$input")
+reader_dir="$dir/.reader"
+if [ "$event" = "SessionEnd" ]; then reader_path=ended; fi
+if [ -n "$reader_path" ]; then
+  previous=""
+  if [ -f "$reader_dir/$sid" ]; then IFS= read -r previous < "$reader_dir/$sid"; fi
+  if [ "$previous" != "$reader_path" ]; then
+    (
+      umask 077
+      mkdir -p "$reader_dir" || exit
+      temp=$(mktemp "$reader_dir/.mapping.XXXXXX") || exit
+      printf '%s\n' "$reader_path" > "$temp" && mv -f "$temp" "$reader_dir/$sid"
+    )
+  fi
+fi
 
 case "$event" in
   SessionEnd)

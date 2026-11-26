@@ -31,6 +31,9 @@ _Avoid_: 仪表盘（那是 dashboard，这只是一个表）、进度条（形�
 **来源 (Source)**：
 会话或用量所属的工具，当前为 Claude Code (`claude`) 与 Codex CLI (`codex`)。会话 ID 按来源区分，用量不跨来源合并。
 
+**可读会话 (Readable Session)**：
+red-green 当前识别且来源已能提供对话记录的本机会话。配对设备开启阅读页后，可以查看其中面向用户的提问和回复。
+
 **Vibe Mode**：
 Mosaico 保留的应用管理固件，可管理、保存和打开 Idea。按住 AI 键开机进入；与按住 BOOT 键开机的 ROM 下载模式不同。
 

@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 mod codex_terminals;
 mod desktop_output;
 mod ghostty;
+mod reader_menu;
 use red_green::output::{
     model::{Call, OutputSnapshot},
     runtime::{self, Control},
@@ -492,6 +493,7 @@ fn submit_output(
     control: tauri::State<'_, Control>,
     snapshot: OutputSnapshot,
     calls: Vec<Call>,
+    acknowledged: Option<reader_menu::Acknowledged>,
 ) -> Result<(), String> {
     control
         .0
@@ -500,7 +502,9 @@ fn submit_output(
             calls,
             at: runtime::now_ms(),
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    reader_menu::update_acknowledged(acknowledged.unwrap_or_default());
+    Ok(())
 }
 #[tauri::command]
 fn refresh_output(control: tauri::State<'_, Control>) -> Result<(), String> {
@@ -624,6 +628,7 @@ fn main() {
             // pets are ambient: no dock icon, no app switcher entry
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            reader_menu::install(app)?;
 
             let desktop = desktop_output::DesktopOutput::new(app.handle().clone());
             std::thread::spawn(move || runtime::run(desktop, output_rx, dbg_log));

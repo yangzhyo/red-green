@@ -114,6 +114,7 @@ pub fn session(thread: &Value, turn: Option<&Value>, tty: &str, project: &str) -
         return Value::Null;
     }
     let empty = Value::Null;
+    let reader_has_turn = turn.is_some();
     let turn = turn.unwrap_or(&empty);
     let text = turn["items"]
         .as_array()
@@ -169,7 +170,7 @@ pub fn session(thread: &Value, turn: Option<&Value>, tty: &str, project: &str) -
     json!({"session_id":format!("codex-{id}"), "source":"codex", "state":state,
         "cwd":thread["cwd"], "project":project, "tty":tty, "detail":detail,
         "since":format!("{}:{state}:{}",turn["id"].as_str().unwrap_or("new"),turn["completedAt"]),
-        "event":"app-server"})
+        "event":"app-server","reader_has_turn":reader_has_turn})
 }
 
 pub fn usage(raw: &Value, now: u64) -> Value {
