@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>red-green · 三套设计候选</title>
+<link rel="stylesheet" href="gallery.css">
+<header class="gallery-head">
+  <div><h1>red-green <span>设计候选</span></h1><p>点击项目试读同一段对话，比较三种设计在墨水屏上的效果。</p></div>
+  <div class="controls">
+    <div role="group" aria-label="并排预览的页面"><button id="lists" aria-pressed="true">会话列表</button><button id="threads" aria-pressed="false">阅读正文</button></div>
+    <label><input type="checkbox" id="ink" checked> 墨水屏灰阶</label>
+  </div>
+</header>
+<main id="board" class="ink" aria-label="三套应用设计"></main>
+<script src="../../ui/skins.js"></script>
+<script src="../../ui/sprites.js"></script>
+<script src="gallery.js"></script>
+</html>
