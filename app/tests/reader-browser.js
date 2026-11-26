@@ -10,17 +10,23 @@ const chrome = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Conten
 export const hasChrome = existsSync(chrome);
 const ui = new URL('../ui/', import.meta.url);
 
-export async function renderReader(fixture, virtualTimeMs) {
+export async function renderReader(fixture, virtualTimeMs, viewportWidth) {
   const dir = await mkdtemp(join(tmpdir(), 'nomad-reader-'));
   try {
     const html = await readFile(new URL('reader.html', ui), 'utf8');
     const file = join(dir, 'reader.html');
     const head = '<head><base href="' + ui.href + '">' + fixture;
     await writeFile(file, html.replaceAll('src="/', 'src="').replaceAll('href="/', 'href="').replace('<head>', () => head));
+    // Desktop Chrome clamps the outer window to 500px. A frame can use the actual Nomad viewport.
+    let target = file;
+    if (viewportWidth) {
+      target = join(dir, 'viewport.html');
+      await writeFile(target, '<body><iframe src="reader.html" width="' + viewportWidth + '" height="600"></iframe></body>');
+    }
     const {stdout} = await promisify(execFile)(chrome, [
       '--headless', '--disable-gpu', '--no-first-run', '--allow-file-access-from-files',
       '--window-size=620,440', '--virtual-time-budget=' + virtualTimeMs, '--dump-dom',
-      '--user-data-dir=' + join(dir, 'profile'), pathToFileURL(file).href,
+      '--user-data-dir=' + join(dir, 'profile'), pathToFileURL(target).href,
     ], {timeout: 20000});
     return stdout;
   } finally {

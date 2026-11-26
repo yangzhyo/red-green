@@ -64,20 +64,20 @@ function fixture(scenario) {
       el('open-history').click();
       await until(() => el('history-rows').children.length === 4, '历史未按页加载');
       await scenario({el, mac, check, until, refresh, sleep});
-      document.body.dataset.testResult = 'pass';
-    } catch (error) { document.body.dataset.testResult = error.message; }
+      window.top.document.body.dataset.testResult = 'pass';
+    } catch (error) { window.top.document.body.dataset.testResult = error.message; }
   });
 }
 
-async function runReader(scenario) {
-  const stdout = await renderReader('<script>(' + fixture + ')(' + scenario + ')</script>', 50000);
+async function runReader(scenario, viewportWidth) {
+  const stdout = await renderReader('<script>(' + fixture + ')(' + scenario + ')</script>', 50000, viewportWidth);
   assert.equal(stdout.match(/<body[^>]*data-test-result="([^"]+)"/)?.[1], 'pass');
 }
 
 test('首页、历史页与详情工具条使用各自的导航链接', {skip: !hasChrome}, async () => {
-  await runReader(async ({el, until, check}) => {
+  const scenario = async ({el, until, check}) => {
+    check(innerWidth === Number(window.frameElement.width), '测试未使用指定视口');
     const masthead = document.querySelector('.masthead');
-    document.body.style.width = '420px';
     function link(container, label) {
       const target = [...container.querySelectorAll('a[href]')].find(a => a.innerText === label && a.getClientRects().length);
       check(target, '缺少可见的超链接：' + label);
@@ -87,34 +87,31 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     function checkDetail(label) {
       const bar = document.querySelector('footer');
       const back = link(bar, label);
-      for (const width of [320, 420]) {
-        document.body.style.width = width + 'px';
-        const rect = back.getBoundingClientRect();
-        const bounds = bar.getBoundingClientRect();
-        check(rect.width >= 44 && rect.height >= 44 && bounds.top >= el('view').getBoundingClientRect().bottom - 1, '返回链接未放入底部触控区');
-        const center = r => r.left + r.width / 2;
-        const prev = el('prev').getBoundingClientRect(), next = el('next').getBoundingClientRect();
-        const reply = el('resume').hidden ? el('open-reply') : el('resume');
-        const action = reply.getBoundingClientRect();
-        const reference = getComputedStyle(el('prev'));
-        for (const control of [back, reply, el('next')]) {
-          const style = getComputedStyle(control);
-          check(style.textDecorationLine === 'none', control.id + ' 不应显示下划线');
-          for (const property of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight']) {
-            check(style[property] === reference[property], control.id + ' 的 ' + property + ' 与上一屏不同');
-          }
+      const rect = back.getBoundingClientRect();
+      const bounds = bar.getBoundingClientRect();
+      check(rect.width >= 44 && rect.height >= 44 && bounds.top >= el('view').getBoundingClientRect().bottom - 1, '返回链接未放入底部触控区');
+      const center = r => r.left + r.width / 2;
+      const prev = el('prev').getBoundingClientRect(), next = el('next').getBoundingClientRect();
+      const reply = el('resume').hidden ? el('open-reply') : el('resume');
+      const action = reply.getBoundingClientRect();
+      const reference = getComputedStyle(el('prev'));
+      for (const control of [back, reply, el('next')]) {
+        const style = getComputedStyle(control);
+        check(style.textDecorationLine === 'none', control.id + ' 不应显示下划线');
+        for (const property of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight']) {
+          check(style[property] === reference[property], control.id + ' 的 ' + property + ' 与上一屏不同');
         }
-        check(prev.left === bounds.left && next.right === bounds.right, '翻页按钮没有分居两端');
-        check(Math.abs(center(prev) + center(next) - 2 * center(bounds)) < 1, '上一屏和下一屏不对称');
-        check(action.width >= 44 && action.height >= 44 && Math.abs(center(rect) + center(action) - 2 * center(bounds)) < 1, '返回和回复操作不对称或触控区域过小');
-        check(el('view').getBoundingClientRect().top === 0, '详情栏仍占用正文上方的空间');
-        for (const item of bar.children) {
-          if (!item.getClientRects().length) continue;
-          const r = item.getBoundingClientRect();
-          check(r.left >= bounds.left - 1 && r.right <= bounds.right + 1, '工具条超出窄屏');
-          if (item.matches('button, a')) {
-            check(item.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)), '工具条控件被遮挡：' + item.id);
-          }
+      }
+      check(prev.left === bounds.left && next.right === bounds.right, '翻页按钮没有分居两端');
+      check(Math.abs(center(prev) + center(next) - 2 * center(bounds)) < 1, '上一屏和下一屏不对称');
+      check(action.width >= 44 && action.height >= 44 && Math.abs(center(rect) + center(action) - 2 * center(bounds)) < 1, '返回和回复操作不对称或触控区域过小');
+      check(el('view').getBoundingClientRect().top === 0, '详情栏仍占用正文上方的空间');
+      for (const item of bar.children) {
+        if (!item.getClientRects().length) continue;
+        const r = item.getBoundingClientRect();
+        check(r.left >= bounds.left - 1 && r.right <= bounds.right + 1, '工具条超出窄屏');
+        if (item.matches('button, a')) {
+          check(item.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)), '工具条控件被遮挡：' + item.id);
         }
       }
       return back;
@@ -156,7 +153,8 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     checkDetail('返回列表').click();
     check(document.body.dataset.page === 'list', '没有返回当前列表');
     check(location.hash === '#list' && window.history.length === browserEntries, '应用内导航增加了浏览器返回步骤');
-  });
+  };
+  for (const width of [320, 420, 620]) await runReader(scenario, width);
 });
 
 test('历史跨页查项目，正文只读可翻页，继续原会话后可返回原列表位置', {skip: !hasChrome}, async () => {
