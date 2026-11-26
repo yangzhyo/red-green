@@ -74,6 +74,8 @@ fn documents_serve_native_titles_and_only_reader_metadata() {
     let cookie = pair(&reader);
     let get = |path| request(reader.address(), path, &cookie, "text/html", "");
     assert_eq!(html(&get("/")), include_str!("../../ui/reader.html"));
+    let pairing = request(reader.address(), "/pair", "", "text/html", "");
+    assert!(html(&pairing).contains("<title>red-green · 设备配对</title>"));
     let archive = get("/archive");
     assert!(html(&archive).contains("<title>red-green · 历史会话</title>"));
     assert!(html(&archive).contains(r#"<body data-page="history">"#));

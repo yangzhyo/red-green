@@ -284,6 +284,15 @@ fn handle(
     if request.method() == &Method::Get {
         let asset = match path {
             "/" => Some((HTML, READER_HTML)),
+            "/pair" => {
+                return reply(
+                    request,
+                    200,
+                    HTML,
+                    document("red-green · 设备配对", r#"data-page="pair""#),
+                    None,
+                )
+            }
             "/archive" => {
                 return reply(
                     request,

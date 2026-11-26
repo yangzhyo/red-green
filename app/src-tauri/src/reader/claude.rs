@@ -54,7 +54,16 @@ impl SessionTitle {
             Some("ai-title") => self.generated = row["aiTitle"].as_str().and_then(short),
             Some("user") if self.first_prompt.is_none() => {
                 let prompt = visible_message(row, |s| {
-                    !s.starts_with('<') && !s.starts_with("[Request interrupted by user")
+                    ![
+                        "<local-command-",
+                        "<command-name>",
+                        "<command-message>",
+                        "<command-args>",
+                        "<task-notification>",
+                        "[Request interrupted by user",
+                    ]
+                    .iter()
+                    .any(|prefix| s.starts_with(prefix))
                 });
                 self.first_prompt = prompt.and_then(|(_, text)| short(&text));
             }
@@ -153,14 +162,14 @@ mod tests {
             json!({"type":"user","sessionId":"s","uuid":"compact","isCompactSummary":true,"message":{"role":"user","content":"上下文摘要"}}),
             json!({"type":"user","sessionId":"s","uuid":"tool","message":{"role":"user","content":[{"type":"tool_result","content":"输出"},{"type":"text","text":"内部注释"}]}}),
             json!({"type":"user","sessionId":"s","uuid":"command","message":{"role":"user","content":"<local-command-stdout>输出</local-command-stdout>"}}),
-            json!({"type":"user","sessionId":"s","uuid":"q","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>提示</system-reminder>"},{"type":"text","text":"  真正的问题\n更多正文"}]}}),
+            json!({"type":"user","sessionId":"s","uuid":"q","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>提示</system-reminder>"},{"type":"text","text":"  <button> 和 <a> 的区别？\n更多正文"}]}}),
         ];
         let mut title = SessionTitle::default();
         for row in rows {
             let line = format!("{row}\n");
             read_entries("s", line.as_bytes(), |r| title.insert(r)).unwrap();
         }
-        assert_eq!(title.get(), "真正的问题");
+        assert_eq!(title.get(), "<button> 和 <a> 的区别？");
     }
 
     #[test]

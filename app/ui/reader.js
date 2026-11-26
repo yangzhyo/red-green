@@ -6,6 +6,7 @@ const view = el('view');
 const footer = document.querySelector('footer');
 const fromHistoryThread = location.pathname.startsWith('/read/history/');
 const threadDocument = fromHistoryThread || location.pathname.startsWith('/read/current/');
+const pairingDocument = location.pathname === '/pair';
 const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
 window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
 const nodes = new Map();
@@ -70,7 +71,7 @@ function navigate(url) {
   state.back();
   stopped = true;
   clearTimeout(timer);
-  if (new URL(url, location.href).href === location.href) location.reload();
+  if (location.hash && new URL(url, location.href).href === location.href) location.reload();
   else location.replace(url);
 }
 
@@ -435,7 +436,10 @@ async function tick() {
     if (threadDocument) {
       // An initially unavailable document regains its native title on a fresh document load.
       await request(location.pathname, {headers: {Accept: 'application/json'}});
-      if (generation === state.generation) location.replace(location.pathname);
+      if (generation === state.generation) {
+        if (document.body.dataset.readerError === '401') drafts.clear();
+        navigate(location.pathname);
+      }
       return;
     }
     if (historyList) return tickHistoryList(generation);
@@ -539,6 +543,10 @@ function requirePairing() {
   takeTabValue('history');
   delete document.body.dataset.entry;
   state.manualList = false;
+  if (!threadDocument && !pairingDocument) {
+    const destination = location.pathname === '/archive' ? '#archive' : location.hash;
+    return navigate('/pair' + destination);
+  }
   el('pair').hidden = false;
   document.body.dataset.page = 'pair';
   setPageTitle('red-green', '设备配对');
@@ -668,6 +676,7 @@ for (const link of document.querySelectorAll('.nav-link')) {
 }
 
 function startReader() {
+  if (pairingDocument) return requirePairing();
   if (threadDocument) {
     const {entry, readerError} = document.body.dataset;
     delete document.body.dataset.entry;
@@ -759,8 +768,8 @@ el('pair').onsubmit = async event => {
     document.body.dataset.page = 'list';
     setPageTitle('red-green', '当前会话');
     el('code').value = '';
-    if (threadDocument) location.reload();
-    else await startReader();
+    if (pairingDocument) navigate(location.hash === '#archive' ? '/archive' : '/' + location.hash);
+    else location.reload();
   } catch (error) {
     status(error.message === '403' ? '配对码无效或已过期，请查看 Mac 上的配对码。' : '连接失败，请重试。');
   }

@@ -62,10 +62,11 @@ export async function runReaderBrowser({
         + '"></iframe><script>' + hostScript + '</script></body>';
     } else if (path === '/test-note') {
       content = '<title>测试笔记</title><a id="reader-entry" href="' + escapeHtml(entryPath) + '">打开阅读器</a>';
-    } else if (path === '/' || path === '/archive' || Object.hasOwn(documents, path)) {
+    } else if (path === '/' || path === '/archive' || path === '/pair' || Object.hasOwn(documents, path)) {
       const descriptor = documents[path];
       const served = typeof descriptor === 'function' ? descriptor() : descriptor;
-      const {entry, title, page, error} = served || (path === '/archive'
+      const {entry, title, page, error} = served || (path === '/pair'
+        ? {page: 'pair', title: 'red-green · 设备配对'} : path === '/archive'
         ? {page: 'history', title: 'red-green · 历史会话'} : {page: 'list', title: 'red-green · 当前会话'});
       const metadata = entry ? " data-entry='" + escapeHtml(JSON.stringify(entry)) + "'" : '';
       const errorAttribute = error ? ' data-reader-error="' + error + '"' : '';

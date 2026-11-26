@@ -327,7 +327,7 @@ test('实况请求期间向前翻页，保留正在回看的历史正文', {skip
 });
 
 test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清除列表', {skip: !hasChrome}, async () => {
-  await runReader(async ({el, mac, check, until, refresh, sleep, reader, navigate}) => {
+  await runReader(async ({el, mac, check, until, refresh, sleep, reader, navigate, loadedTitles}) => {
     mac.granted = false;
     await navigate(() => el('history-rows').firstChild.click(), '/read/history/codex-0');
     await until(() => el('status').textContent.includes('开启回复'), '只读设备缺少权限提示');
@@ -353,9 +353,13 @@ test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清�
     check(reader.document.body.dataset.page === 'history' && el('composer').hidden && mac.writes.length === 3, '离开后迟到结果仍然打开输入框');
     mac.paired = false;
     refresh();
-    await until(() => !el('pair').hidden, '撤销配对后没有清除页面');
+    await until(() => reader.location.pathname === '/pair' && el('pair') && !el('pair').hidden, '撤销配对后没有加载配对文档');
+    check(loadedTitles.at(-1).title === 'red-green · 设备配对', '配对文档的原始标题错误');
     check(reader.document.title === 'red-green · 设备配对', '配对撤销后标题未清除');
     check(!el('history-rows').children.length && !el('messages').children.length, '配对撤销后缓存仍可读取');
+    el('code').value = '123456';
+    await navigate(() => el('pair').requestSubmit(), '/archive');
+    check(loadedTitles.at(-1).title === 'red-green · 历史会话', '配对成功后未返回原目录文档');
   });
 });
 
@@ -482,4 +486,31 @@ test('未配对或服务暂不可用时，恢复后重新加载带会话标题�
       check(loadedTitles.at(-1).title === 'Codex CLI · 空闲 · 当前项目 · 正在处理的任务', '恢复后未从新文档获得详情标题');
     }, {entryPath: path, startPath: path, prepare: null, pages, paired: error !== 401});
   }
+});
+
+test('会话暂不可用后恢复时仍可核对原草稿', {skip: !hasChrome}, async () => {
+  const path = '/read/current/codex-home';
+  let visits = 0;
+  const pages = {[path]: () => ++visits === 2
+    ? {page: 'thread', error: 503, title: 'red-green · 会话'}
+    : documents[path]};
+  await runReader(async ({el, mac, reader, until, check, navigate, refresh}) => {
+    const path = reader.location.pathname;
+    await until(() => !el('open-reply').hidden, '未进入可回复的会话');
+    el('open-reply').click();
+    el('reply-text').value = '待核对的回复';
+    el('reply-text').dispatchEvent(new Event('input'));
+    mac.unknown = true;
+    el('send-reply').click();
+    await until(() => el('reply-info').textContent.includes('待核对'), '未保存发送结果');
+    await navigate(() => el('back').click(), '/#list');
+    await until(() => !!el('list').firstChild, '未回到列表');
+    await navigate(() => el('list').firstChild.click(), path);
+    await until(() => el('status').textContent.includes('暂不可用'), '未进入临时错误页');
+    mac.metadataReady = true;
+    await navigate(refresh, path);
+    await until(() => !el('open-reply').hidden, '恢复后无法打开回复');
+    el('open-reply').click();
+    check(el('reply-text').value === '待核对的回复' && el('send-reply').disabled, '临时错误丢失草稿或使未知结果可重复发送');
+  }, {entryPath: path, startPath: path, prepare: null, pages});
 });
