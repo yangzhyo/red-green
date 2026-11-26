@@ -135,8 +135,8 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     filter.dispatchEvent(new Event('input'));
     const browserEntries = window.history.length;
     el('history-rows').firstChild.click();
-    await until(() => document.title.startsWith('red-green · 只读 · 会话标题 0'), '未进入历史详情');
-    check(document.title === 'red-green · 只读 · 会话标题 0 · 项目甲 · Codex CLI / codex-0', '历史详情标题信息不完整');
+    await until(() => el('messages').textContent.includes('历史正文'), '未进入历史详情');
+    check(document.title === '项目甲 · 会话标题 0 · Codex CLI · 只读', '历史详情标题字段或顺序错误');
     checkDetail('返回历史').click();
     check(document.title === 'red-green · 历史会话', '返回历史时仍显示详情标题');
     check(document.body.dataset.page === 'history', '没有返回历史列表');
@@ -148,8 +148,8 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     check(historyBox.right === homeBox.right && historyBox.top === homeBox.top && masthead.getBoundingClientRect().bottom === divider, '两页的导航或虚线不在同一位置');
     check(el('list').firstElementChild.getBoundingClientRect().top === filterTop && filterTop > divider, '虚线下方留白不同');
     el('list').firstElementChild.click();
-    await until(() => document.title.startsWith('red-green · 空闲 · 当前项目') && !el('open-reply').hidden, '未进入可回复的当前会话');
-    check(document.title === 'red-green · 空闲 · 当前项目 · Codex CLI / dex-home', '当前详情标题信息不完整或重复');
+    await until(() => !el('open-reply').hidden, '未进入可回复的当前会话');
+    check(document.title === '当前项目 · Codex CLI · 空闲', '当前详情标题字段错误或项目名重复');
     checkDetail('返回列表').click();
     check(document.body.dataset.page === 'list', '没有返回当前列表');
     check(location.hash === '#list' && window.history.length === browserEntries, '应用内导航增加了浏览器返回步骤');
@@ -213,7 +213,7 @@ test('从历史查看已激活会话时沿用实时状态和设备回复权限',
     mac.state = 'running';
     el('history-rows').firstChild.click();
     check(el('resume').hidden, '确认终端状态前闪现了继续对话');
-    await until(() => document.title.startsWith('red-green · 运行中 · 会话标题 0'), '只读设备未看到实时状态');
+    await until(() => document.title === '项目甲 · 会话标题 0 · Codex CLI · 运行中', '只读设备未看到实时状态');
     check(el('messages').textContent.includes('当前正文') && el('resume').hidden && el('open-reply').hidden, '只读设备的正文或按钮有误');
     mac.granted = true;
     refresh();
@@ -263,7 +263,7 @@ test('正在阅读的实时会话结束后提示结束，重进历史可继续�
     refresh();
     await until(() => el('status').textContent.includes('会话已结束'), '没有显示当前会话的结束状态');
     check(el('messages').textContent.includes('当前正文') && el('open-reply').hidden, '结束后正文或回复状态不正确');
-    check(document.title.startsWith('red-green · 已结束 · 会话标题 0'), '会话结束时浏览器标题未更新');
+    check(document.title === '项目甲 · 会话标题 0 · Codex CLI · 已结束', '会话结束时浏览器标题未更新');
     el('back').click();
     el('history-rows').firstChild.click();
     await until(() => !el('resume').hidden && !el('resume').disabled, '从历史重进后无法恢复');
@@ -300,7 +300,7 @@ test('离开历史正文后，迟到的实时内容不会盖住新打开的会�
     rows[1].click();
     mac.releaseLive();
     await until(() => el('messages').textContent.includes('历史正文'), '迟到的请求影响了下一条会话');
-    check(document.title.startsWith('red-green · 只读 · 会话标题 1') && !el('resume').hidden && el('open-reply').hidden, '新会话的状态不正确');
+    check(document.title === '项目甲 · 会话标题 1 · Codex CLI · 只读' && !el('resume').hidden && el('open-reply').hidden, '新会话的状态不正确');
   });
 });
 

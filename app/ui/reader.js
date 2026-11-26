@@ -69,14 +69,14 @@ const stateNames = new Map([
 ]);
 
 function setPageTitle(...parts) {
-  const next = ['red-green', ...parts].filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
+  const next = parts.filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
   if (document.title !== next) document.title = next;
 }
 
 function updateThreadTitle(stateLabel) {
-  const {title, project, source, key} = currentEntry;
+  const {title, project, source} = currentEntry;
   const name = title || project || '未命名会话';
-  setPageTitle(stateLabel, name, project !== name ? project : '', source + ' / ' + key.slice(-8));
+  setPageTitle(project, name === project ? '' : name, source, stateLabel);
 }
 
 function portrait(entry) {
@@ -165,7 +165,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
     state.open(entry.key);
     updateNavigation();
   } else {
-    setPageTitle(listingHistory ? '历史会话' : '当前会话');
+    setPageTitle('red-green', listingHistory ? '历史会话' : '当前会话');
     state.back();
   }
   if (listingHistory) renderHistoryList();
@@ -496,7 +496,7 @@ function requirePairing() {
   state.manualList = false;
   el('pair').hidden = false;
   document.body.dataset.page = 'pair';
-  setPageTitle('设备配对');
+  setPageTitle('red-green', '设备配对');
   status('');
 }
 
@@ -699,7 +699,7 @@ el('pair').onsubmit = async event => {
     await request('/pair', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:el('code').value})});
     el('pair').hidden = true;
     document.body.dataset.page = 'list';
-    setPageTitle('当前会话');
+    setPageTitle('red-green', '当前会话');
     el('code').value = '';
     await startReader();
   } catch (error) {
