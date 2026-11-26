@@ -10,9 +10,9 @@
 <body data-page="list">
   <header class="masthead">
     <h1 class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green<small id="history-heading" hidden>历史</small></h1>
+    <a class="nav-link" id="open-history" href="#history-list" hidden>历史会话</a>
     <a class="nav-link" id="history-home" href="#list" hidden>返回首页</a>
   </header>
-  <a class="nav-link" id="open-history" href="#history-list" hidden>历史会话</a>
   <form id="composer" hidden>
     <textarea id="reply-text" aria-label="回复当前 Codex 会话" placeholder="输入回复…" rows="2" maxlength="8192" required></textarea>
     <div class="reply-actions">
@@ -44,8 +44,8 @@
     <div id="messages"></div>
   </main>
   <footer hidden>
-    <a class="nav-link" id="back" href="#list">返回列表</a>
     <button id="prev" disabled>上一屏</button>
+    <a class="nav-link" id="back" href="#list">返回列表</a>
     <button id="latest" hidden>有新消息 ↓</button>
     <span id="position" title="当前已经载入的正文"></span>
     <button id="resume" hidden>继续对话</button>

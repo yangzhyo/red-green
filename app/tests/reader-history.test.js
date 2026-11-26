@@ -77,6 +77,7 @@ async function runReader(scenario) {
 test('首页、历史页与详情工具条使用各自的导航链接', {skip: !hasChrome}, async () => {
   await runReader(async ({el, until, check}) => {
     const masthead = document.querySelector('.masthead');
+    document.body.style.width = '420px';
     function link(container, label) {
       const target = [...container.querySelectorAll('a[href]')].find(a => a.innerText === label && a.getClientRects().length);
       check(target && getComputedStyle(target).textDecorationLine.includes('underline'), '缺少可见的超链接：' + label);
@@ -91,6 +92,14 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
         const rect = back.getBoundingClientRect();
         const bounds = bar.getBoundingClientRect();
         check(rect.width >= 44 && rect.height >= 44 && bounds.top >= el('view').getBoundingClientRect().bottom - 1, '返回链接未放入底部触控区');
+        const center = r => r.left + r.width / 2;
+        const prev = el('prev').getBoundingClientRect(), next = el('next').getBoundingClientRect();
+        const action = (el('resume').hidden ? el('open-reply') : el('resume')).getBoundingClientRect();
+        check(prev.left === bounds.left && next.right === bounds.right, '翻页按钮没有分居两端');
+        check(Math.abs(center(prev) + center(next) - 2 * center(bounds)) < 1, '上一屏和下一屏不对称');
+        check(action.width >= 44 && action.height >= 44 && Math.abs(center(rect) + center(action) - 2 * center(bounds)) < 1, '返回和回复操作不对称或触控区域过小');
+        const title = el('title').getBoundingClientRect(), state = el('state').getBoundingClientRect();
+        check(title.right <= state.left && Math.abs(title.bottom - state.bottom) < 3, '状态未对齐首行标题');
         for (const item of bar.children) {
           if (!item.getClientRects().length) continue;
           const r = item.getBoundingClientRect();
@@ -103,6 +112,8 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
       return back;
     }
     const home = link(masthead, '返回首页');
+    const homeBox = home.getBoundingClientRect();
+    const divider = masthead.getBoundingClientRect().bottom;
     const subtitle = el('history-heading');
     check(subtitle?.innerText === '历史' && subtitle.parentElement.classList.contains('wordmark'), '历史没有并入品牌标题');
     check(home.getBoundingClientRect().left >= subtitle.getBoundingClientRect().right, '返回首页未放在标题右侧');
@@ -122,11 +133,12 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     check(document.body.dataset.page === 'history', '没有返回历史列表');
     link(masthead, '返回首页').click();
     await until(() => !!el('list').firstElementChild, '没有回到首页');
-    const historyLink = link(document.body, '历史会话');
-    check(masthead.innerText.trim() === 'red-green' && !/桌面伙伴|\d+\s*个会话/.test(document.body.innerText), '首页仍显示多余标题或会话计数');
-    check(historyLink.getBoundingClientRect().top >= masthead.getBoundingClientRect().bottom - 1, '历史入口未放在原计数行');
+    const historyBox = link(masthead, '历史会话').getBoundingClientRect();
+    check(masthead.querySelector('.wordmark').innerText.trim() === 'red-green' && !/桌面伙伴|\d+\s*个会话/.test(document.body.innerText), '首页仍显示多余标题或会话计数');
+    check(historyBox.right === homeBox.right && historyBox.top === homeBox.top && masthead.getBoundingClientRect().bottom === divider, '两页的导航或虚线不在同一位置');
+    check(el('list').firstElementChild.getBoundingClientRect().top === filterTop && filterTop > divider, '虚线下方留白不同');
     el('list').firstElementChild.click();
-    await until(() => el('state').textContent === '空闲', '未进入当前会话');
+    await until(() => el('state').textContent === '空闲' && !el('open-reply').hidden, '未进入可回复的当前会话');
     checkDetail('返回列表').click();
     check(document.body.dataset.page === 'list', '没有返回当前列表');
     check(location.hash === '#list' && window.history.length === browserEntries, '应用内导航增加了浏览器返回步骤');
