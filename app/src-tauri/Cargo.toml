@@ -20,3 +20,4 @@ percent-encoding = "2"
 rand = "0.9"
 sha2 = "0.10"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+pulldown-cmark-escape = "0.11"

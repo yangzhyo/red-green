@@ -140,6 +140,54 @@ fn account_scope(params: &Value) {
 }
 
 #[test]
+fn current_directory_and_message_updates_follow_the_observed_codex_name() {
+    let server = Backend::new(|method, _, _| {
+        assert_eq!(method, "thread/turns/list");
+        (json!({"data":[]}), false)
+    });
+    let mut reader = server.reader();
+    let mut thread = row(ID, Path::new("/example/project"));
+    thread["status"] = json!({"type":"idle"});
+    let poll = |thread: &Value| {
+        let session = red_green::codex::model::session(
+            thread,
+            Some(&json!({"id":"t"})),
+            "/dev/ttys001",
+            "project",
+        );
+        SNAPSHOT.with_borrow_mut(|rows| *rows = vec![session]);
+    };
+    poll(&thread);
+    assert_eq!(reader.sessions()[0]["title"], "会话标题");
+    let first = reader.messages(KEY, "").unwrap();
+    assert_eq!(first["title"], "会话标题");
+    thread["name"] = json!("新名称");
+    poll(&thread);
+    let since = format!("since={}", first["since"].as_str().unwrap());
+    assert_eq!(reader.messages(KEY, &since).unwrap()["title"], "新名称");
+}
+
+#[test]
+fn history_document_metadata_checks_the_account_and_uses_the_bound_terminal_state() {
+    let server = Backend::new(|method, params, cwd| {
+        assert_eq!(method, "thread/list");
+        account_scope(params);
+        let id = &params["includedThreadIds"][0];
+        let rows = if id == ID { vec![row(ID, cwd)] } else { vec![] };
+        (json!({"data":rows}), false)
+    });
+    let mut reader = server.reader();
+    let entry = reader.history_entry(KEY).unwrap();
+    assert_eq!(entry["title"], "会话标题");
+    assert_eq!(entry["source"], "Codex CLI");
+    assert!(entry["state"].is_null());
+    SNAPSHOT.with_borrow_mut(|sessions| sessions.push(
+        json!({"source":"codex","session_id":KEY,"tty":"/dev/ttys001","state":"awaiting","reader_has_turn":true})));
+    assert_eq!(reader.history_entry(KEY).unwrap()["state"], "awaiting");
+    assert_eq!(reader.history_entry(&format!("codex-{OTHER}")), Err(404));
+}
+
+#[test]
 fn unknown_or_older_servers_cannot_read_or_activate_history() {
     for agent in [
         None,
@@ -481,6 +529,23 @@ fn history_keeps_routing_ready_pages_but_discards_account_changes() {
         "<p><strong>答复</strong></p>\n"
     );
     let older = format!("before={}", first["before"].as_str().unwrap());
+    SNAPSHOT.with_borrow_mut(|rows| {
+        rows.push(json!({"source":"codex","session_id":KEY,"tty":"/dev/ttys001","state":"running"}))
+    });
+    let since = format!("since={}", first["since"].as_str().unwrap());
+    let update = reader.history_messages(KEY, &since).unwrap();
+    assert_eq!(update["messages"], json!([]));
+    assert_eq!(update["live"], true);
+    assert_eq!(update["state"], "running");
+    SNAPSHOT.with_borrow_mut(|rows| rows[0]["state"] = json!("awaiting"));
+    assert_eq!(
+        reader.history_messages(KEY, &since).unwrap()["state"],
+        "awaiting"
+    );
+    SNAPSHOT.with_borrow_mut(|rows| rows[0]["reader_has_turn"] = json!(false));
+    let pending = reader.history_messages(KEY, &since).unwrap();
+    assert_eq!(pending["live"], false);
+    assert!(pending["state"].is_null());
     assert_eq!(
         reader.history_messages(KEY, &older).unwrap()["messages"][0]["text"],
         "上文"

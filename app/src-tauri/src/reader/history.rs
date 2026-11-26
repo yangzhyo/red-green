@@ -1,5 +1,9 @@
 use super::live::UNAVAILABLE;
-use crate::codex::{model::is_thread_id, observer::project_name, rpc::Rpc};
+use crate::codex::{
+    model::{is_thread_id, thread_title},
+    observer::project_name,
+    rpc::Rpc,
+};
 use serde_json::{json, Value};
 use std::{collections::HashSet, path::Path};
 
@@ -165,18 +169,9 @@ fn list_pages(
     Ok((vec![], cursor))
 }
 
-fn list_entry(row: &Value) -> Option<Value> {
+pub(super) fn list_entry(row: &Value) -> Option<Value> {
     let id = eligible_id(row)?;
-    let title = ["name", "preview"]
-        .into_iter()
-        .filter_map(|field| row[field].as_str())
-        .flat_map(str::lines)
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("未命名会话")
-        .chars()
-        .take(120)
-        .collect::<String>();
+    let title = thread_title(row);
     let project = row["cwd"]
         .as_str()
         .filter(|s| Path::new(s).is_absolute())
