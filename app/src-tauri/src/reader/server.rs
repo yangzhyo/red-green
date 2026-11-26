@@ -1,5 +1,6 @@
 use super::{pairing::Pairing, Library};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
+use serde_json::{json, Value};
 use std::{
     io::{self, Read},
     net::{SocketAddr, TcpListener},
@@ -13,6 +14,22 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 pub trait Source: Send + 'static {
     fn sessions(&mut self) -> serde_json::Value;
+    fn history(&mut self, _cursor: Option<&str>) -> Result<Value, u16> {
+        Ok(json!({"entries": [], "nextCursor": null, "generation":"demo"}))
+    }
+    fn history_status(&mut self, generation: &str) -> Result<Value, u16> {
+        (generation == "demo").then(|| json!({})).ok_or(409)
+    }
+    fn history_messages(&mut self, _key: &str, _query: &str) -> Result<Value, u16> {
+        Err(404)
+    }
+    fn resume(
+        &mut self,
+        _key: &str,
+        _admit: impl FnOnce() -> Result<(), u16>,
+    ) -> Result<Value, u16> {
+        Err(405)
+    }
     fn send_reply(
         &mut self,
         _key: &str,
@@ -197,29 +214,50 @@ fn handle(
     if !pairing.lock().unwrap().allows(&cookie) {
         return reply(request, 401, JSON, "{}".into(), None);
     }
-    let key = path
-        .strip_prefix("/sessions/")
-        .and_then(|p| p.strip_suffix("/messages"));
+    let live_key = route_key(path, "/sessions/", "/messages");
+    let history_key = route_key(path, "/history/", "/messages");
     if request.method() == &Method::Post {
-        let result = key
-            .ok_or(405u16)
-            .and_then(|key| send_reply(&mut request, address, pairing, &cookie, source, key));
-        return reply(
-            request,
-            result.err().unwrap_or(200),
-            JSON,
-            "{}".into(),
-            None,
-        );
+        let result = if let Some(key) = live_key {
+            write_action(
+                &mut request,
+                address,
+                pairing,
+                &cookie,
+                source,
+                Action::Reply(key),
+            )
+        } else if let Some(key) = route_key(path, "/history/", "/resume") {
+            write_action(
+                &mut request,
+                address,
+                pairing,
+                &cookie,
+                source,
+                Action::Resume(key),
+            )
+        } else {
+            Err(405)
+        };
+        return match result {
+            Ok(data) => reply(request, 200, JSON, data.to_string(), None),
+            Err(code) => reply(request, code, JSON, "{}".into(), None),
+        };
     }
     if request.method() != &Method::Get {
         return reply(request, 405, JSON, "{}".into(), None);
     }
-    let mut data = match path {
-        "/sessions" => Ok(source.sessions()),
-        _ => key
-            .ok_or(404u16)
-            .and_then(|key| source.messages(key, query)),
+    let mut data = match (path, live_key, history_key) {
+        ("/sessions", _, _) => Ok(source.sessions()),
+        ("/history", _, _) if query.is_empty() => source.history(None),
+        ("/history", _, _) => {
+            query_token(query, "cursor=", 8192).and_then(|v| source.history(Some(&v)))
+        }
+        ("/history/status", _, _) => {
+            query_token(query, "generation=", 128).and_then(|v| source.history_status(&v))
+        }
+        (_, Some(key), _) => source.messages(key, query),
+        (_, _, Some(key)) => source.history_messages(key, query),
+        _ => Err(404u16),
     };
     // A slow source read might have overlapped a revocation on the Mac.
     {
@@ -227,9 +265,15 @@ fn handle(
         if !device.allows(&cookie) {
             return reply(request, 401, JSON, "{}".into(), None);
         }
-        if let (Some(key), Ok(page)) = (key.filter(|k| k.starts_with("codex-")), &mut data) {
-            if let Some(ticket) = device.reply_ticket(key) {
-                page["replyTicket"] = ticket.into();
+        if let Ok(page) = &mut data {
+            if let Some(key) = live_key.filter(|k| k.starts_with("codex-")) {
+                if let Some(ticket) = device.reply_ticket(key) {
+                    page["replyTicket"] = ticket.into();
+                }
+            } else if let Some(key) = history_key {
+                if let Some(ticket) = device.reply_ticket(&format!("resume/{key}")) {
+                    page["resumeTicket"] = ticket.into();
+                }
             }
         }
     }
@@ -239,20 +283,54 @@ fn handle(
     }
 }
 
-fn send_reply(
+fn route_key<'a>(path: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    path.strip_prefix(prefix)?
+        .strip_suffix(suffix)
+        .filter(|s| !s.is_empty() && !s.contains('/'))
+}
+
+fn query_token<'a>(
+    query: &'a str,
+    prefix: &str,
+    limit: usize,
+) -> Result<std::borrow::Cow<'a, str>, u16> {
+    let encoded = query
+        .strip_prefix(prefix)
+        .filter(|v| !v.is_empty() && v.len() <= limit && !v.contains('&'))
+        .ok_or(400u16)?;
+    percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map_err(|_| 400u16)
+}
+
+enum Action<'a> {
+    Reply(&'a str),
+    Resume(&'a str),
+}
+
+fn write_action(
     request: &mut Request,
     address: SocketAddr,
     pairing: &Mutex<Pairing>,
     cookie: &str,
     source: &mut impl Source,
-    key: &str,
-) -> Result<(), u16> {
+    action: Action<'_>,
+) -> Result<Value, u16> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Submission {
         ticket: String,
         text: String,
     }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Resume {
+        ticket: String,
+    }
+
+    let key = match action {
+        Action::Reply(key) | Action::Resume(key) => key,
+    };
     if !key.starts_with("codex-") {
         return Err(405);
     }
@@ -265,29 +343,45 @@ fn send_reply(
     if !has_header("Origin", &format!("http://{address}")) || !has_header("Content-Type", JSON) {
         return Err(403);
     }
-    const MAX_BODY: usize = 64 * 1024;
-    if !request.body_length().is_some_and(|n| n <= MAX_BODY) {
+
+    let (scope, ticket, text) = match action {
+        Action::Reply(_) => {
+            let data: Submission = read_json(request, 64 * 1024)?;
+            if data.text.trim().is_empty() || data.text.chars().count() > 8192 {
+                return Err(422);
+            }
+            (key.to_owned(), data.ticket, Some(data.text))
+        }
+        Action::Resume(_) => {
+            let data: Resume = read_json(request, 256)?;
+            (format!("resume/{key}"), data.ticket, None)
+        }
+    };
+    pairing.lock().unwrap().check_ticket(&scope, &ticket)?;
+    let admit = || {
+        let mut device = pairing.lock().unwrap();
+        if !device.allows(cookie) {
+            return Err(401);
+        }
+        device.take_ticket(&scope, &ticket)
+    };
+    if let Some(text) = text {
+        source.send_reply(key, &text, admit)?;
+        Ok(json!({}))
+    } else {
+        source.resume(key, admit)
+    }
+}
+
+fn read_json<T: DeserializeOwned>(request: &mut Request, limit: usize) -> Result<T, u16> {
+    if !request.body_length().is_some_and(|n| n <= limit) {
         return Err(413);
     }
     let mut bytes = Vec::new();
     request
         .as_reader()
-        .take(MAX_BODY as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| 400u16)?;
-    let submission: Submission = serde_json::from_slice(&bytes).map_err(|_| 400u16)?;
-    if submission.text.trim().is_empty() || submission.text.chars().count() > 8192 {
-        return Err(422);
-    }
-    pairing
-        .lock()
-        .unwrap()
-        .check_ticket(key, &submission.ticket)?;
-    source.send_reply(key, &submission.text, || {
-        let mut device = pairing.lock().unwrap();
-        if !device.allows(cookie) {
-            return Err(401);
-        }
-        device.take_ticket(key, &submission.ticket)
-    })
+    serde_json::from_slice(&bytes).map_err(|_| 400u16)
 }

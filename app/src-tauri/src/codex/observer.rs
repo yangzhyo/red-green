@@ -84,7 +84,7 @@ impl Observer {
                 sessions.push(session);
             }
         }
-        if rpc.account_changed {
+        if rpc.account_updated {
             self.invalidate_account(rpc);
         }
         if !sessions.is_empty()
@@ -102,7 +102,7 @@ impl Observer {
             }
         }
         // 通知也可能在额度请求等待期间到达；不发布跨账号的旧响应。
-        if rpc.account_changed {
+        if rpc.account_updated {
             self.invalidate_account(rpc);
         }
         Ok(Snapshot {
@@ -114,11 +114,12 @@ impl Observer {
     fn invalidate_account(&mut self, rpc: &mut Rpc) {
         self.usage = Value::Null;
         self.last_usage_read = None;
+        rpc.account_updated = false;
         rpc.account_changed = false;
     }
 }
 
-fn project_name(cwd: &str) -> String {
+pub(crate) fn project_name(cwd: &str) -> String {
     let root = Command::new("git")
         .args(["-C", cwd, "rev-parse", "--show-toplevel"])
         .output()
@@ -138,7 +139,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn account_change_during_quota_read_never_publishes_old_account() {
+    fn account_updates_during_quota_reads_refresh_usage() {
         let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
         let worker = std::thread::spawn(move || {
             let mut ws = tungstenite::accept(server).unwrap();
@@ -157,11 +158,12 @@ mod tests {
                     "thread/turns/list" => json!({"data":[]}),
                     "account/rateLimits/read" => {
                         quotas += 1;
-                        if quotas == 1 {
-                            ws.send(tungstenite::Message::text(
-                                json!({"method":"account/updated"}).to_string(),
-                            ))
-                            .unwrap();
+                        if quotas <= 2 {
+                            let reason = (quotas == 2).then_some("workspaceRoutingReady");
+                            let update =
+                                json!({"method":"account/updated","params":{"reason":reason}});
+                            ws.send(tungstenite::Message::text(update.to_string()))
+                                .unwrap();
                         }
                         json!({"accountId":format!("account-{quotas}"),"rateLimits":{"primary":{"usedPercent":23}}})
                     }
@@ -179,10 +181,12 @@ mod tests {
             "019a1234-1234-7123-8123-123456789abc".into(),
             "/dev/ttys001".into(),
         )]);
-        assert!(observer.poll(&mut rpc, &bindings).unwrap().usage.is_null());
+        for _ in 0..2 {
+            assert!(observer.poll(&mut rpc, &bindings).unwrap().usage.is_null());
+        }
         assert_eq!(
             observer.poll(&mut rpc, &bindings).unwrap().usage["groups"][0]["account_id"],
-            "account-2"
+            "account-3"
         );
         drop(rpc);
         worker.join().unwrap();

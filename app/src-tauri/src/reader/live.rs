@@ -1,4 +1,4 @@
-use super::{claude::Transcript, codex::visible_items, Conversation, Source};
+use super::{claude::Transcript, codex::visible_items, history, Conversation, Source};
 use crate::codex::rpc::Rpc;
 use serde_json::{json, Value};
 use std::{
@@ -9,12 +9,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const UNAVAILABLE: u16 = 503;
+pub(super) const UNAVAILABLE: u16 = 503;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResumeTerminal {
+    Ghostty(String),
+    Terminal { tty: String, inode: u64 },
+    Unknown,
+}
+type TerminalLauncher = fn(&Path, &str, &Path) -> Result<ResumeTerminal, u16>;
 pub struct LiveSource {
     snapshot: fn() -> Vec<Value>,
     status_dir: PathBuf,
     socket: PathBuf,
     selected: HashMap<String, Selection>,
+    stored: Option<StoredConversation>,
+    history_directory: history::Directory,
+    launch: TerminalLauncher,
+    terminal_exists: fn(&ResumeTerminal) -> Result<bool, u16>,
+    thread_terminal_exists: fn(&str, &[String]) -> Result<bool, u16>,
+    launching: HashMap<String, ResumeTerminal>,
+}
+
+struct StoredConversation {
+    id: String,
+    body: Conversation,
+    history: CodexHistory,
 }
 #[derive(serde::Serialize)]
 struct DirectoryEntry {
@@ -90,7 +109,8 @@ impl CodexHistory {
         id: &str,
         cursor: Option<&str>,
     ) -> Result<(Vec<Value>, Option<String>), u16> {
-        if self.rpc.is_none() {
+        let new_connection = self.rpc.is_none();
+        if new_connection {
             let mut rpc = Rpc::connect(socket).map_err(|_| UNAVAILABLE)?;
             rpc.watch_for_close(id);
             self.rpc = Some(rpc);
@@ -98,7 +118,7 @@ impl CodexHistory {
         let rpc = self.rpc.as_mut().unwrap();
         let params = json!({"threadId":id,"cursor":cursor,"limit":16,"sortDirection":"desc","itemsView":"full"});
         let mut result = rpc.call("thread/turns/list", params.clone());
-        if rpc.account_changed && self.latest_turn.is_none() {
+        if rpc.account_changed && new_connection && self.latest_turn.is_none() {
             // App Server announces the initial account after initialization. Discard the
             // overlapping response and establish a fresh baseline on this same connection.
             rpc.account_changed = false;
@@ -199,7 +219,34 @@ impl LiveSource {
             status_dir,
             socket,
             selected: HashMap::new(),
+            stored: None,
+            history_directory: history::Directory::default(),
+            launch: |_, _, _| Err(424),
+            terminal_exists: |_| Err(503),
+            thread_terminal_exists: |_, _| Err(503),
+            launching: HashMap::new(),
         }
+    }
+
+    pub fn with_terminal_launcher(
+        mut self,
+        launch: TerminalLauncher,
+        terminal_exists: fn(&ResumeTerminal) -> Result<bool, u16>,
+        thread_terminal_exists: fn(&str, &[String]) -> Result<bool, u16>,
+    ) -> Self {
+        self.launch = launch;
+        self.terminal_exists = terminal_exists;
+        self.thread_terminal_exists = thread_terminal_exists;
+        self
+    }
+
+    fn terminal_ready(&self, key: &str) -> Option<bool> {
+        (self.snapshot)().iter().find_map(|session| {
+            (session["source"] == "codex"
+                && session["session_id"] == key
+                && session["tty"].as_str().is_some_and(|tty| !tty.is_empty()))
+            .then(|| session["reader_has_turn"] != false)
+        })
     }
 
     fn mapping(&self, id: &str) -> Option<String> {
@@ -246,6 +293,91 @@ impl LiveSource {
 }
 
 impl Source for LiveSource {
+    fn history(&mut self, cursor: Option<&str>) -> Result<Value, u16> {
+        self.history_directory.list(&self.socket, cursor)
+    }
+
+    fn history_status(&mut self, generation: &str) -> Result<Value, u16> {
+        self.history_directory.status(generation)
+    }
+
+    fn history_messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
+        let id = history::thread_id(key)?;
+        // 一次只保留正在阅读的一份正文和连接。权限变化、断线或切换会话即丢弃。
+        let stored = self.stored.take().filter(|s| s.id == id);
+        let fresh = stored.is_none();
+        let mut stored = match stored {
+            Some(stored) => stored,
+            None => StoredConversation {
+                id: id.into(),
+                body: Conversation::new(key, "", "Codex CLI"),
+                history: CodexHistory {
+                    rpc: Some(Rpc::connect(&self.socket).map_err(|_| UNAVAILABLE)?),
+                    ..Default::default()
+                },
+            },
+        };
+        let rpc = stored.history.rpc.as_mut().ok_or(UNAVAILABLE)?;
+        history::find(rpc, id, fresh)?;
+        let mut page = stored
+            .history
+            .refresh(&self.socket, id, query, &mut stored.body)?;
+        let ready = self.terminal_ready(key) == Some(true);
+        page["live"] = ready.into();
+        if ready {
+            self.launching.remove(id);
+        }
+        self.stored = Some(stored);
+        Ok(page)
+    }
+
+    fn resume(&mut self, key: &str, admit: impl FnOnce() -> Result<(), u16>) -> Result<Value, u16> {
+        let id = history::thread_id(key)?;
+        let mut rpc = Rpc::connect(&self.socket).map_err(|_| UNAVAILABLE)?;
+        history::find(&mut rpc, id, true)?;
+        if let Some(ready) = self.terminal_ready(key) {
+            admit()?;
+            if ready {
+                self.launching.remove(id);
+            }
+            return Ok(json!({"ready":ready}));
+        }
+        if let Some(terminal) = self.launching.get(id) {
+            match (self.terminal_exists)(terminal) {
+                Ok(true) => {
+                    admit()?;
+                    return Ok(json!({"ready":false}));
+                }
+                Ok(false) => {
+                    self.launching.remove(id);
+                }
+                // Apple Event may have succeeded without returning a native handle.
+                // Check the exact thread title before asking for recovery on the Mac.
+                Err(428) => (),
+                Err(status) => return Err(status),
+            }
+        }
+        let loaded = history::loaded_threads(&mut rpc)?;
+        if loaded.iter().any(|thread| thread == id) && (self.thread_terminal_exists)(id, &loaded)? {
+            admit()?;
+            return Ok(json!({"ready":false}));
+        }
+        if self.launching.contains_key(id) {
+            return Err(428);
+        }
+        // 查询原生终端可能较慢，在打开标签前再次取得当前账号下的原目录。
+        let thread = history::find(&mut rpc, id, false)?;
+        let cwd = thread["cwd"]
+            .as_str()
+            .map(Path::new)
+            .filter(|path| path.is_absolute() && path.is_dir())
+            .ok_or(422u16)?;
+        admit()?;
+        let tab = (self.launch)(cwd, id, &self.socket)?;
+        self.launching.insert(id.into(), tab);
+        Ok(json!({"ready":false}))
+    }
+
     fn send_reply(
         &mut self,
         key: &str,

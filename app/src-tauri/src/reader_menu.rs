@@ -99,7 +99,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let divider = PredefinedMenuItem::separator(app)?;
     let notice = item(
         "reader-notice",
-        "配对设备可阅读当前 Claude Code 和 Codex CLI 会话",
+        "配对设备可阅读当前会话及本机当前账号的 Codex CLI 历史",
         false,
     )?;
     let toggle = item("reader-toggle", "开启局域网阅读", true)?;
@@ -156,6 +156,11 @@ pub fn install(app: &App) -> tauri::Result<()> {
                                 super::status_dir(),
                                 super::codex_home()
                                     .join("app-server-control/app-server-control.sock"),
+                            )
+                            .with_terminal_launcher(
+                                super::codex_terminals::resume,
+                                super::codex_terminals::terminal_exists,
+                                super::codex_terminals::thread_terminal_exists,
                             );
                             Reader::with_store(
                                 addr,

@@ -18,8 +18,17 @@ let timer;
 let wantEarlier = false;
 let stopped = false;
 let interrupted = false;
+let homeNotice = '';
 let currentEntry = null;
 let replyTicket = null;
+let historyList = null;
+let readingHistory = false;
+let resumeTicket = null;
+let activation = null;
+let resumeNotice = '';
+const historyUnsupported = '请更新 Mac 上的 Codex CLI 后再查看历史';
+const needsReplyPermission = '请在 Mac 上开启回复后再继续对话';
+const liveUnavailableNotice = '实况暂不可用，可继续回看';
 let sending = false;
 let replyError = '';
 const replyErrors = {
@@ -32,9 +41,11 @@ const replyErrors = {
 const drafts = new Map();
 const composer = el('composer');
 const draft = el('reply-text');
+const projectFilter = el('project-filter');
 
 function updateReply() {
   const active = !stopped && !!replyTicket;
+  el('resume').disabled = !resumeTicket || !!activation || stopped;
   el('open-reply').hidden = !active || !composer.hidden;
   const unavailable = !active || ['running', 'awaiting'].includes(currentEntry?.state);
   el('send-reply').disabled = sending || replyError === 'unknown' || unavailable || !draft.value.trim();
@@ -45,6 +56,7 @@ function updateReply() {
     let hint = replyErrors[replyError] || '';
     if (replyError !== 'unknown') {
       if (!active && !hint) hint = '回复暂不可用';
+      else if (active && currentEntry?.state === 'awaiting') hint = '请在 Mac 终端处理提示';
       else if (active && unavailable) hint = '请等待当前回合结束';
       else if (active && ['401','403','409','503'].includes(replyError)) hint = '上次未发送，可重试';
     }
@@ -96,7 +108,7 @@ async function request(path, options) {
   } finally { clearTimeout(timeout); }
 }
 
-function display(entry) {
+function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry} = {}) {
   if (currentEntry && draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
   else if (currentEntry) drafts.delete(currentEntry.key);
   const savedDraft = entry && drafts.get(entry.key);
@@ -109,11 +121,27 @@ function display(entry) {
   following = true;
   stopped = false;
   interrupted = false;
+  homeNotice = '';
   status('');
   el('latest').hidden = true;
-  el('back').hidden = footer.hidden = !entry;
+  if (!fromHistory && historyList) {
+    historyList = null;
+    el('history-rows').replaceChildren();
+    projectFilter.value = '';
+  }
+  const listingHistory = fromHistory && !entry;
+  el('back').hidden = !entry && !listingHistory;
+  el('back-label').textContent = listingHistory ? '首页' : fromHistory ? '历史' : '列表';
+  el('back').setAttribute('aria-label', fromHistory && entry ? '返回历史列表' : '返回会话列表');
+  el('open-history').hidden = true;
+  projectFilter.hidden = el('history-list').hidden = !listingHistory;
+  footer.hidden = !entry;
+  readingHistory = readOnly;
+  resumeTicket = activation = null;
+  resumeNotice = '';
   currentEntry = entry;
   composer.hidden = true;
+  el('resume').hidden = true;
   replyTicket = null;
   sending = false;
   replyError = savedDraft?.replyError || '';
@@ -121,17 +149,19 @@ function display(entry) {
   draft.value = savedDraft?.text || '';
   el('reply-info').textContent = replyErrors[replyError] || '';
   updateReply();
-  document.body.dataset.page = entry ? 'thread' : 'list';
+  document.body.dataset.page = entry ? 'thread' : listingHistory ? 'history' : 'list';
   el('count').hidden = true;
   el('source').hidden = !entry;
-  el('title').textContent = entry ? entry.project : '桌面伙伴';
-  el('title').title = entry ? entry.project : '';
-  el('state').textContent = entry ? stateNames.get(entry.state) || '' : '';
+  el('title').textContent = entry ? entry.title || entry.project : listingHistory ? '历史' : '桌面伙伴';
+  el('title').title = entry ? el('title').textContent : '';
+  el('state').textContent = readOnly ? '' : stateNames.get(entry?.state) || '';
   if (entry) {
-    el('source').textContent = entry.source + ' / ' + entry.key.slice(-8);
+    el('source').textContent = entry.source + ' / ' + (fromHistory ? entry.project : entry.key.slice(-8));
     state.open(entry.key);
     updateNavigation();
   } else state.back();
+  if (listingHistory) renderHistoryList();
+  view.scrollTop = listingHistory ? historyList.scroll : 0;
 }
 
 function sessionRow(entry) {
@@ -159,7 +189,8 @@ function sessionRow(entry) {
 }
 
 function showList(entries) {
-  status(entries.length ? '' : '等待可读会话');
+  el('open-history').hidden = false;
+  status(homeNotice || (entries.length ? '' : '等待可读会话'));
   const key = state.autoOpen(entries);
   if (key) {
     display(entries[0]);
@@ -191,6 +222,68 @@ function showList(entries) {
     row.entry = entry;
     if (list.children[i] !== row.button) list.insertBefore(row.button, list.children[i] || null);
   });
+}
+
+const localDate = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+
+function addHistoryRow(entry) {
+  if (historyList.rows.has(entry.key)) return;
+  const button = document.createElement('button');
+  const title = document.createElement('strong');
+  title.textContent = entry.title || '未命名会话';
+  const detail = document.createElement('small');
+  detail.textContent = entry.project + ' · ' + localDate.format(new Date(entry.updatedAt * 1000));
+  button.append(title, detail);
+  button.onclick = () => {
+    historyList.scroll = view.scrollTop;
+    display(entry, {fromHistory: true});
+    poll();
+  };
+  const project = entry.project.toLocaleLowerCase();
+  button.hidden = !project.includes(historyList.filter);
+  if (!button.hidden) historyList.matches++;
+  historyList.rows.set(entry.key, {button, project});
+  el('history-rows').append(button);
+}
+
+function renderHistoryList() {
+  const {load, cursor, error, matches, filter} = historyList;
+  el('history-more').hidden = !cursor && !error;
+  el('history-more').disabled = load;
+  el('history-more').textContent = error ? '重试' : '加载更多';
+  status(error || (load ? '正在查找历史会话…' : matches ? '' : filter ? '没有匹配的项目' : '暂无历史会话'));
+}
+
+async function tickHistoryList(generation) {
+  if (!historyList.load) {
+    // Check the account and device grant without reloading rows or moving the page.
+    const token = historyList.generation;
+    await request(token ? '/history/status?generation=' + encodeURIComponent(token) : '/sessions');
+    if (generation === state.generation && interrupted) {
+      interrupted = false;
+      renderHistoryList();
+    }
+    return;
+  }
+  const cursor = historyList.cursor;
+  const page = await request('/history' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+  if (generation !== state.generation) return;
+  if (!page.generation || (historyList.generation && page.generation !== historyList.generation)) {
+    throw new Error('409');
+  }
+  historyList.generation = page.generation;
+  if (page.nextCursor && historyList.cursors.has(page.nextCursor)) throw new Error('503');
+  if (page.nextCursor) historyList.cursors.add(page.nextCursor);
+  const previousCount = historyList.matches;
+  page.entries.forEach(addHistoryRow);
+  historyList.cursor = page.nextCursor;
+  historyList.load = !!historyList.cursor && historyList.matches === previousCount;
+  if (historyList.load) queued = true;
+  historyList.error = '';
+  interrupted = false;
+  renderHistoryList();
 }
 
 const readingBlocks = 'p, li, tr, pre, h1, h2, h3, h4, h5, h6, hr';
@@ -292,23 +385,71 @@ function render(message) {
   renderBody(article.lastElementChild, message);
 }
 
+function canSwitchToLive() {
+  // Explicit activation can leave an older page. Browsing follows live only at the end.
+  return activation ? activation.stage === 'waiting' : following;
+}
+
 async function tick() {
   const generation = state.generation;
   if (!state.key) {
+    if (historyList) return tickHistoryList(generation);
     const entries = await request('/sessions');
     if (generation === state.generation) showList(entries);
     return;
   }
   const earlier = wantEarlier && before;
   wantEarlier = false;
-  const query = earlier ? '?before=' + before : since ? '?since=' + since : '';
-  const page = await request('/sessions/' + encodeURIComponent(state.key) + '/messages' + query);
+  const query = earlier ? '?before=' + encodeURIComponent(before) : since ? '?since=' + encodeURIComponent(since) : '';
+  const key = encodeURIComponent(state.key);
+  const endpoint = (readingHistory ? '/history/' : '/sessions/') + key + '/messages';
+  const page = await request(endpoint + query);
   if (generation !== state.generation) return;
-  if ('state' in page && currentEntry.state !== page.state) {
+  if (readingHistory) {
+    let bound = page.live;
+    resumeTicket = page.resumeTicket || null;
+    if (resumeTicket && resumeNotice === needsReplyPermission) resumeNotice = '';
+    if (activation?.stage === 'waiting' && !resumeTicket) finishActivation(needsReplyPermission);
+    if (bound && canSwitchToLive()) {
+      // The live reader owns its cursors, terminal state and reply permission.
+      const liveEndpoint = '/sessions/' + key + '/messages';
+      let livePage;
+      try {
+        livePage = await request(liveEndpoint);
+      } catch (error) {
+        // A terminal can close between the history lookup and the live read.
+        if (generation !== state.generation) return;
+        if (error.message === '503') resumeNotice = liveUnavailableNotice;
+        else if (['404', '410'].includes(error.message)) bound = false;
+        else throw error;
+      }
+      if (generation !== state.generation) return;
+      if (livePage && canSwitchToLive()) {
+        const continued = activation?.stage === 'waiting';
+        display(currentEntry, {fromHistory: true, readOnly: false});
+        const liveGeneration = state.generation;
+        await showMessages(livePage, false, liveEndpoint, liveGeneration);
+        if (continued && liveGeneration === state.generation) openComposer();
+        return;
+      }
+    }
+    if (!bound && resumeNotice === liveUnavailableNotice) resumeNotice = '';
+    if (el('state').textContent !== '只读') el('state').textContent = '只读';
+    el('resume').hidden = bound;
+  }
+  await showMessages(page, earlier, endpoint, generation);
+}
+
+async function showMessages(page, earlier, endpoint, generation) {
+  if (!readingHistory && 'state' in page && currentEntry.state !== page.state) {
     currentEntry.state = page.state;
     el('state').textContent = stateNames.get(page.state) || '';
   }
-  replyTicket = page.replyTicket || null;
+  replyTicket = readingHistory ? null : page.replyTicket || null;
+  if (!replyTicket && !composer.hidden) {
+    draft.blur();
+    composer.hidden = true;
+  }
   updateReply();
   const saved = !following && (page.reset || page.messages.length) ? anchor() : null;
   if (page.reset) {
@@ -317,7 +458,7 @@ async function tick() {
     while (saved && page.before && !page.messages.some(m => m.id === saved.id)) {
       if (cursors.has(page.before)) break;
       cursors.add(page.before);
-      const older = await request('/sessions/' + encodeURIComponent(state.key) + '/messages?before=' + page.before);
+      const older = await request(endpoint + '?before=' + encodeURIComponent(page.before));
       if (generation !== state.generation) return;
       page.before = older.before;
       page.messages = older.messages.concat(page.messages);
@@ -329,7 +470,10 @@ async function tick() {
   const changes = state.changes(generation, page.messages);
   if (!earlier || page.reset) since = page.since;
   if ('before' in page) before = page.before;
-  status(state.messages.size ? '' : '等待第一条消息');
+  if (activation) status(activation.notice);
+  else if (readingHistory && resumeNotice) status(resumeNotice);
+  else if (!state.messages.size) status(readingHistory ? '这段历史会话暂无正文' : '等待第一条消息');
+  else status(readingHistory && !resumeTicket ? needsReplyPermission : '');
   if (changes.length) {
     changes.forEach(render);
     if (following) view.scrollTop = view.scrollHeight;
@@ -342,6 +486,23 @@ async function tick() {
   interrupted = false;
 }
 
+function requirePairing() {
+  display(null);
+  drafts.clear();
+  state.manualList = false;
+  el('pair').hidden = false;
+  document.body.dataset.page = 'pair';
+  el('title').textContent = '设备配对';
+  status('');
+}
+
+function sourceChanged(notice = '会话来源已变更，请重新选择') {
+  display(null);
+  drafts.clear();
+  homeNotice = notice;
+  status(homeNotice);
+}
+
 async function poll() {
   clearTimeout(timer);
   if (document.hidden || !el('pair').hidden || stopped) return;
@@ -349,24 +510,27 @@ async function poll() {
   busy = true;
   const generation = state.generation;
   try {
+    if (activation?.stage === 'waiting' && Date.now() >= activation.deadline) {
+      finishActivation('尚未连上终端，请在 Mac 上查看 Codex 后重试');
+    }
     await tick();
   } catch (error) {
     if (generation === state.generation) {
       replyTicket = null;
+      resumeTicket = null;
       updateReply();
       if (error.message === '401') {
-        display(null);
-        drafts.clear();
-        state.manualList = false;
-        el('pair').hidden = false;
-        document.body.dataset.page = 'pair';
-        el('title').textContent = '设备配对';
-        status('');
-      } else if (error.message === '409') {
-        display(null);
-        drafts.clear();
-        status('会话来源已变更，请重新选择');
+        requirePairing();
+      } else if (error.message === '501' && historyList) {
+        sourceChanged(historyUnsupported);
         queued = true;
+      } else if (error.message === '409' || (readingHistory && ['404', '410'].includes(error.message))) {
+        sourceChanged();
+        queued = true;
+      } else if (historyList && !state.key && historyList.load) {
+        historyList.load = false;
+        historyList.error = '未能加载历史会话，请重试';
+        renderHistoryList();
       } else if (error.message === '410') {
         stopped = true;
         el('state').textContent = '';
@@ -377,18 +541,92 @@ async function poll() {
   } finally {
     updateNavigation();
     busy = false;
-    const delay = queued ? 0 : 3000;
+    const delay = queued ? 0 : activation?.stage === 'waiting' ? 1000 : 3000;
     queued = false;
     if (!document.hidden && el('pair').hidden && !stopped) timer = setTimeout(poll, delay);
   }
 }
 
-el('open-reply').onclick = () => {
+function openComposer() {
+  if (!replyTicket || readingHistory || stopped) return;
   composer.hidden = false;
   el('open-reply').textContent = '回复';
   updateReply();
   if (following) view.scrollTop = view.scrollHeight;
   draft.focus();
+}
+el('open-reply').onclick = openComposer;
+
+function finishActivation(notice) {
+  activation = null;
+  resumeNotice = notice;
+  status(notice);
+  updateReply();
+}
+
+el('resume').onclick = async () => {
+  if (!readingHistory || !resumeTicket || activation || stopped) return;
+  const generation = state.generation;
+  const ticket = resumeTicket;
+  activation = {stage: 'requesting', notice: '正在连接 Mac 上的 Codex 终端…'};
+  resumeNotice = '';
+  status(activation.notice);
+  updateReply();
+  let notice = '正在等待 Mac 上的 Codex 终端…';
+  try {
+    await request('/history/' + encodeURIComponent(state.key) + '/resume', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ticket}),
+    });
+  } catch (error) {
+    if (generation !== state.generation) return;
+    if (error.message === '401') { requirePairing(); return; }
+    if (error.message === '501') { sourceChanged(historyUnsupported); poll(); return; }
+    if (['404', '409', '410'].includes(error.message)) { sourceChanged(); poll(); return; }
+    const reason = {
+      '403': needsReplyPermission,
+      '412': '会话凭据已更新，请重新点继续对话',
+      '422': '项目目录已移动或不存在，请在 Mac 上检查',
+      '424': '请在 Mac 检查终端和自动化权限后重试',
+      '428': '请在 Mac 检查新终端。若已打开，请完成终端提示；若没有，请关闭并重新开启局域网阅读，再允许设备回复。',
+      '503': '会话暂不可用，请稍后重试',
+    }[error.message];
+    if (reason) {
+      resumeTicket = null;
+      finishActivation(reason);
+      poll();
+      return;
+    }
+    // The Mac may already have launched the terminal. Only poll after an uncertain POST.
+    notice = '启动结果待核对，正在等待 Mac 上的终端…';
+  }
+  if (generation !== state.generation) return;
+  activation = {stage: 'waiting', deadline: Date.now() + 30000, notice};
+  status(notice);
+  poll();
+};
+
+el('open-history').onclick = () => {
+  historyList = {generation: null, rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
+  display(null, {fromHistory: true});
+  poll();
+};
+el('history-more').onclick = () => {
+  historyList.load = true;
+  historyList.error = '';
+  renderHistoryList();
+  poll();
+};
+projectFilter.oninput = () => {
+  view.scrollTop = 0;
+  historyList.filter = projectFilter.value.trim().toLocaleLowerCase();
+  historyList.matches = 0;
+  for (const {button, project} of historyList.rows.values()) {
+    const match = project.includes(historyList.filter);
+    if (button.hidden === match) button.hidden = !match;
+    if (match) historyList.matches++;
+  }
+  renderHistoryList();
+  if (!historyList.matches && historyList.cursor && !historyList.load && !historyList.error) el('history-more').click();
 };
 el('cancel-reply').onclick = () => {
   composer.hidden = true;
@@ -440,7 +678,7 @@ el('pair').onsubmit = async event => {
     status(error.message === '403' ? '配对码无效或已过期，请查看 Mac 上的配对码。' : '连接失败，请重试。');
   }
 };
-el('back').onclick = () => { display(null); poll(); };
+el('back').onclick = () => { display(null, {fromHistory: !!currentEntry && !!historyList}); poll(); };
 el('prev').onclick = () => {
   following = false;
   if (view.scrollTop <= 1 && before) { wantEarlier = true; poll(); }
@@ -461,7 +699,12 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.key) interrupted = true;
   poll();
 });
-window.addEventListener('offline', () => { interrupted = true; });
+window.addEventListener('offline', () => {
+  interrupted = true;
+  replyTicket = resumeTicket = null;
+  updateReply();
+  if (el('pair').hidden && !stopped) status('正在重连 Mac…');
+});
 window.addEventListener('online', poll);
 window.addEventListener('pageshow', poll);
 poll();
