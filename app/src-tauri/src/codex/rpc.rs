@@ -4,11 +4,15 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tungstenite::{Message, WebSocket};
 
-/// 只读客户端；不会 resume/subscribe，也不会响应用户的审批请求。
+/// 使用本机共享连接，审批请求交给已订阅会话的终端。
 pub struct Rpc {
     ws: WebSocket<UnixStream>,
     next_id: u64,
+    pub(crate) server_version: Option<(u32, u32, u32)>,
+    pub(super) account_updated: bool,
     pub account_changed: bool,
+    watched_thread: Option<String>,
+    pub thread_closed: bool,
 }
 
 impl Rpc {
@@ -27,20 +31,57 @@ impl Rpc {
         let mut rpc = Self {
             ws,
             next_id: 0,
+            server_version: None,
+            account_updated: false,
             account_changed: false,
+            watched_thread: None,
+            thread_closed: false,
         };
-        rpc.call(
+        let init = rpc.call(
             "initialize",
             json!({"clientInfo":{"name":"red_green","version":"0.1.0"},
             "capabilities":{"experimentalApi":true}}),
         )?;
+        rpc.server_version = init["userAgent"].as_str().and_then(|agent| {
+            // 共享服务沿用启动它的客户端名称；首个 product token 才是服务版本。
+            let (originator, release) = agent.split_whitespace().next()?.rsplit_once('/')?;
+            if originator.is_empty() {
+                return None;
+            }
+            let (major, rest) = release.split_once('.')?;
+            let (minor, patch) = rest.split_once('.')?;
+            let number = |part: &str| {
+                if part.len() > 1 && part.starts_with('0')
+                    || !part.bytes().all(|c| c.is_ascii_digit())
+                {
+                    return None;
+                }
+                part.parse().ok()
+            };
+            Some((number(major)?, number(minor)?, number(patch)?))
+        });
         rpc.ws
             .send(Message::text(json!({"method":"initialized"}).to_string()))
             .map_err(|e| e.to_string())?;
         Ok(rpc)
     }
 
+    pub fn watch_for_close(&mut self, id: &str) {
+        self.watched_thread = Some(id.to_owned());
+    }
+
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let mut response = self.call_response(method, params)?;
+        if let Some(error) = response.get("error") {
+            return Err(error.to_string());
+        }
+        response
+            .get_mut("result")
+            .map(Value::take)
+            .ok_or_else(|| "Codex 响应缺少 result".into())
+    }
+
+    pub(crate) fn call_response(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
         self.ws
@@ -71,18 +112,23 @@ impl Rpc {
             let v: Value = serde_json::from_str(msg.to_text().map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             if v["method"] == "account/updated" {
-                self.account_changed = true;
+                self.account_updated = true;
+                // workspaceRoutingReady completes initial routing for the same authenticated owner.
+                // Other updates, including older servers' unqualified ones, may change ownership.
+                self.account_changed |= v["params"]["reason"] != "workspaceRoutingReady";
             }
-            if v["id"].as_u64() != Some(id) {
+            if matches!(
+                v["method"].as_str(),
+                Some("thread/closed" | "thread/archived")
+            ) && self.watched_thread.is_some()
+                && v["params"]["threadId"].as_str() == self.watched_thread.as_deref()
+            {
+                self.thread_closed = true;
+            }
+            if v.get("method").is_some() || v["id"].as_u64() != Some(id) {
                 continue;
             }
-            if let Some(error) = v.get("error") {
-                return Err(error.to_string());
-            }
-            return v
-                .get("result")
-                .cloned()
-                .ok_or_else(|| "Codex 响应缺少 result".into());
+            return Ok(v);
         }
     }
 }

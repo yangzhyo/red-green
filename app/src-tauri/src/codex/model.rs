@@ -34,13 +34,17 @@ fn uuid_prefix(s: &str) -> bool {
     })
 }
 
+pub fn is_thread_id(id: &str) -> bool {
+    id.len() == 36 && uuid_prefix(id)
+}
+
 // 0.162.1 原生标题将 thread-id 截成 29 字符 + "..."。
 // 这里只收集提示；必须与所有已加载 ID 唯一匹配后才能绑定。
 pub fn title_hint(title: &str) -> Option<String> {
     let mut ids = title
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '.')
         .filter_map(|s| {
-            if s.len() == 36 && uuid_prefix(s) {
+            if is_thread_id(s) {
                 Some(s)
             } else {
                 s.strip_suffix("...")
@@ -64,7 +68,7 @@ pub fn title_hint(title: &str) -> Option<String> {
 pub fn resolve_id(hint: &str, loaded: &[String]) -> Option<String> {
     let mut matches = loaded
         .iter()
-        .filter(|id| id.len() == 36 && uuid_prefix(id) && id.starts_with(hint));
+        .filter(|id| is_thread_id(id) && id.starts_with(hint));
     let first = matches.next()?;
     matches.next().is_none().then(|| first.clone())
 }
@@ -103,17 +107,28 @@ fn is_question(text: &str) -> bool {
         .any(|phrase| line.contains(phrase))
 }
 
+pub(crate) fn thread_title(thread: &Value) -> String {
+    ["name", "preview"]
+        .into_iter()
+        .filter_map(|field| thread[field].as_str())
+        .flat_map(str::lines)
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("未命名会话")
+        .chars()
+        .take(120)
+        .collect()
+}
+
 pub fn session(thread: &Value, turn: Option<&Value>, tty: &str, project: &str) -> Value {
-    let Some(id) = thread["id"]
-        .as_str()
-        .filter(|id| id.len() == 36 && uuid_prefix(id))
-    else {
+    let Some(id) = thread["id"].as_str().filter(|id| is_thread_id(id)) else {
         return Value::Null;
     };
     if !thread["parentThreadId"].is_null() || thread["source"].is_object() {
         return Value::Null;
     }
     let empty = Value::Null;
+    let reader_has_turn = turn.is_some();
     let turn = turn.unwrap_or(&empty);
     let text = turn["items"]
         .as_array()
@@ -167,9 +182,9 @@ pub fn session(thread: &Value, turn: Option<&Value>, tty: &str, project: &str) -
         detail.chars().take(300).collect()
     };
     json!({"session_id":format!("codex-{id}"), "source":"codex", "state":state,
-        "cwd":thread["cwd"], "project":project, "tty":tty, "detail":detail,
+        "cwd":thread["cwd"], "project":project, "title":thread_title(thread), "tty":tty, "detail":detail,
         "since":format!("{}:{state}:{}",turn["id"].as_str().unwrap_or("new"),turn["completedAt"]),
-        "event":"app-server"})
+        "event":"app-server","reader_has_turn":reader_has_turn})
 }
 
 pub fn usage(raw: &Value, now: u64) -> Value {
@@ -291,6 +306,17 @@ mod tests {
 
     fn thread(status: serde_json::Value) -> serde_json::Value {
         json!({"id": ID, "cwd":"/tmp/project/subdir", "status":status, "source":"cli"})
+    }
+
+    #[test]
+    fn snapshot_title_uses_the_thread_name_then_the_first_preview_line() {
+        let mut t = thread(json!({"type":"idle"}));
+        assert_eq!(session(&t, None, "", "project")["title"], "未命名会话");
+        t["name"] = json!("  ");
+        t["preview"] = json!("\n  初始问题  \n不应出现在标题中");
+        assert_eq!(session(&t, None, "", "project")["title"], "初始问题");
+        t["name"] = json!("显示名称");
+        assert_eq!(session(&t, None, "", "project")["title"], "显示名称");
     }
 
     #[test]
