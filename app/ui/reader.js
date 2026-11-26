@@ -4,7 +4,6 @@ const state = new ReaderState();
 const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
-const homeTitle = document.title;
 const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
 window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
 const nodes = new Map();
@@ -69,13 +68,15 @@ const stateNames = new Map([
   ['completed', '已完成'], ['aborted', '异常中止'], ['idle', '空闲'],
 ]);
 
+function setPageTitle(...parts) {
+  const next = ['red-green', ...parts].filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
+  if (document.title !== next) document.title = next;
+}
+
 function updateThreadTitle(stateLabel) {
   const {title, project, source, key} = currentEntry;
   const name = title || project || '未命名会话';
-  const detail = historyList ? project : key.slice(-8);
-  const origin = detail && detail !== name ? source + ' / ' + detail : source;
-  const next = [stateLabel, name, origin].filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
-  if (document.title !== next) document.title = next;
+  setPageTitle(stateLabel, name, project !== name ? project : '', source + ' / ' + key.slice(-8));
 }
 
 function portrait(entry) {
@@ -164,7 +165,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
     state.open(entry.key);
     updateNavigation();
   } else {
-    document.title = listingHistory ? '历史会话 · red-green' : homeTitle;
+    setPageTitle(listingHistory ? '历史会话' : '当前会话');
     state.back();
   }
   if (listingHistory) renderHistoryList();
@@ -495,7 +496,7 @@ function requirePairing() {
   state.manualList = false;
   el('pair').hidden = false;
   document.body.dataset.page = 'pair';
-  document.title = '设备配对 · red-green';
+  setPageTitle('设备配对');
   status('');
 }
 
@@ -698,7 +699,7 @@ el('pair').onsubmit = async event => {
     await request('/pair', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:el('code').value})});
     el('pair').hidden = true;
     document.body.dataset.page = 'list';
-    document.title = homeTitle;
+    setPageTitle('当前会话');
     el('code').value = '';
     await startReader();
   } catch (error) {

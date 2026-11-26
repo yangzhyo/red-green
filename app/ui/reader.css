@@ -26,9 +26,9 @@ button:focus-visible, input:focus-visible, .nav-link:focus-visible { outline: 3p
 canvas { display: block; image-rendering: pixelated; }
 .nav-link {
   display: inline-flex; align-items: center; min-height: 2.75rem; min-width: 2.75rem;
-  color: var(--ink); font-size: .875rem; white-space: nowrap;
-  text-decoration: underline; text-underline-offset: .18em;
+  color: var(--ink); white-space: nowrap;
 }
+.masthead .nav-link { font-size: .875rem; text-decoration: underline; text-underline-offset: .18em; }
 .nav-link[aria-disabled="true"] { color: #737773; cursor: default; }
 .session-detail, .session-id { font: .875rem/1.45 var(--mono); }
 #status { margin: .55rem 0; }
@@ -113,13 +113,16 @@ footer {
   grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
   grid-template-areas: "prev back progress reply next";
   column-gap: .25rem; border-top: 1px solid var(--rule); padding: .25rem 0;
+  font-size: .98rem; line-height: 1.25;
 }
-footer button { max-width: 100%; border: 0; padding: .25rem .375rem; font-size: .98rem; line-height: 1.25; }
+footer button, footer .nav-link {
+  max-width: 100%; border: 0; padding: .25rem .375rem; font: inherit; text-decoration: none;
+}
 footer button:disabled { color: #737773; cursor: default; }
 #prev { grid-area: prev; }
 #next { grid-area: next; }
 #back { grid-area: back; }
-#resume, #open-reply { grid-area: reply; min-width: min(100%, 4em); font-size: .875rem; }
+#resume, #open-reply { grid-area: reply; min-width: min(100%, 4em); }
 #latest, #position { grid-area: progress; }
 #position { font: .8rem var(--mono); text-align: center; overflow-wrap: anywhere; }
 #latest:not([hidden]) + #position { display: none; }
@@ -127,8 +130,8 @@ footer button:disabled { color: #737773; cursor: default; }
   #list button:first-child { gap: .4rem; padding-inline: .45rem; }
 }
 @media (max-width: 420px) {
-  footer { column-gap: .125rem; }
-  footer button { padding-inline: .18rem; font-size: .875rem; }
+  footer { column-gap: .125rem; font-size: .875rem; }
+  footer button, footer .nav-link { padding-inline: .18rem; }
 }
 
 #composer { flex: none; padding: .25rem 0; border-bottom: 1px solid var(--rule); }

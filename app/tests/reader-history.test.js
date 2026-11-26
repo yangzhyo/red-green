@@ -80,7 +80,8 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     document.body.style.width = '420px';
     function link(container, label) {
       const target = [...container.querySelectorAll('a[href]')].find(a => a.innerText === label && a.getClientRects().length);
-      check(target && getComputedStyle(target).textDecorationLine.includes('underline'), '缺少可见的超链接：' + label);
+      check(target, '缺少可见的超链接：' + label);
+      if (container === masthead) check(getComputedStyle(target).textDecorationLine === 'underline', '目录导航缺少下划线');
       return target;
     }
     function checkDetail(label) {
@@ -93,7 +94,16 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
         check(rect.width >= 44 && rect.height >= 44 && bounds.top >= el('view').getBoundingClientRect().bottom - 1, '返回链接未放入底部触控区');
         const center = r => r.left + r.width / 2;
         const prev = el('prev').getBoundingClientRect(), next = el('next').getBoundingClientRect();
-        const action = (el('resume').hidden ? el('open-reply') : el('resume')).getBoundingClientRect();
+        const reply = el('resume').hidden ? el('open-reply') : el('resume');
+        const action = reply.getBoundingClientRect();
+        const reference = getComputedStyle(el('prev'));
+        for (const control of [back, reply, el('next')]) {
+          const style = getComputedStyle(control);
+          check(style.textDecorationLine === 'none', control.id + ' 不应显示下划线');
+          for (const property of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight']) {
+            check(style[property] === reference[property], control.id + ' 的 ' + property + ' 与上一屏不同');
+          }
+        }
         check(prev.left === bounds.left && next.right === bounds.right, '翻页按钮没有分居两端');
         check(Math.abs(center(prev) + center(next) - 2 * center(bounds)) < 1, '上一屏和下一屏不对称');
         check(action.width >= 44 && action.height >= 44 && Math.abs(center(rect) + center(action) - 2 * center(bounds)) < 1, '返回和回复操作不对称或触控区域过小');
@@ -113,7 +123,7 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     const homeBox = home.getBoundingClientRect();
     const divider = masthead.getBoundingClientRect().bottom;
     const brand = masthead.querySelector('.wordmark');
-    check(document.title === '历史会话 · red-green' && brand.innerText.trim() === 'red-green', '历史页标题或品牌文案错误');
+    check(document.title === 'red-green · 历史会话' && brand.innerText.trim() === 'red-green', '历史页标题或品牌文案错误');
     check(homeBox.left >= brand.getBoundingClientRect().right, '返回首页未放在品牌右侧');
     const filter = el('project-filter');
     const filterTop = filter.getBoundingClientRect().top;
@@ -128,20 +138,21 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     filter.dispatchEvent(new Event('input'));
     const browserEntries = window.history.length;
     el('history-rows').firstChild.click();
-    await until(() => document.title.startsWith('只读 · 会话标题 0'), '未进入历史详情');
-    check(document.title.includes('项目甲') && document.title.includes('Codex CLI'), '历史详情标题缺少项目信息或来源');
+    await until(() => document.title.startsWith('red-green · 只读 · 会话标题 0'), '未进入历史详情');
+    check(document.title === 'red-green · 只读 · 会话标题 0 · 项目甲 · Codex CLI / codex-0', '历史详情标题信息不完整');
     checkDetail('返回历史').click();
-    check(document.title === '历史会话 · red-green', '返回历史时仍显示详情标题');
+    check(document.title === 'red-green · 历史会话', '返回历史时仍显示详情标题');
     check(document.body.dataset.page === 'history', '没有返回历史列表');
     link(masthead, '返回首页').click();
     await until(() => !!el('list').firstElementChild, '没有回到首页');
     const historyBox = link(masthead, '历史会话').getBoundingClientRect();
-    check(document.title === '当前会话 · red-green', '首页浏览器标题错误');
+    check(document.title === 'red-green · 当前会话', '首页浏览器标题错误');
     check(masthead.querySelector('.wordmark').innerText.trim() === 'red-green' && !/桌面伙伴|\d+\s*个会话/.test(document.body.innerText), '首页仍显示多余标题或会话计数');
     check(historyBox.right === homeBox.right && historyBox.top === homeBox.top && masthead.getBoundingClientRect().bottom === divider, '两页的导航或虚线不在同一位置');
     check(el('list').firstElementChild.getBoundingClientRect().top === filterTop && filterTop > divider, '虚线下方留白不同');
     el('list').firstElementChild.click();
-    await until(() => document.title.startsWith('空闲 · 当前项目') && !el('open-reply').hidden, '未进入可回复的当前会话');
+    await until(() => document.title.startsWith('red-green · 空闲 · 当前项目') && !el('open-reply').hidden, '未进入可回复的当前会话');
+    check(document.title === 'red-green · 空闲 · 当前项目 · Codex CLI / dex-home', '当前详情标题信息不完整或重复');
     checkDetail('返回列表').click();
     check(document.body.dataset.page === 'list', '没有返回当前列表');
     check(location.hash === '#list' && window.history.length === browserEntries, '应用内导航增加了浏览器返回步骤');
@@ -204,7 +215,7 @@ test('从历史查看已激活会话时沿用实时状态和设备回复权限',
     mac.state = 'running';
     el('history-rows').firstChild.click();
     check(el('resume').hidden, '确认终端状态前闪现了继续对话');
-    await until(() => document.title.startsWith('运行中 · 会话标题 0'), '只读设备未看到实时状态');
+    await until(() => document.title.startsWith('red-green · 运行中 · 会话标题 0'), '只读设备未看到实时状态');
     check(el('messages').textContent.includes('当前正文') && el('resume').hidden && el('open-reply').hidden, '只读设备的正文或按钮有误');
     mac.granted = true;
     refresh();
@@ -254,7 +265,7 @@ test('正在阅读的实时会话结束后提示结束，重进历史可继续�
     refresh();
     await until(() => el('status').textContent.includes('会话已结束'), '没有显示当前会话的结束状态');
     check(el('messages').textContent.includes('当前正文') && el('open-reply').hidden, '结束后正文或回复状态不正确');
-    check(document.title.startsWith('已结束 · 会话标题 0'), '会话结束时浏览器标题未更新');
+    check(document.title.startsWith('red-green · 已结束 · 会话标题 0'), '会话结束时浏览器标题未更新');
     el('back').click();
     el('history-rows').firstChild.click();
     await until(() => !el('resume').hidden && !el('resume').disabled, '从历史重进后无法恢复');
@@ -291,7 +302,7 @@ test('离开历史正文后，迟到的实时内容不会盖住新打开的会�
     rows[1].click();
     mac.releaseLive();
     await until(() => el('messages').textContent.includes('历史正文'), '迟到的请求影响了下一条会话');
-    check(document.title.startsWith('只读 · 会话标题 1') && !el('resume').hidden && el('open-reply').hidden, '新会话的状态不正确');
+    check(document.title.startsWith('red-green · 只读 · 会话标题 1') && !el('resume').hidden && el('open-reply').hidden, '新会话的状态不正确');
   });
 });
 
@@ -338,7 +349,7 @@ test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清�
     mac.paired = false;
     refresh();
     await until(() => !el('pair').hidden, '撤销配对后没有清除页面');
-    check(document.title === '设备配对 · red-green', '配对撤销后标题未清除');
+    check(document.title === 'red-green · 设备配对', '配对撤销后标题未清除');
     check(!el('history-rows').children.length && !el('messages').children.length, '配对撤销后缓存仍可读取');
   });
 });
