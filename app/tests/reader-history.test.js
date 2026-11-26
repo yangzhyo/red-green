@@ -47,6 +47,8 @@ function fixture(scenario) {
       return response(page);
     }
     if (url.startsWith('/sessions/')) {
+      if (mac.holdLive) await new Promise(resolve => { mac.releaseLive = resolve; });
+      if (url.startsWith('/sessions/codex-0/') && mac.liveError) return {ok: false, status: mac.liveError};
       const page = {messages: [body('2', '当前正文')], since: 'live-1', state: mac.state};
       if (mac.granted) page.replyTicket = 'send-only';
       return response(page);
@@ -114,10 +116,62 @@ test('历史跨页查项目，正文只读可翻页，继续原会话后可返�
     check(document.body.dataset.page === 'history' && query.value === 'projectb' && el('view').scrollTop === top && top > 0,
       '返回后筛选或滚动位置丢失');
     matches[4].click();
-    await until(() => !el('resume').disabled, '不能再次继续会话');
-    el('resume').click();
-    await until(() => !el('composer').hidden, '已运行的会话未重新打开');
+    await until(() => !el('open-reply').hidden, '从历史重进已激活会话时缺少回复入口');
+    check(el('resume').hidden && el('composer').hidden && mac.writes.length === 2, '重进会话时重复恢复或自动弹出键盘');
+    el('open-reply').click();
     check(field.value === '继续测试' && el('send-reply').disabled, '待核对的草稿可被重复发送或已丢失');
+  });
+});
+
+test('从历史查看已激活会话时沿用实时状态和设备回复权限', {skip: !hasChrome}, async () => {
+  await runReader(async ({el, mac, check, until, refresh}) => {
+    mac.live = true;
+    mac.granted = false;
+    mac.state = 'running';
+    el('history-rows').firstChild.click();
+    check(el('resume').hidden, '确认终端状态前闪现了继续对话');
+    await until(() => el('state').textContent === '运行中', '只读设备未看到实时状态');
+    check(el('messages').textContent.includes('当前正文') && el('resume').hidden && el('open-reply').hidden, '只读设备的正文或按钮有误');
+    mac.granted = true;
+    refresh();
+    await until(() => !el('open-reply').hidden, '授权后没有显示回复');
+    check(el('open-reply').textContent === '回复' && el('composer').hidden && mac.writes.length === 0, '浏览已激活会话有副作用');
+    el('open-reply').click();
+    el('reply-text').value = '来自历史入口';
+    el('reply-text').dispatchEvent(new Event('input'));
+    check(el('send-reply').disabled, '运行中允许重复开始回合');
+    mac.state = 'idle';
+    refresh();
+    await until(() => !el('send-reply').disabled, '空闲后无法发送');
+    el('send-reply').click();
+    await until(() => mac.writes.length === 1, '点击发送无效');
+    check(mac.writes[0].url === '/sessions/codex-0/messages' && mac.writes[0].payload.ticket === 'send-only', '没有向原会话发送');
+  });
+});
+
+test('打开历史时终端恰好退出，仍可阅读原对话并按需恢复', {skip: !hasChrome}, async () => {
+  await runReader(async ({el, mac, check, until}) => {
+    mac.live = true;
+    mac.liveError = 410;
+    el('history-rows').firstChild.click();
+    await until(() => el('messages').textContent.includes('历史正文'), '退出终端后丢失历史正文');
+    check(mac.reads.includes('/sessions/codex-0/messages') && !el('resume').hidden && !el('resume').disabled
+      && el('open-reply').hidden && mac.writes.length === 0, '终端退出后没有回到可恢复的历史状态');
+  });
+});
+
+test('离开历史正文后，迟到的实时内容不会盖住新打开的会话', {skip: !hasChrome}, async () => {
+  await runReader(async ({el, mac, check, until}) => {
+    const rows = el('history-rows').children;
+    mac.live = mac.holdLive = true;
+    rows[0].click();
+    await until(() => !!mac.releaseLive, '未请求实时正文');
+    el('back').click();
+    mac.live = mac.holdLive = false;
+    rows[1].click();
+    mac.releaseLive();
+    await until(() => el('messages').textContent.includes('历史正文'), '迟到的请求影响了下一条会话');
+    check(el('title').textContent === '会话标题 1' && !el('resume').hidden && el('open-reply').hidden, '新会话的状态不正确');
   });
 });
 

@@ -44,7 +44,6 @@ const projectFilter = el('project-filter');
 
 function updateReply() {
   const active = !stopped && !!replyTicket;
-  el('resume').hidden = !readingHistory;
   el('resume').disabled = !resumeTicket || !!activation || stopped;
   el('open-reply').hidden = !active || !composer.hidden;
   const unavailable = !active || ['running', 'awaiting'].includes(currentEntry?.state);
@@ -141,6 +140,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   resumeNotice = '';
   currentEntry = entry;
   composer.hidden = true;
+  el('resume').hidden = true;
   replyTicket = null;
   sending = false;
   replyError = savedDraft?.replyError || '';
@@ -153,7 +153,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   el('source').hidden = !entry;
   el('title').textContent = entry ? entry.title || entry.project : listingHistory ? '历史' : '桌面伙伴';
   el('title').title = entry ? el('title').textContent : '';
-  el('state').textContent = readOnly ? '只读' : stateNames.get(entry?.state) || '';
+  el('state').textContent = readOnly ? '' : stateNames.get(entry?.state) || '';
   if (entry) {
     el('source').textContent = entry.source + ' / ' + (fromHistory ? entry.project : entry.key.slice(-8));
     state.open(entry.key);
@@ -402,34 +402,32 @@ async function tick() {
   if (readingHistory) {
     resumeTicket = page.resumeTicket || null;
     if (resumeTicket && resumeNotice === needsReplyPermission) resumeNotice = '';
+    const waiting = activation?.stage === 'waiting';
+    if (waiting && !resumeTicket) finishActivation(needsReplyPermission);
+    // Keep an older page in place while the reader is paging back.
+    if (page.live && (waiting || (!activation && following))) {
+      // The live reader owns its cursors, terminal state and reply permission.
+      const liveEndpoint = '/sessions/' + key + '/messages';
+      let livePage;
+      try {
+        livePage = await request(liveEndpoint);
+      } catch (error) {
+        // A terminal can close between the history lookup and the live read.
+        if (!['404', '410', '503'].includes(error.message)) throw error;
+      }
+      if (generation !== state.generation) return;
+      if (livePage) {
+        display(currentEntry, {fromHistory: true, readOnly: false});
+        const liveGeneration = state.generation;
+        await showMessages(livePage, false, liveEndpoint, liveGeneration);
+        if (waiting && liveGeneration === state.generation) openComposer();
+        return;
+      }
+    }
+    if (el('state').textContent !== '只读') el('state').textContent = '只读';
+    el('resume').hidden = false;
   }
   await showMessages(page, earlier, endpoint, generation);
-  if (generation !== state.generation || activation?.stage !== 'waiting') return;
-  if (!resumeTicket) {
-    finishActivation(needsReplyPermission);
-    return;
-  }
-  if (!page.live) return;
-
-  // Only the live endpoint can authorize sending. Start with its own latest page and cursors.
-  const liveEndpoint = '/sessions/' + key + '/messages';
-  let livePage;
-  try {
-    livePage = await request(liveEndpoint);
-  } catch (error) {
-    if (['404', '409', '410', '503'].includes(error.message)) return;
-    throw error;
-  }
-  if (generation !== state.generation || !activation) return;
-  if (!livePage.replyTicket) {
-    resumeTicket = null;
-    finishActivation(needsReplyPermission);
-    return;
-  }
-  display(currentEntry, {fromHistory: true, readOnly: false});
-  const liveGeneration = state.generation;
-  await showMessages(livePage, false, liveEndpoint, liveGeneration);
-  if (liveGeneration === state.generation) openComposer();
 }
 
 async function showMessages(page, earlier, endpoint, generation) {
