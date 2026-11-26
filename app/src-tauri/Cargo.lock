@@ -2498,6 +2498,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "notify",
+ "percent-encoding",
  "pulldown-cmark",
  "rand",
  "serde",

@@ -34,13 +34,17 @@ fn uuid_prefix(s: &str) -> bool {
     })
 }
 
+pub fn is_thread_id(id: &str) -> bool {
+    id.len() == 36 && uuid_prefix(id)
+}
+
 // 0.162.1 原生标题将 thread-id 截成 29 字符 + "..."。
 // 这里只收集提示；必须与所有已加载 ID 唯一匹配后才能绑定。
 pub fn title_hint(title: &str) -> Option<String> {
     let mut ids = title
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '.')
         .filter_map(|s| {
-            if s.len() == 36 && uuid_prefix(s) {
+            if is_thread_id(s) {
                 Some(s)
             } else {
                 s.strip_suffix("...")
@@ -64,7 +68,7 @@ pub fn title_hint(title: &str) -> Option<String> {
 pub fn resolve_id(hint: &str, loaded: &[String]) -> Option<String> {
     let mut matches = loaded
         .iter()
-        .filter(|id| id.len() == 36 && uuid_prefix(id) && id.starts_with(hint));
+        .filter(|id| is_thread_id(id) && id.starts_with(hint));
     let first = matches.next()?;
     matches.next().is_none().then(|| first.clone())
 }
@@ -104,10 +108,7 @@ fn is_question(text: &str) -> bool {
 }
 
 pub fn session(thread: &Value, turn: Option<&Value>, tty: &str, project: &str) -> Value {
-    let Some(id) = thread["id"]
-        .as_str()
-        .filter(|id| id.len() == 36 && uuid_prefix(id))
-    else {
+    let Some(id) = thread["id"].as_str().filter(|id| is_thread_id(id)) else {
         return Value::Null;
     };
     if !thread["parentThreadId"].is_null() || thread["source"].is_object() {

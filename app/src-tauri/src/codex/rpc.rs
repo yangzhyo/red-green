@@ -8,6 +8,8 @@ use tungstenite::{Message, WebSocket};
 pub struct Rpc {
     ws: WebSocket<UnixStream>,
     next_id: u64,
+    pub(crate) server_version: Option<(u32, u32, u32)>,
+    pub(super) account_updated: bool,
     pub account_changed: bool,
     watched_thread: Option<String>,
     pub thread_closed: bool,
@@ -29,15 +31,35 @@ impl Rpc {
         let mut rpc = Self {
             ws,
             next_id: 0,
+            server_version: None,
+            account_updated: false,
             account_changed: false,
             watched_thread: None,
             thread_closed: false,
         };
-        rpc.call(
+        let init = rpc.call(
             "initialize",
             json!({"clientInfo":{"name":"red_green","version":"0.1.0"},
             "capabilities":{"experimentalApi":true}}),
         )?;
+        rpc.server_version = init["userAgent"].as_str().and_then(|agent| {
+            // 共享服务沿用启动它的客户端名称；首个 product token 才是服务版本。
+            let (originator, release) = agent.split_whitespace().next()?.rsplit_once('/')?;
+            if originator.is_empty() {
+                return None;
+            }
+            let (major, rest) = release.split_once('.')?;
+            let (minor, patch) = rest.split_once('.')?;
+            let number = |part: &str| {
+                if part.len() > 1 && part.starts_with('0')
+                    || !part.bytes().all(|c| c.is_ascii_digit())
+                {
+                    return None;
+                }
+                part.parse().ok()
+            };
+            Some((number(major)?, number(minor)?, number(patch)?))
+        });
         rpc.ws
             .send(Message::text(json!({"method":"initialized"}).to_string()))
             .map_err(|e| e.to_string())?;
@@ -90,7 +112,10 @@ impl Rpc {
             let v: Value = serde_json::from_str(msg.to_text().map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             if v["method"] == "account/updated" {
-                self.account_changed = true;
+                self.account_updated = true;
+                // workspaceRoutingReady completes initial routing for the same authenticated owner.
+                // Other updates, including older servers' unqualified ones, may change ownership.
+                self.account_changed |= v["params"]["reason"] != "workspaceRoutingReady";
             }
             if matches!(
                 v["method"].as_str(),
