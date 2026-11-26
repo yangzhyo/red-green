@@ -4,6 +4,7 @@ const state = new ReaderState();
 const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
+const homeTitle = document.title;
 const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
 window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
 const nodes = new Map();
@@ -68,6 +69,15 @@ const stateNames = new Map([
   ['completed', '已完成'], ['aborted', '异常中止'], ['idle', '空闲'],
 ]);
 
+function updateThreadTitle(stateLabel) {
+  const {title, project, source, key} = currentEntry;
+  const name = title || project || '未命名会话';
+  const detail = historyList ? project : key.slice(-8);
+  const origin = detail && detail !== name ? source + ' / ' + detail : source;
+  const next = [stateLabel, name, origin].filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
+  if (document.title !== next) document.title = next;
+}
+
 function portrait(entry) {
   const canvas = document.createElement('canvas');
   const skin = window.SKINS.pick(entry.project);
@@ -129,7 +139,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
     projectFilter.value = '';
   }
   const listingHistory = fromHistory && !entry;
-  el('history-heading').hidden = el('history-home').hidden = !listingHistory;
+  el('history-home').hidden = !listingHistory;
   el('back').textContent = fromHistory ? '返回历史' : '返回列表';
   el('back').setAttribute('href', fromHistory ? '#history-list' : '#list');
   el('open-history').hidden = true;
@@ -149,15 +159,14 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   el('reply-info').textContent = replyErrors[replyError] || '';
   updateReply();
   document.body.dataset.page = entry ? 'thread' : listingHistory ? 'history' : 'list';
-  el('source').hidden = !entry;
-  el('title').textContent = entry ? entry.title || entry.project : '';
-  el('title').title = entry ? el('title').textContent : '';
-  el('state').textContent = readOnly ? '' : stateNames.get(entry?.state) || '';
   if (entry) {
-    el('source').textContent = entry.source + ' / ' + (fromHistory ? entry.project : entry.key.slice(-8));
+    updateThreadTitle(readOnly ? '' : stateNames.get(entry.state));
     state.open(entry.key);
     updateNavigation();
-  } else state.back();
+  } else {
+    document.title = listingHistory ? '历史会话 · red-green' : homeTitle;
+    state.back();
+  }
   if (listingHistory) renderHistoryList();
   view.scrollTop = listingHistory ? historyList.scroll : 0;
 }
@@ -428,7 +437,7 @@ async function tick() {
       }
     }
     if (!bound && resumeNotice === liveUnavailableNotice) resumeNotice = '';
-    if (el('state').textContent !== '只读') el('state').textContent = '只读';
+    updateThreadTitle('只读');
     el('resume').hidden = bound;
   }
   await showMessages(page, earlier, endpoint, generation);
@@ -437,7 +446,7 @@ async function tick() {
 async function showMessages(page, earlier, endpoint, generation) {
   if (!readingHistory && 'state' in page && currentEntry.state !== page.state) {
     currentEntry.state = page.state;
-    el('state').textContent = stateNames.get(page.state) || '';
+    updateThreadTitle(stateNames.get(page.state));
   }
   replyTicket = readingHistory ? null : page.replyTicket || null;
   if (!replyTicket && !composer.hidden) {
@@ -486,7 +495,7 @@ function requirePairing() {
   state.manualList = false;
   el('pair').hidden = false;
   document.body.dataset.page = 'pair';
-  el('title').textContent = '设备配对';
+  document.title = '设备配对 · red-green';
   status('');
 }
 
@@ -527,7 +536,7 @@ async function poll() {
         renderHistoryList();
       } else if (error.message === '410') {
         stopped = true;
-        el('state').textContent = '';
+        if (currentEntry) updateThreadTitle('已结束');
         status(interrupted ? '会话已结束，离线期间可能还有未同步的消息' : '会话已结束');
       } else if (error.message === '404' || error.message === '503') status('会话暂不可用');
       else { interrupted = true; status('正在重连 Mac…'); }
@@ -689,7 +698,7 @@ el('pair').onsubmit = async event => {
     await request('/pair', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:el('code').value})});
     el('pair').hidden = true;
     document.body.dataset.page = 'list';
-    el('title').textContent = '';
+    document.title = homeTitle;
     el('code').value = '';
     await startReader();
   } catch (error) {
