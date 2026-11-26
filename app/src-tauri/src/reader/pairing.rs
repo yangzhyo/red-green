@@ -10,6 +10,7 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct Pairing {
+    reply_tickets: Option<std::collections::HashMap<String, String>>,
     challenge: Option<(String, Instant, u8)>,
     fingerprint: Option<String>,
     store: Option<PathBuf>,
@@ -25,13 +26,14 @@ impl Pairing {
         Ok(Self {
             store,
             fingerprint,
-            challenge: None,
+            ..Self::default()
         })
     }
 
     pub fn revoke(&mut self) -> io::Result<()> {
         self.challenge = None;
         self.fingerprint = None;
+        self.reply_tickets = None;
         if let Some(path) = &self.store {
             match fs::remove_file(path) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -66,6 +68,7 @@ impl Pairing {
         Ok(())
     }
     pub fn issue(&mut self) -> String {
+        self.reply_tickets = None;
         let code = format!("{:06}", rand::rng().random_range(0..1_000_000));
         self.challenge = Some((code.clone(), Instant::now() + Duration::from_secs(600), 5));
         code
@@ -90,6 +93,41 @@ impl Pairing {
         self.remember(&token)?;
         Ok(Some(token))
     }
+    pub fn toggle_replies(&mut self) -> Option<bool> {
+        self.fingerprint.as_ref()?;
+        if self.reply_tickets.take().is_some() {
+            return Some(false);
+        }
+        // The grant belongs to the device currently paired with this service.
+        self.challenge = None;
+        self.reply_tickets = Some(Default::default());
+        Some(true)
+    }
+
+    pub fn reply_ticket(&mut self, key: &str) -> Option<&str> {
+        let tickets = self.reply_tickets.as_mut()?;
+        Some(
+            tickets
+                .entry(key.to_owned())
+                .or_insert_with(|| format!("{:032x}", rand::random::<u128>())),
+        )
+    }
+
+    pub fn check_ticket(&self, key: &str, token: &str) -> Result<(), u16> {
+        let tickets = self.reply_tickets.as_ref().ok_or(403u16)?;
+        if tickets.get(key).is_some_and(|issued| issued == token) {
+            Ok(())
+        } else {
+            Err(412)
+        }
+    }
+
+    pub fn take_ticket(&mut self, key: &str, token: &str) -> Result<(), u16> {
+        self.check_ticket(key, token)?;
+        self.reply_tickets.as_mut().unwrap().remove(key);
+        Ok(())
+    }
+
     pub fn allows(&self, cookies: &str) -> bool {
         let Some(expected) = self.fingerprint.as_ref() else {
             return false;

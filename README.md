@@ -60,7 +60,7 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 
 限制：`--no-daemon`、强制使用内嵌服务的 `-c` 配置、远程 App Server、多个不同 `CODEX_HOME` 同时运行，以及其他终端不在本版支持范围。使用自定义配置时优先写入 `config.toml`。同一 thread 同时在多个 CLI 打开只算一个会话，选择 tty 排序的第一个。只观察当前终端中仍存活的 CLI；不展示桌面端、历史会话或子代理。每 1.5 秒采样，短于间隔的状态可能看不到；问句判断是启发式。Codex 升级若改变实验性回合接口，需重新验证兼容性。
 
-账号用量每 60 秒读取一次，不按宠物累计。按账号与额度组区分，API 计费或读取不到限额时显示未知；超过重置时刻或成功快照超过 120 秒也显示未知，悬停提示含最后更新时间。只展示有对应来源宠物的用量。不读取账号凭据，不接管审批，不修改用户会话。
+账号用量每 60 秒读取一次，不按宠物累计。按账号与额度组区分，API 计费或读取不到限额时显示未知；超过重置时刻或成功快照超过 120 秒也显示未知，悬停提示含最后更新时间。只展示有对应来源宠物的用量。桌面观察器只读取状态和用量，审批由终端处理。
 
 可运行 `app/src-tauri/target/debug/red-green --check-codex` 做只读诊断（输出已绑定会话、状态和额度组数，不输出答复或凭据）。宠物没出现时先检查 `codex --version`、标题中的会话 ID（0.162.1 标题缩为 29 字符加省略号）、`$CODEX_HOME/app-server-control/app-server-control.sock`（默认 `~/.codex`）以及自动化权限。标题为空、进程已退出、会话未在服务中加载或连接失败时不会猜测会话归属。配置文件是符号链接时安装脚本会停止，请手动配置标题。恢复安装前设置可使用备份，或只移除标题中的 `thread-id`；再删除 `~/.config/red-green/codex-home` 即可解除目录登记。
 
@@ -74,6 +74,8 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 
 配对设备可以读取列表内的会话。共享默认关闭，局域网使用 HTTP。Mac 菜单可解除配对或关闭共享；在同一地址重新开启共享后可沿用设备凭据。切换 Wi-Fi 后重新开启共享，若地址变化，在笔记里更新链接。
 
+配对后，在 Mac 菜单中选择「允许配对设备回复 Codex」，即可在 Codex 正文底部点「回复」，输入文字并发送。Mac 终端中继续显示同一段对话；审批仍在 Mac 上操作。关闭共享、换配对码或解除配对时恢复只读。如果断网导致发送结果未知，先核对正文再发送。两端恰好同时发送时，Codex 可能把两条输入合入同一回合。
+
 ### ESP-Mosaico（实验性）
 
 CoreBoard V1.2.1 通过 USB-C 连接 Mac 后，匹配版本的设备应用会接管宠物、叫声和用量表；断开或健康检查失败后自动回退电脑。480×480 屏幕采用 61.8% / 38.2%「主角＋总览」，五个会话同屏，更多会话分页。设备端只展示，不改变桌面的已阅和前台静默规则。
@@ -85,7 +87,7 @@ CoreBoard V1.2.1 通过 USB-C 连接 Mac 后，匹配版本的设备应用会接
 ```
 hooks/session-status.sh    # Claude Code hook：把会话状态写进 ~/.claude/session-status/
 statusline/usage.sh        # Claude Code status line：把账号用量写进同一目录（hooks 拿不到用量）
-scripts/install-codex.sh   # 一次性设置 Codex 原生标题；app 只读本机服务
+scripts/install-codex.sh   # 一次性设置 Codex 原生标题，绑定本机终端会话
 scripts/merge-settings.mjs # 把 hook 与 status line 配置幂等合并进 ~/.claude/settings.json（先备份）
 app/
   ui/          manager（隐藏的逻辑中枢）+ pet / gauge（哑渲染器）+ sprites/skins/calls/drag

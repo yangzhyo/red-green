@@ -7,7 +7,7 @@ use std::{
 
 fn request(server: &Reader, method: &str, path: &str, body: &str, cookie: &str) -> String {
     let mut stream = TcpStream::connect(server.address()).unwrap();
-    write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\n\r\n{body}", server.address(), body.len()).unwrap();
+    write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\nContent-Type: application/json\r\nOrigin: http://{}\r\nCookie: {cookie}\r\n\r\n{body}", server.address(), body.len(), server.address()).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
@@ -110,6 +110,7 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
     let responder = std::thread::spawn(move || {
         let mut ws = tungstenite::accept(listener.accept().unwrap().0).unwrap();
         let mut reads = 0;
+        let mut preflights = 0;
         while let Ok(frame) = ws.read() {
             let r: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
             let data = match r["method"].as_str().unwrap() {
@@ -135,6 +136,29 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
                         }
                         4 => json!({"data":[turn("t3","后续回复"),turn("t2","完整一句")]}),
                         _ => panic!("unexpected read"),
+                    }
+                }
+                "thread/read" => {
+                    preflights += 1;
+                    let status = if preflights == 1 { "active" } else { "idle" };
+                    json!({"thread":{"id":"one","status":{"type":status}}})
+                }
+                "turn/start" => {
+                    assert_eq!(r["params"]["threadId"], "one");
+                    let input = &r["params"]["input"][0];
+                    assert_eq!(input["type"], "text");
+                    match input["text"].as_str().unwrap() {
+                        "明确拒绝" => {
+                            ws.send(tungstenite::Message::text(
+                                json!({"id":r["id"],"error":{"code":-32602,"message":"invalid"}})
+                                    .to_string(),
+                            ))
+                            .unwrap();
+                            continue;
+                        }
+                        "回执丢失" => break,
+                        "追问" => json!({"turn":{"id":"t4"}}),
+                        other => panic!("unexpected input {other}"),
                     }
                 }
                 other => panic!("unexpected RPC {other}"),
@@ -164,9 +188,96 @@ fn codex_reader_fetches_older_turns_on_demand_and_resumes_a_reply() {
         .unwrap();
     assert_eq!(new["messages"][0]["text"], "完整一句");
     assert_eq!(new["messages"][1]["text"], "后续回复");
+    assert_eq!(
+        reader.send_reply("codex-gone", "不可用", || panic!("未派发")),
+        Err(503)
+    );
+    assert_eq!(
+        reader.send_reply("codex-one", "运行中", || panic!("未派发")),
+        Err(409)
+    );
+    assert_eq!(
+        reader.send_reply("codex-one", "提交前撤销", || Err(403)),
+        Err(403)
+    );
+    assert_eq!(
+        reader.send_reply("codex-one", "明确拒绝", || Ok(())),
+        Err(424)
+    );
+    assert_eq!(reader.send_reply("codex-one", "追问", || Ok(())), Ok(()));
+    assert_eq!(
+        reader.send_reply("codex-one", "回执丢失", || Ok(())),
+        Err(502)
+    );
     drop(reader);
     responder.join().unwrap();
     std::fs::remove_file(socket).unwrap();
+}
+
+#[test]
+fn reply_permission_and_single_use_tickets_are_bound_to_device_and_session() {
+    use red_green::reader::Source;
+    use serde_json::{json, Value};
+    struct Replies(Arc<Mutex<Vec<String>>>);
+    impl Source for Replies {
+        fn sessions(&mut self) -> Value {
+            json!([])
+        }
+        fn messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
+            Ok(json!({}))
+        }
+        fn send_reply(
+            &mut self,
+            _: &str,
+            text: &str,
+            admit: impl FnOnce() -> Result<(), u16>,
+        ) -> Result<(), u16> {
+            admit()?;
+            self.0.lock().unwrap().push(text.into());
+            Ok(())
+        }
+    }
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let reader = Reader::start("127.0.0.1:0".parse().unwrap(), Replies(sent.clone())).unwrap();
+    assert_eq!(reader.toggle_replies(), None);
+    let code = json!({"code":reader.new_code()}).to_string();
+    let response = request(&reader, "POST", "/pair", &code, "");
+    let cookie = response
+        .lines()
+        .find_map(|l| l.strip_prefix("Set-Cookie: "))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let one = "/sessions/codex-one/messages";
+    let two = "/sessions/codex-two/messages";
+    let claude = "/sessions/claude-three/messages";
+    let page = |path| -> Value {
+        let response = request(&reader, "GET", path, "", cookie);
+        serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    let post =
+        |path, body: &Value, cookie| request(&reader, "POST", path, &body.to_string(), cookie);
+    assert!(page(one)["replyTicket"].is_null());
+    assert_eq!(reader.toggle_replies(), Some(true));
+    assert!(page(claude)["replyTicket"].is_null());
+    let body = json!({"text":"你好", "ticket":page(one)["replyTicket"]});
+    assert!(post(one, &body, "").starts_with("HTTP/1.1 401"));
+    assert!(post(claude, &body, cookie).starts_with("HTTP/1.1 405"));
+    assert!(post(two, &body, cookie).starts_with("HTTP/1.1 412"));
+    assert!(post(one, &body, cookie).starts_with("HTTP/1.1 200"));
+    assert!(post(one, &body, cookie).starts_with("HTTP/1.1 412"));
+    let next = json!({"text":"再问", "ticket":page(one)["replyTicket"]});
+    assert_eq!(reader.toggle_replies(), Some(false));
+    assert!(post(one, &next, cookie).starts_with("HTTP/1.1 403"));
+    reader.toggle_replies();
+    assert!(post(one, &next, cookie).starts_with("HTTP/1.1 412"));
+    reader.new_code();
+    assert!(page(one)["replyTicket"].is_null());
+    reader.toggle_replies();
+    reader.revoke().unwrap();
+    assert!(post(one, &next, cookie).starts_with("HTTP/1.1 401"));
+    assert_eq!(*sent.lock().unwrap(), ["你好"]);
 }
 
 #[test]

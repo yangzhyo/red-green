@@ -105,11 +105,13 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let toggle = item("reader-toggle", "开启局域网阅读", true)?;
     let address = item("reader-address", "共享已关闭", false)?;
     let code = item("reader-code", "生成新的配对码", false)?;
+    let allow_label = "允许配对设备回复 Codex";
+    let replies = item("reader-replies", allow_label, false)?;
     let revoke = item("reader-revoke", "解除设备配对", false)?;
     let menu = Menu::with_items(
         app,
         &[
-            &brand, &summary, &divider, &notice, &toggle, &address, &code, &revoke,
+            &brand, &summary, &divider, &notice, &toggle, &address, &code, &replies, &revoke,
         ],
     )?;
     app.listen("sessions-changed", move |event| {
@@ -145,6 +147,8 @@ pub fn install(app: &App) -> tauri::Result<()> {
                         let _ = code.set_text("生成新的配对码");
                         let _ = code.set_enabled(false);
                         let _ = revoke.set_enabled(false);
+                        let _ = replies.set_enabled(false);
+                        let _ = replies.set_text(allow_label);
                     } else {
                         let result = wifi_address().and_then(|addr| {
                             let source = LiveSource::new(
@@ -172,6 +176,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                                     .set_text(format!("配对码 {} · 点此换码", reader.new_code()));
                                 let _ = code.set_enabled(true);
                                 let _ = revoke.set_enabled(true);
+                                let _ = replies.set_enabled(true);
                                 let _ = toggle.set_text("关闭局域网阅读");
                                 *active = Some(reader);
                             }
@@ -181,9 +186,23 @@ pub fn install(app: &App) -> tauri::Result<()> {
                         }
                     }
                 }
+                "reader-replies" => {
+                    if let Some(reader) = active.as_ref() {
+                        let label = match reader.toggle_replies() {
+                            Some(true) => {
+                                let _ = code.set_text("生成新的配对码");
+                                "关闭设备回复 Codex"
+                            }
+                            Some(false) => allow_label,
+                            None => "请先配对，再点此允许回复 Codex",
+                        };
+                        let _ = replies.set_text(label);
+                    }
+                }
                 "reader-code" => {
                     if let Some(reader) = active.as_ref() {
                         let _ = code.set_text(format!("配对码 {} · 点此换码", reader.new_code()));
+                        let _ = replies.set_text(allow_label);
                     }
                 }
                 "reader-revoke" => {
@@ -193,6 +212,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                             Err(e) => format!("撤销未保存：{e}"),
                         };
                         let _ = code.set_text(label);
+                        let _ = replies.set_text(allow_label);
                     }
                 }
                 _ => (),

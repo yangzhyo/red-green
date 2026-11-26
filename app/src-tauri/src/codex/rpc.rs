@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tungstenite::{Message, WebSocket};
 
-/// 只读客户端；不会 resume/subscribe，也不会响应用户的审批请求。
+/// 使用本机共享连接，审批请求交给已订阅会话的终端。
 pub struct Rpc {
     ws: WebSocket<UnixStream>,
     next_id: u64,
@@ -49,6 +49,17 @@ impl Rpc {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let mut response = self.call_response(method, params)?;
+        if let Some(error) = response.get("error") {
+            return Err(error.to_string());
+        }
+        response
+            .get_mut("result")
+            .map(Value::take)
+            .ok_or_else(|| "Codex 响应缺少 result".into())
+    }
+
+    pub(crate) fn call_response(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
         self.ws
@@ -89,16 +100,10 @@ impl Rpc {
             {
                 self.thread_closed = true;
             }
-            if v["id"].as_u64() != Some(id) {
+            if v.get("method").is_some() || v["id"].as_u64() != Some(id) {
                 continue;
             }
-            if let Some(error) = v.get("error") {
-                return Err(error.to_string());
-            }
-            return v
-                .get("result")
-                .cloned()
-                .ok_or_else(|| "Codex 响应缺少 result".into());
+            return Ok(v);
         }
     }
 }

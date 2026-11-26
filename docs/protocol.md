@@ -1,6 +1,6 @@
 # 状态文件协议
 
-Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 使用文末的只读 App Server 协议。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
+Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 的状态观察和 Nomad 回复使用文末的 App Server 协议。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
 
 ## 文件
 
@@ -147,5 +147,7 @@ Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，ap
 ```
 
 `account/rateLimits/read` 首次有会话时请求，随后每 60 秒刷新。优先使用 rateLimitsByLimitId，回退单一 rateLimits；不按会话累加。账号变化通知清缓存。未知、非法、过期或超过 120 秒的快照不显示成零；失败时旧快照仅在有效期内继续显示。用量表仅列有存活宠物的来源，点击切换额度组并保持选择，未知显示 `?` / `未知`。Claude 的既有过期规则不变。
+
+Nomad 回复须先在 Mac 为当前配对设备单独开启。阅读服务只向目录内的 Codex 会话签发一次性发送凭据，收到文字后核对原会话仍已加载且空闲，再以原线程 ID 调用 `turn/start`。Mac 终端继续订阅会话并处理审批。Mac 与 Nomad 同时发送时，Codex 可能合并到一个回合。
 
 隔离验证可设置 `RED_GREEN_STATUS_DIR` 改用临时状态目录；配合 `RED_GREEN_DISABLE_CODEX=1` 停止原生观察器，并从该目录的 `codex-usage.json` 注入用量快照。此文件和 `usage.json` 均不当作会话。常规运行不读取 Codex 用量文件。
