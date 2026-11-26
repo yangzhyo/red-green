@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>red-green · 钳钳图标候选</title>
+<style>
+  *{box-sizing:border-box}body{margin:0 auto;padding:30px clamp(16px,4vw,50px) 28px;max-width:1200px;background:#f7f7f3;color:#242a29;font:15px/1.45 -apple-system,"PingFang SC",sans-serif}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-bottom:17px;border-bottom:1px solid #a8afa8}
+  h1,h2,p{margin:0}h1{font-size:clamp(22px,3vw,34px);letter-spacing:-.04em}header b{font:850 20px/1 "Arial Rounded MT Bold",sans-serif;letter-spacing:-.055em}
+  main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:20px}
+  section{min-width:0}h2{font-size:21px;letter-spacing:-.045em;display:flex;gap:8px;align-items:center}h2 small{border:1px solid currentColor;border-radius:50%;width:23px;height:23px;display:grid;place-items:center;font:650 13px/1 Menlo,monospace}
+  p{font-size:14px;color:#424a45;margin:5px 0 13px}
+  .plate{height:187px;background:#e6e9da;display:grid;place-items:center}
+  .tile{width:126px;height:126px;border-radius:26%;display:grid;place-items:center;background:#fffcf1;border:1px solid #c7caba;box-shadow:0 2px 3px #2222}
+  .sizes{display:grid;grid-template-columns:auto 1fr 1fr;align-items:stretch;border:1px solid #bdc3b9;border-top:0;background:white}
+  .sizes>span{padding:9px 8px;align-self:center;font-size:12px;white-space:nowrap}
+  .sizes>div{display:grid;grid-auto-flow:column;align-items:center;justify-content:center;gap:8px;min-height:44px}
+  .light{background:#edf0ed}.dark{background:#2b3030}canvas{display:block}
+  @media(max-width:740px){main{grid-template-columns:1fr;max-width:500px;margin-inline:auto}.plate{height:150px}.tile{width:110px;height:110px}}
+</style>
+<header><h1>钳钳 · 应用图标候选</h1><b>red-green</b></header>
+<main></main>
+<script src="../../ui/sprites.js"></script>
+<script>
+const options = [
+  ['像素原身','沿用桌面钳钳举起双钳的原画。'],
+  ['招手钳钳','一只大钳举高，保留眼柄和侧身步态。'],
+  ['双钳信号','红绿两钳托住蟹壳，壳上留一道信号窗。']
+];
+function drawCrab(id, size, mode) {
+  const canvas=document.createElement('canvas'), factor=Math.max(2, Math.ceil(devicePixelRatio || 1));
+  canvas.width=canvas.height=size*factor;
+  canvas.style.width=canvas.style.height=size+'px';
+  canvas.setAttribute('aria-hidden','true');
+  const g=canvas.getContext('2d');
+  const unit=canvas.width/32, colour=mode==='colour';
+  const black=mode==='white'?'#fff':'#232627';
+  const palette=window.SPRITES.C;
+  g.scale(unit,unit);
+  const path=(d,fill)=>{g.fillStyle=fill;g.fill(new Path2D(d));};
+  const dot=(x,y,r,fill)=>{g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fillStyle=fill;g.fill();};
+  function punch(fn){g.save();g.globalCompositeOperation='destination-out';fn();g.restore();}
+  function stroke(d,width,col) {
+    g.lineWidth=width;g.lineCap='round';g.lineJoin='round';g.strokeStyle=col;g.stroke(new Path2D(d));
+  }
+  if(id===0) {
+    const {g:grid,p}=window.SPRITES.spec('crab','completed').frames[0];
+    g.setTransform(1,0,0,1,0,0);
+    grid.forEach((row,y)=>row.forEach((ch,x)=>{
+      if(!p[ch]||(!colour&&ch==='S'))return;
+      g.fillStyle=colour?p[ch]:black;
+      const left=Math.round(x*2*unit), top=Math.round((6+y*2)*unit);
+      g.fillRect(left,top,Math.round((x+1)*2*unit)-left,Math.round((8+y*2)*unit)-top);
+    }));
+  } else if(id===1) {
+    const body=colour?palette.shell:black, legs=colour?'#963c2a':black;
+    stroke('M11 21Q7 22 5 25 M13 23Q11 25 10 27 M23 22Q26 23 27 26',1.9,legs);
+    stroke('M10 18Q6 17 6 12 M24 19Q27 19 28 16',2.4,legs);
+    path('M7 14C2 14 0 10 2 5L5.2 8.7C6 6.4 7 4.4 9.6 3.2C13.1 8.1 12.4 12.8 7 14Z',body);
+    path('M26 17C24.2 14.8 24.5 11.8 26.3 10.2L27.4 13.4L30 11.2C32 14.7 30.7 17.2 28.3 18Z',body);
+    stroke('M14 16L13.7 12.1 M20 15.3L20.1 10.9',2.6,body);
+    dot(13.7,11.5,1.55,black);dot(20.1,10.3,1.55,black);
+    path('M8 18C10 14.6 12.5 14 17 13.7C20.8 13.3 24 14.4 25.8 17.2C26.8 20.9 23.6 24.4 18.1 24.9C13.3 25.4 9.2 23.8 8 20.4Z',body);
+    const smile=()=>stroke('M15.8 19.6Q17.4 21 19.3 19.2',1.45,black);
+    if(colour)smile();else punch(smile);
+  } else {
+    const left='M2.5 5.5L7.1 10.1L9.8 5.3L11.5 10.3L8.2 15.3H4.6L1.3 11.9Z';
+    const right='M29.5 5.5L24.9 10.1L22.2 5.3L20.5 10.3L23.8 15.3H27.4L30.7 11.9Z';
+    path(left,colour?'#ce5039':black);path(right,colour?'#34705a':black);
+    path('M3 17.1L7.6 18.2L10.6 14H21.4L24.4 18.2L29 17.1L27.7 20.8L24.6 21.7L27.5 25.3H24.6L21.8 23.1L20.3 24H11.7L10.2 23.1L7.4 25.3H4.5L7.4 21.7L4.3 20.8Z',black);
+    path('M12 13.2V11h2.2v2.2z M17.8 13.2V11H20v2.2z',black);
+    punch(()=>path('M12.4 17.7h7.2v2.5h-7.2z',black));
+  }
+  return canvas;
+}
+options.forEach(([title,description],id)=>{
+  const section=document.createElement('section');
+  section.innerHTML='<h2><small>'+(id+1)+'</small>'+title+'</h2><p>'+description+'</p><div class="plate"><div class="tile"></div></div><div class="sizes"><span>菜单栏 18 px</span><div class="light"></div><div class="dark"></div></div>';
+  section.querySelector('.tile').append(drawCrab(id,90,'colour'));
+  section.querySelector('.light').append(drawCrab(id,18,'black'));
+  section.querySelector('.dark').append(drawCrab(id,18,'white'));
+  document.querySelector('main').append(section);
+});
+</script>
+</html>
