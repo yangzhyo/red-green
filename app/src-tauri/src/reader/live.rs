@@ -1,10 +1,14 @@
-use super::{claude::Transcript, codex::visible_items, history, Conversation, Source};
-use crate::codex::rpc::Rpc;
+use super::{
+    claude::{read_entries, SessionTitle, Transcript},
+    codex::visible_items,
+    history, Conversation, Source,
+};
+use crate::codex::{model::thread_title, rpc::Rpc};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{BufReader, Seek, SeekFrom},
+    io::{BufReader, Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
@@ -22,6 +26,7 @@ pub struct LiveSource {
     status_dir: PathBuf,
     socket: PathBuf,
     selected: HashMap<String, Selection>,
+    claude_titles: HashMap<String, ClaudeFile<SessionTitle>>,
     stored: Option<StoredConversation>,
     history_directory: history::Directory,
     launch: TerminalLauncher,
@@ -40,6 +45,7 @@ struct DirectoryEntry {
     key: String,
     project: String,
     source: &'static str,
+    title: String,
     state: Option<String>,
     #[serde(skip)]
     path: Option<PathBuf>,
@@ -50,49 +56,62 @@ struct Selection {
     history: History,
 }
 enum History {
-    Claude(ClaudeFile),
+    Claude(ClaudeFile<Transcript>),
     Codex(CodexHistory),
 }
 
 #[derive(Default)]
-struct ClaudeFile {
-    transcript: Transcript,
+struct ClaudeFile<T> {
+    data: T,
     identity: (u64, u64),
     offset: u64,
+    len: u64,
     modified: Option<std::time::SystemTime>,
 }
 
-impl ClaudeFile {
-    fn refresh(&mut self, path: &Path, sid: &str, body: &mut Conversation) -> Result<(), u16> {
+enum FileChange {
+    Unchanged,
+    Appended,
+    Replaced,
+}
+
+impl<T: Default> ClaudeFile<T> {
+    fn refresh(
+        &mut self,
+        path: &Path,
+        sid: &str,
+        insert: fn(&mut T, &Value),
+    ) -> Result<FileChange, u16> {
         let mut file = File::open(path).map_err(|_| UNAVAILABLE)?;
         let meta = file.metadata().map_err(|_| UNAVAILABLE)?;
         let identity = (meta.dev(), meta.ino());
         let modified = meta.modified().ok();
-        if identity != self.identity
-            || meta.len() < self.offset
-            || (meta.len() == self.offset && self.modified != modified)
-        {
-            body.reconcile(vec![]);
+        let replaced = identity != self.identity
+            || meta.len() < self.len
+            || (meta.len() == self.len && self.modified != modified);
+        if replaced {
             *self = Self {
                 identity,
                 ..Self::default()
             };
-        }
-        if self.offset == meta.len() {
-            return Ok(());
+        } else if self.len == meta.len() {
+            return Ok(FileChange::Unchanged);
         }
         file.seek(SeekFrom::Start(self.offset))
             .map_err(|_| UNAVAILABLE)?;
-        let consumed = self
-            .transcript
-            .append(sid, BufReader::new(file))
-            .map_err(|_| UNAVAILABLE)?;
+        let input = BufReader::new(file.take(meta.len() - self.offset));
+        let consumed =
+            read_entries(sid, input, |row| insert(&mut self.data, row)).map_err(|_| UNAVAILABLE)?;
         self.offset += consumed as u64;
+        self.len = meta.len();
         self.modified = modified;
-        if consumed > 0 {
-            body.reconcile(self.transcript.visible());
-        }
-        Ok(())
+        Ok(if replaced {
+            FileChange::Replaced
+        } else if consumed > 0 {
+            FileChange::Appended
+        } else {
+            FileChange::Unchanged
+        })
     }
 }
 
@@ -219,6 +238,7 @@ impl LiveSource {
             status_dir,
             socket,
             selected: HashMap::new(),
+            claude_titles: HashMap::new(),
             stored: None,
             history_directory: history::Directory::default(),
             launch: |_, _, _| Err(424),
@@ -240,13 +260,17 @@ impl LiveSource {
         self
     }
 
-    fn terminal_ready(&self, key: &str) -> Option<bool> {
-        (self.snapshot)().iter().find_map(|session| {
-            (session["source"] == "codex"
+    fn bound_terminal(&self, key: &str) -> Option<Value> {
+        (self.snapshot)().into_iter().find(|session| {
+            session["source"] == "codex"
                 && session["session_id"] == key
-                && session["tty"].as_str().is_some_and(|tty| !tty.is_empty()))
-            .then(|| session["reader_has_turn"] != false)
+                && session["tty"].as_str().is_some_and(|tty| !tty.is_empty())
         })
+    }
+
+    fn terminal_ready(&self, key: &str) -> Option<bool> {
+        self.bound_terminal(key)
+            .map(|session| session["reader_has_turn"] != false)
     }
 
     fn mapping(&self, id: &str) -> Option<String> {
@@ -286,13 +310,42 @@ impl LiveSource {
                     path,
                     project: session["project"].as_str().unwrap_or("?").to_owned(),
                     state: session["state"].as_str().map(str::to_owned),
+                    title: session["title"]
+                        .as_str()
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or("未命名会话")
+                        .to_owned(),
                 })
             })
             .collect()
     }
+
+    fn with_title(&mut self, mut entry: DirectoryEntry) -> DirectoryEntry {
+        if let (Some(path), Some(sid)) = (&entry.path, entry.key.strip_prefix("claude-")) {
+            let file = self.claude_titles.entry(entry.key.clone()).or_default();
+            if file.refresh(path, sid, SessionTitle::insert).is_ok() {
+                entry.title = file.data.get().to_owned();
+            }
+        }
+        entry
+    }
 }
 
 impl Source for LiveSource {
+    fn history_entry(&mut self, key: &str) -> Result<Value, u16> {
+        let id = history::thread_id(key)?;
+        let mut rpc = Rpc::connect(&self.socket).map_err(|_| UNAVAILABLE)?;
+        let thread = history::find(&mut rpc, id, true)?;
+        let mut entry = history::list_entry(&thread).ok_or(UNAVAILABLE)?;
+        if let Some(session) = self
+            .bound_terminal(key)
+            .filter(|s| s["reader_has_turn"] != false)
+        {
+            entry["state"] = session["state"].clone();
+        }
+        Ok(entry)
+    }
+
     fn history(&mut self, cursor: Option<&str>) -> Result<Value, u16> {
         self.history_directory.list(&self.socket, cursor)
     }
@@ -318,12 +371,13 @@ impl Source for LiveSource {
             },
         };
         let rpc = stored.history.rpc.as_mut().ok_or(UNAVAILABLE)?;
-        history::find(rpc, id, fresh)?;
+        let thread = history::find(rpc, id, fresh)?;
         let mut page = stored
             .history
             .refresh(&self.socket, id, query, &mut stored.body)?;
         let ready = self.terminal_ready(key) == Some(true);
         page["live"] = ready.into();
+        page["title"] = thread_title(&thread).into();
         if ready {
             self.launching.remove(id);
         }
@@ -432,7 +486,13 @@ impl Source for LiveSource {
     }
 
     fn sessions(&mut self) -> Value {
-        json!(self.directory())
+        let entries = self.directory();
+        self.claude_titles
+            .retain(|key, _| entries.iter().any(|row| row.key == *key));
+        json!(entries
+            .into_iter()
+            .map(|entry| self.with_title(entry))
+            .collect::<Vec<_>>())
     }
     fn messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
         let Some(entry) = self.directory().into_iter().find(|row| row.key == key) else {
@@ -471,6 +531,7 @@ impl Source for LiveSource {
             }
             return Err(UNAVAILABLE);
         };
+        let entry = self.with_title(entry);
         let selection = self
             .selected
             .entry(key.to_owned())
@@ -484,11 +545,17 @@ impl Source for LiveSource {
             });
         let mut page = match &mut selection.history {
             History::Claude(file) => {
-                file.refresh(
+                let change = file.refresh(
                     &entry.path.ok_or(UNAVAILABLE)?,
                     key.strip_prefix("claude-").ok_or(UNAVAILABLE)?,
-                    &mut selection.body,
+                    Transcript::insert,
                 )?;
+                if matches!(change, FileChange::Replaced) {
+                    selection.body.reconcile(vec![]);
+                }
+                if !matches!(change, FileChange::Unchanged) {
+                    selection.body.reconcile(file.data.visible());
+                }
                 Ok(selection.body.page(query))
             }
             History::Codex(history) => {
@@ -505,6 +572,7 @@ impl Source for LiveSource {
             }
         }?;
         page["state"] = json!(entry.state);
+        page["title"] = entry.title.into();
         Ok(page)
     }
 }

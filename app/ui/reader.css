@@ -30,7 +30,7 @@ canvas { display: block; image-rendering: pixelated; }
 }
 .masthead .nav-link { font-size: .875rem; text-decoration: underline; text-underline-offset: .18em; }
 .nav-link[aria-disabled="true"] { color: #737773; cursor: default; }
-.session-detail, .session-id { font: .875rem/1.45 var(--mono); }
+.session-detail { font: .875rem/1.45 var(--mono); }
 #status { margin: .55rem 0; }
 #pair { padding: 1rem 0; }
 #pair h2 { margin: 0 0 .65rem; font-size: 1.25rem; }
@@ -60,9 +60,12 @@ main { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; }
 }
 .session-state:empty { display: none; }
 .identity { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
-.session-project, .session-detail, .session-id { display: block; }
+.session-project, .session-detail { display: block; }
 .session-project { font: 700 1.06rem/1.45 var(--mono); }
-.session-id { font-size: .8rem; }
+.session-title {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; font-size: .875rem; line-height: 1.45;
+}
 #project-filter { flex: none; width: 100%; margin: var(--divider-gap) 0 .5rem; font: inherit; letter-spacing: normal; }
 #history-rows button {
   display: block; width: 100%; text-align: start; overflow-wrap: anywhere;

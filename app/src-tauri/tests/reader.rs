@@ -78,18 +78,44 @@ fn current_directory_and_incremental_claude_history() {
     assert_eq!(
         reader.sessions(),
         json!([{
-            "key":"claude-one", "project":"同名项目", "source":"Claude Code", "state":"awaiting"
+            "key":"claude-one", "project":"同名项目", "source":"Claude Code", "state":"awaiting", "title":"第一行"
         }])
     );
     let page = reader.messages("claude-one", "").unwrap();
     assert_eq!(page["state"], "awaiting");
+    assert_eq!(page["title"], "第一行");
     assert_eq!(page["messages"][0]["text"], "第一行");
     assert_eq!(page["messages"][0]["html"], "<p>第一行</p>\n");
     let since = format!("since={}", page["since"].as_str().unwrap());
     let answer = format!("## 回复\n\n{}", "一段中文".repeat(150));
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"ai-title","sessionId":"one","aiTitle":"自动名称"})
+    )
+    .unwrap();
+    assert_eq!(reader.sessions()[0]["title"], "自动名称");
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"custom-title","sessionId":"one","customTitle":"手动改名"})
+    )
+    .unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({"type":"ai-title","sessionId":"one","aiTitle":"更新的自动名称"})
+    )
+    .unwrap();
     writeln!(fs::OpenOptions::new().append(true).open(&transcript).unwrap(),"{}",json!({"type":"assistant","sessionId":"one","uuid":"a","parentUuid":"q","message":{"role":"assistant","content":answer}})).unwrap();
     let new = reader.messages("claude-one", &since).unwrap();
     assert_eq!(new["state"], "awaiting");
+    assert_eq!(new["title"], "手动改名");
+    assert_eq!(reader.sessions()[0]["title"], "手动改名");
     assert_eq!(new["messages"].as_array().unwrap().len(), 1);
     assert_eq!(new["messages"][0]["text"], answer);
     assert!(new["messages"][0]["html"]
@@ -99,6 +125,7 @@ fn current_directory_and_incremental_claude_history() {
     fs::write(&transcript, "").unwrap();
     let cleared = reader.messages("claude-one", &since).unwrap();
     assert_eq!(cleared["reset"], true);
+    assert_eq!(cleared["title"], "未命名会话");
     assert!(cleared["messages"].as_array().unwrap().is_empty());
     fs::write(mapping, "ended\n").unwrap();
     assert_eq!(reader.messages("claude-one", ""), Err(410));

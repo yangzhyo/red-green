@@ -4,6 +4,8 @@ const state = new ReaderState();
 const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
+const fromHistoryThread = location.pathname.startsWith('/read/history/');
+const threadDocument = fromHistoryThread || location.pathname.startsWith('/read/current/');
 const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
 window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
 const nodes = new Map();
@@ -17,7 +19,7 @@ let timer;
 let wantEarlier = false;
 let stopped = false;
 let interrupted = false;
-let homeNotice = '';
+const homeNotice = takeTabValue('notice') || '';
 let currentEntry = null;
 let replyTicket = null;
 let historyList = null;
@@ -37,10 +39,40 @@ const replyErrors = {
   '424':'Codex 未受理，可稍后重试',
   'unknown':'发送结果待核对，请先查看正文。修改文字后可再发送。',
 };
-const drafts = new Map();
+const drafts = new Map(takeTabValue('drafts') || []);
 const composer = el('composer');
 const draft = el('reply-text');
 const projectFilter = el('project-filter');
+
+// Transfer UI state only within this tab. Each destination consumes its handoff.
+function takeTabValue(key) {
+  try {
+    const value = sessionStorage.getItem('reader.' + key);
+    sessionStorage.removeItem('reader.' + key);
+    return JSON.parse(value);
+  } catch { return null; }
+}
+
+function putTabValue(key, value) {
+  try { sessionStorage.setItem('reader.' + key, JSON.stringify(value)); } catch { /* Storage is optional. */ }
+}
+
+function rememberDraft() {
+  if (!currentEntry) return;
+  if (draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
+  else drafts.delete(currentEntry.key);
+}
+
+function navigate(url) {
+  rememberDraft();
+  if (drafts.size) putTabValue('drafts', [...drafts]);
+  // Replace the current document so the browser's Back button still returns to the note.
+  state.back();
+  stopped = true;
+  clearTimeout(timer);
+  if (new URL(url, location.href).href === location.href) location.reload();
+  else location.replace(url);
+}
 
 function updateReply() {
   const active = !stopped && !!replyTicket;
@@ -75,8 +107,9 @@ function setPageTitle(...parts) {
 
 function updateThreadTitle(stateLabel) {
   const {title, project, source} = currentEntry;
-  const name = title || project || '未命名会话';
-  setPageTitle(project, name === project ? '' : name, source, stateLabel);
+  const name = title?.replace(/\s+/g, ' ').trim() || '未命名会话';
+  const projectName = project?.replace(/\s+/g, ' ').trim();
+  setPageTitle(source, stateLabel, projectName, name === projectName ? '' : name);
 }
 
 function portrait(entry) {
@@ -119,8 +152,7 @@ async function request(path, options) {
 }
 
 function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry} = {}) {
-  if (currentEntry && draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
-  else if (currentEntry) drafts.delete(currentEntry.key);
+  rememberDraft();
   const savedDraft = entry && drafts.get(entry.key);
   el('messages').replaceChildren();
   el('list').replaceChildren();
@@ -131,7 +163,6 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   following = true;
   stopped = false;
   interrupted = false;
-  homeNotice = '';
   status('');
   el('latest').hidden = true;
   if (!fromHistory && historyList) {
@@ -142,7 +173,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   const listingHistory = fromHistory && !entry;
   el('history-home').hidden = !listingHistory;
   el('back').textContent = fromHistory ? '返回历史' : '返回列表';
-  el('back').setAttribute('href', fromHistory ? '#history-list' : '#list');
+  el('back').setAttribute('href', fromHistory ? '/archive' : '/#list');
   el('open-history').hidden = true;
   projectFilter.hidden = el('history-list').hidden = !listingHistory;
   footer.hidden = !entry;
@@ -161,7 +192,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   updateReply();
   document.body.dataset.page = entry ? 'thread' : listingHistory ? 'history' : 'list';
   if (entry) {
-    updateThreadTitle(readOnly ? '' : stateNames.get(entry.state));
+    updateThreadTitle(stateNames.get(entry.state) || (readOnly ? '只读' : ''));
     state.open(entry.key);
     updateNavigation();
   } else {
@@ -181,17 +212,16 @@ function sessionRow(entry) {
   name.className = 'session-project';
   const detail = document.createElement('span');
   detail.className = 'session-detail';
-  const shortId = document.createElement('span');
-  shortId.className = 'session-id';
-  shortId.textContent = entry.key.slice(-8);
+  const title = document.createElement('span');
+  title.className = 'session-title';
   const identity = document.createElement('span');
   identity.className = 'identity';
-  identity.append(name, detail, shortId);
+  identity.append(name, detail, title);
   const badge = document.createElement('span');
   badge.className = 'session-state';
   button.append(badge, avatar, identity);
-  const row = { button, name, detail, badge, avatar, entry: null };
-  button.onclick = () => { display(row.entry); poll(); };
+  const row = { button, name, detail, title, badge, avatar, entry: null };
+  button.onclick = () => navigate('/read/current/' + encodeURIComponent(entry.key));
   sessionRows.set(entry.key, row);
   return row;
 }
@@ -201,8 +231,7 @@ function showList(entries) {
   status(homeNotice || (entries.length ? '' : '等待可读会话'));
   const key = state.autoOpen(entries);
   if (key) {
-    display(entries[0]);
-    queued = true;
+    navigate('/read/current/' + encodeURIComponent(key));
     return;
   }
   const keys = new Set(entries.map(entry => entry.key));
@@ -220,6 +249,7 @@ function showList(entries) {
     }
     if (!previous || previous.project !== entry.project) row.name.textContent = entry.project;
     if (!previous || previous.source !== entry.source) row.detail.textContent = entry.source;
+    if (!previous || previous.title !== entry.title) row.title.textContent = entry.title || '未命名会话';
     if (!previous || previous.state !== entry.state) {
       row.badge.textContent = stateNames.get(entry.state) || '';
     }
@@ -241,9 +271,9 @@ function addHistoryRow(entry) {
   detail.textContent = entry.project + ' · ' + localDate.format(new Date(entry.updatedAt * 1000));
   button.append(title, detail);
   button.onclick = () => {
-    historyList.scroll = view.scrollTop;
-    display(entry, {fromHistory: true});
-    poll();
+    putTabValue('history', {filter: projectFilter.value, scroll: view.scrollTop,
+      count: historyList.rows.size, generation: historyList.generation});
+    navigate('/read/history/' + encodeURIComponent(entry.key));
   };
   const project = entry.project.toLocaleLowerCase();
   button.hidden = !project.includes(historyList.filter);
@@ -283,11 +313,16 @@ async function tickHistoryList(generation) {
   const previousCount = historyList.matches;
   page.entries.forEach(addHistoryRow);
   historyList.cursor = page.nextCursor;
-  historyList.load = !!historyList.cursor && historyList.matches === previousCount;
+  const restoring = historyList.restoreCount > historyList.rows.size;
+  historyList.load = !!historyList.cursor && (restoring || historyList.matches === previousCount);
   if (historyList.load) queued = true;
   historyList.error = '';
   interrupted = false;
   renderHistoryList();
+  if (!historyList.load && historyList.restoreCount) {
+    view.scrollTop = historyList.scroll;
+    historyList.restoreCount = 0;
+  }
 }
 
 const readingBlocks = 'p, li, tr, pre, h1, h2, h3, h4, h5, h6, hr';
@@ -397,6 +432,12 @@ function canSwitchToLive() {
 async function tick() {
   const generation = state.generation;
   if (!state.key) {
+    if (threadDocument) {
+      // An initially unavailable document regains its native title on a fresh document load.
+      await request(location.pathname, {headers: {Accept: 'application/json'}});
+      if (generation === state.generation) location.replace(location.pathname);
+      return;
+    }
     if (historyList) return tickHistoryList(generation);
     const entries = await request('/sessions');
     if (generation === state.generation) showList(entries);
@@ -410,6 +451,7 @@ async function tick() {
   const page = await request(endpoint + query);
   if (generation !== state.generation) return;
   if (readingHistory) {
+    if ('title' in page) currentEntry.title = page.title;
     let bound = page.live;
     resumeTicket = page.resumeTicket || null;
     if (resumeTicket && resumeNotice === needsReplyPermission) resumeNotice = '';
@@ -445,9 +487,10 @@ async function tick() {
 }
 
 async function showMessages(page, earlier, endpoint, generation) {
-  if (!readingHistory && 'state' in page && currentEntry.state !== page.state) {
-    currentEntry.state = page.state;
-    updateThreadTitle(stateNames.get(page.state));
+  if (!readingHistory && ('state' in page || 'title' in page)) {
+    if ('state' in page) currentEntry.state = page.state;
+    if ('title' in page) currentEntry.title = page.title;
+    updateThreadTitle(stateNames.get(currentEntry.state));
   }
   replyTicket = readingHistory ? null : page.replyTicket || null;
   if (!replyTicket && !composer.hidden) {
@@ -493,18 +536,23 @@ async function showMessages(page, earlier, endpoint, generation) {
 function requirePairing() {
   display(null);
   drafts.clear();
+  takeTabValue('history');
+  delete document.body.dataset.entry;
   state.manualList = false;
   el('pair').hidden = false;
   document.body.dataset.page = 'pair';
   setPageTitle('red-green', '设备配对');
   status('');
+  if (threadDocument && document.body.dataset.readerError !== '401') location.reload();
 }
 
 function sourceChanged(notice = '会话来源已变更，请重新选择') {
   display(null);
   drafts.clear();
-  homeNotice = notice;
-  status(homeNotice);
+  delete document.body.dataset.entry;
+  takeTabValue('history');
+  putTabValue('notice', notice);
+  navigate('/#list');
 }
 
 async function poll() {
@@ -525,10 +573,10 @@ async function poll() {
       updateReply();
       if (error.message === '401') {
         requirePairing();
-      } else if (error.message === '501' && historyList) {
+      } else if (error.message === '501' && (historyList || fromHistoryThread)) {
         sourceChanged(historyUnsupported);
         queued = true;
-      } else if (error.message === '409' || (readingHistory && ['404', '410'].includes(error.message))) {
+      } else if (error.message === '409' || ((readingHistory || (threadDocument && !state.key)) && ['404', '410'].includes(error.message))) {
         sourceChanged();
         queued = true;
       } else if (historyList && !state.key && historyList.load) {
@@ -609,32 +657,41 @@ el('resume').onclick = async () => {
   poll();
 };
 
-function openDirectory(hash) {
-  const fromHistory = hash === '#history-list';
-  if (fromHistory && !historyList) {
-    historyList = {generation: null, rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
-  }
-  display(null, {fromHistory});
-  return poll();
-}
-
 for (const link of document.querySelectorAll('.nav-link')) {
   link.onclick = event => {
     if (sending) { event.preventDefault(); return; }
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    if (link.hash !== location.hash) {
-      const target = new URL(location.href);
-      target.hash = link.hash;
-      // Keep the reader in one browser entry so Back still returns to the Nomad note.
-      window.history.replaceState(null, '', target.href);
-    }
-    openDirectory(link.hash);
+    if (link.id === 'open-history' || link.id === 'history-home') takeTabValue('history');
+    navigate(link.href);
   };
 }
 
 function startReader() {
-  if (location.hash === '#list' || location.hash === '#history-list') return openDirectory(location.hash);
+  if (threadDocument) {
+    const {entry, readerError} = document.body.dataset;
+    delete document.body.dataset.entry;
+    if (entry) {
+      display(JSON.parse(entry), {fromHistory: fromHistoryThread});
+    } else {
+      el('back').href = fromHistoryThread ? '/archive' : '/#list';
+      el('back').textContent = fromHistoryThread ? '返回历史' : '返回列表';
+      footer.hidden = false;
+      // A link from a note can omit a Strict cookie on its first navigation.
+      status(readerError === '401' ? '正在核对配对状态…' : '正在重新打开会话…');
+    }
+  } else if (location.pathname === '/archive') {
+    const saved = takeTabValue('history');
+    projectFilter.value = saved?.filter || '';
+    historyList = {generation: saved?.generation || null, rows: new Map(), cursors: new Set(), cursor: null,
+      scroll: saved?.scroll || 0, restoreCount: saved?.count || 0, load: true, error: '', matches: 0,
+      filter: projectFilter.value.trim().toLocaleLowerCase()};
+    display(null, {fromHistory: true});
+  } else if (location.hash === '#history-list') {
+    return navigate('/archive');
+  } else if (location.hash === '#list') {
+    display(null);
+  }
   return poll();
 }
 
@@ -646,6 +703,7 @@ el('history-more').onclick = () => {
 };
 projectFilter.oninput = () => {
   view.scrollTop = 0;
+  historyList.restoreCount = 0;
   historyList.filter = projectFilter.value.trim().toLocaleLowerCase();
   historyList.matches = 0;
   for (const {button, project} of historyList.rows.values()) {
@@ -701,7 +759,8 @@ el('pair').onsubmit = async event => {
     document.body.dataset.page = 'list';
     setPageTitle('red-green', '当前会话');
     el('code').value = '';
-    await startReader();
+    if (threadDocument) location.reload();
+    else await startReader();
   } catch (error) {
     status(error.message === '403' ? '配对码无效或已过期，请查看 Mac 上的配对码。' : '连接失败，请重试。');
   }

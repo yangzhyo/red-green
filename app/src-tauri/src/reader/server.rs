@@ -1,5 +1,5 @@
 use super::{pairing::Pairing, Library};
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     io::{self, Read},
@@ -14,6 +14,16 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 pub trait Source: Send + 'static {
     fn sessions(&mut self) -> serde_json::Value;
+    fn current_entry(&mut self, key: &str) -> Result<Value, u16> {
+        self.sessions()
+            .as_array_mut()
+            .and_then(|rows| rows.iter_mut().find(|entry| entry["key"] == key))
+            .map(Value::take)
+            .ok_or(404)
+    }
+    fn history_entry(&mut self, _key: &str) -> Result<Value, u16> {
+        Err(404)
+    }
     fn history(&mut self, _cursor: Option<&str>) -> Result<Value, u16> {
         Ok(json!({"entries": [], "nextCursor": null, "generation":"demo"}))
     }
@@ -136,6 +146,133 @@ fn reply(request: Request, status: u16, mime: &str, body: String, cookie: Option
     let _ = request.respond(response);
 }
 const JSON: &str = "application/json";
+const HTML: &str = "text/html; charset=utf-8";
+const READER_HTML: &str = include_str!("../../../ui/reader.html");
+
+#[derive(Deserialize, Serialize)]
+struct DocumentEntry {
+    key: String,
+    title: Option<String>,
+    project: String,
+    source: String,
+    state: Option<String>,
+}
+
+impl DocumentEntry {
+    fn read(
+        pairing: &Mutex<Pairing>,
+        cookie: &str,
+        source: &mut impl Source,
+        key: &str,
+        history: bool,
+    ) -> Result<Self, u16> {
+        if !pairing.lock().unwrap().allows(cookie) {
+            return Err(401);
+        }
+        let result = if history {
+            source.history_entry(key)
+        } else {
+            source.current_entry(key)
+        };
+        // 配对可能在取标题期间被撤销，与正文使用同样的二次校验。
+        if !pairing.lock().unwrap().allows(cookie) {
+            return Err(401);
+        }
+        let entry: Self = serde_json::from_value(result?).map_err(|_| 503u16)?;
+        (entry.key == key).then_some(entry).ok_or(404)
+    }
+
+    fn page_title(&self, history: bool) -> String {
+        let label = match self.state.as_deref() {
+            Some("running") => "运行中",
+            Some("awaiting") => "待确认",
+            Some("your_turn") => "轮到你",
+            Some("completed") => "已完成",
+            Some("aborted") => "异常中止",
+            Some("idle") => "空闲",
+            _ if history => "只读",
+            _ => "",
+        };
+        let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let project = normalize(&self.project);
+        let name = normalize(self.title.as_deref().unwrap_or(""));
+        let name = if name.is_empty() {
+            "未命名会话"
+        } else {
+            &name
+        };
+        [
+            normalize(&self.source).as_str(),
+            label,
+            &project,
+            if name == project { "" } else { name },
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+    }
+}
+
+fn escaped(text: &str) -> String {
+    let mut html = String::new();
+    pulldown_cmark_escape::escape_html(&mut html, text).expect("writing to a string");
+    html
+}
+
+fn document(title: &str, body_attributes: &str) -> String {
+    READER_HTML
+        .replacen(
+            "<title>red-green · 当前会话</title>",
+            &format!("<title>{}</title>", escaped(title)),
+            1,
+        )
+        .replacen(
+            r#"<body data-page="list">"#,
+            &format!("<body {body_attributes}>"),
+            1,
+        )
+}
+
+fn thread_document(
+    request: Request,
+    pairing: &Mutex<Pairing>,
+    cookie: &str,
+    source: &mut impl Source,
+    key: &str,
+    history: bool,
+) {
+    let entry = DocumentEntry::read(pairing, cookie, source, key, history);
+    let wants_json = request
+        .headers()
+        .iter()
+        .any(|h| h.field.equiv("Accept") && h.value.as_str() == JSON);
+    if wants_json {
+        return match entry {
+            Ok(entry) => reply(request, 200, JSON, json!(entry).to_string(), None),
+            Err(status) => reply(request, status, JSON, "{}".into(), None),
+        };
+    }
+    let html = match entry {
+        Ok(entry) => document(
+            &entry.page_title(history),
+            &format!(
+                r#"data-page="thread" data-entry="{}""#,
+                escaped(&json!(entry).to_string())
+            ),
+        ),
+        Err(status) => document(
+            if status == 401 {
+                "red-green · 设备配对"
+            } else {
+                "red-green · 会话"
+            },
+            &format!(r#"data-page="thread" data-reader-error="{status}""#),
+        ),
+    };
+    reply(request, 200, HTML, html, None);
+}
+
 fn handle(
     mut request: Request,
     address: SocketAddr,
@@ -146,10 +283,16 @@ fn handle(
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     if request.method() == &Method::Get {
         let asset = match path {
-            "/" => Some((
-                "text/html; charset=utf-8",
-                include_str!("../../../ui/reader.html"),
-            )),
+            "/" => Some((HTML, READER_HTML)),
+            "/archive" => {
+                return reply(
+                    request,
+                    200,
+                    HTML,
+                    document("red-green · 历史会话", r#"data-page="history""#),
+                    None,
+                )
+            }
             "/reader.js" => Some(("text/javascript", include_str!("../../../ui/reader.js"))),
             "/reader-model.js" => Some((
                 "text/javascript",
@@ -211,6 +354,14 @@ fn handle(
         .map(|h| h.value.as_str())
         .unwrap_or("")
         .to_owned();
+    if request.method() == &Method::Get {
+        if let Some(key) = route_key(path, "/read/current/", "") {
+            return thread_document(request, pairing, &cookie, source, key, false);
+        }
+        if let Some(key) = route_key(path, "/read/history/", "") {
+            return thread_document(request, pairing, &cookie, source, key, true);
+        }
+    }
     if !pairing.lock().unwrap().allows(&cookie) {
         return reply(request, 401, JSON, "{}".into(), None);
     }
