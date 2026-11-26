@@ -76,6 +76,13 @@ impl Backend {
                             ))
                             .unwrap();
                         }
+                        // 真实共享服务会在正文请求期间通知同一账号的工作区路由已就绪。
+                        if r["method"] == "thread/turns/list" {
+                            let notification = json!({"method":"account/updated",
+                                "params":{"reason":"workspaceRoutingReady"}});
+                            ws.send(tungstenite::Message::text(notification.to_string()))
+                                .unwrap();
+                        }
                         if data.is_null() {
                             break; // 模拟共享服务重启，关闭已有连接。
                         }
@@ -436,7 +443,7 @@ fn an_unknown_launch_rechecks_the_thread_and_can_be_reset_on_the_mac() {
 }
 
 #[test]
-fn reading_older_turns_rechecks_membership_and_discards_an_account_change_during_content_read() {
+fn history_keeps_routing_ready_pages_but_discards_account_changes() {
     let access = Arc::new(Mutex::new("visible"));
     let mode = access.clone();
     let server = Backend::new(move |method, params, cwd| {
