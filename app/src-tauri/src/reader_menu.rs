@@ -102,7 +102,8 @@ pub fn install(app: &App) -> tauri::Result<()> {
         "配对设备可阅读当前会话及本机当前账号的 Codex CLI 历史",
         false,
     )?;
-    let toggle = item("reader-toggle", "开启局域网阅读", true)?;
+    let share_label = "开启局域网会话共享";
+    let toggle = item("reader-toggle", share_label, true)?;
     let address = item("reader-address", "共享已关闭", false)?;
     let code = item("reader-code", "生成新的配对码", false)?;
     let allow_label = "允许配对设备回复 Codex";
@@ -140,7 +141,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                         let stopped = toggle.clone();
                         std::thread::spawn(move || {
                             drop(reader);
-                            let _ = stopped.set_text("开启局域网阅读");
+                            let _ = stopped.set_text(share_label);
                             let _ = stopped.set_enabled(true);
                         });
                         let _ = address.set_text("共享已关闭");
@@ -182,7 +183,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                                 let _ = code.set_enabled(true);
                                 let _ = revoke.set_enabled(true);
                                 let _ = replies.set_enabled(true);
-                                let _ = toggle.set_text("关闭局域网阅读");
+                                let _ = toggle.set_text("关闭局域网会话共享");
                                 *active = Some(reader);
                             }
                             Err(error) => {

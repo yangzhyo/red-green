@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>red-green · 会话阅读</title>
+  <title>red-green · 当前会话</title>
   <link rel="stylesheet" href="/reader.css">
 </head>
 <body data-page="list">
   <header class="masthead">
-    <div class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green</div>
-    <span class="section-name">会话阅读</span>
+    <h1 class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green</h1>
+    <a class="nav-link" id="open-history" href="/archive" hidden>历史会话</a>
+    <a class="nav-link" id="history-home" href="/#list" hidden>返回首页</a>
   </header>
   <form id="composer" hidden>
     <textarea id="reply-text" aria-label="回复当前 Codex 会话" placeholder="输入回复…" rows="2" maxlength="8192" required></textarea>
@@ -20,25 +21,16 @@
       <button id="send-reply" type="submit">发送</button>
     </div>
   </form>
-  <section class="session-head" aria-labelledby="title">
-    <button id="back" aria-label="返回会话列表" hidden><span aria-hidden="true">‹</span><canvas id="back-crab" aria-hidden="true"></canvas><span id="back-label">列表</span></button>
-    <div class="head-line">
-      <h1 id="title">桌面伙伴</h1>
-      <span id="count" hidden></span>
-      <button id="open-history" hidden>历史</button>
-      <span id="state"></span>
-    </div>
-    <div id="source" hidden></div>
-  </section>
+  <input id="project-filter" type="search" aria-label="按项目名筛选" placeholder="按项目名筛选" hidden>
   <p id="status" role="status">正在连接 Mac…</p>
   <form id="pair" hidden>
+    <h2>设备配对</h2>
     <label for="code">输入 Mac 上的六位配对码</label>
     <div class="pair-controls">
       <input id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
       <button>配对</button>
     </div>
   </form>
-  <input id="project-filter" type="search" aria-label="按项目名筛选" placeholder="按项目名筛选" hidden>
   <main id="view" tabindex="0">
     <div id="list"></div>
     <section id="history-list" aria-label="Codex 历史会话" hidden>
@@ -49,6 +41,7 @@
   </main>
   <footer hidden>
     <button id="prev" disabled>上一屏</button>
+    <a class="nav-link" id="back" href="/#list">返回列表</a>
     <button id="latest" hidden>有新消息 ↓</button>
     <span id="position" title="当前已经载入的正文"></span>
     <button id="resume" hidden>继续对话</button>

@@ -4,9 +4,11 @@ const state = new ReaderState();
 const el = id => document.getElementById(id);
 const view = el('view');
 const footer = document.querySelector('footer');
+const fromHistoryThread = location.pathname.startsWith('/read/history/');
+const threadDocument = fromHistoryThread || location.pathname.startsWith('/read/current/');
+const pairingDocument = location.pathname === '/pair';
 const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
 window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
-window.SPRITES.draw(el('back-crab'), brandFrame, 3);
 const nodes = new Map();
 const sessionRows = new Map();
 let before = null;
@@ -18,7 +20,7 @@ let timer;
 let wantEarlier = false;
 let stopped = false;
 let interrupted = false;
-let homeNotice = '';
+const homeNotice = takeTabValue('notice') || '';
 let currentEntry = null;
 let replyTicket = null;
 let historyList = null;
@@ -38,10 +40,40 @@ const replyErrors = {
   '424':'Codex 未受理，可稍后重试',
   'unknown':'发送结果待核对，请先查看正文。修改文字后可再发送。',
 };
-const drafts = new Map();
+const drafts = new Map(takeTabValue('drafts') || []);
 const composer = el('composer');
 const draft = el('reply-text');
 const projectFilter = el('project-filter');
+
+// Transfer UI state only within this tab. Each destination consumes its handoff.
+function takeTabValue(key) {
+  try {
+    const value = sessionStorage.getItem('reader.' + key);
+    sessionStorage.removeItem('reader.' + key);
+    return JSON.parse(value);
+  } catch { return null; }
+}
+
+function putTabValue(key, value) {
+  try { sessionStorage.setItem('reader.' + key, JSON.stringify(value)); } catch { /* Storage is optional. */ }
+}
+
+function rememberDraft() {
+  if (!currentEntry) return;
+  if (draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
+  else drafts.delete(currentEntry.key);
+}
+
+function navigate(url) {
+  rememberDraft();
+  if (drafts.size) putTabValue('drafts', [...drafts]);
+  // Replace the current document so the browser's Back button still returns to the note.
+  state.back();
+  stopped = true;
+  clearTimeout(timer);
+  if (location.hash && new URL(url, location.href).href === location.href) location.reload();
+  else location.replace(url);
+}
 
 function updateReply() {
   const active = !stopped && !!replyTicket;
@@ -50,7 +82,7 @@ function updateReply() {
   const unavailable = !active || ['running', 'awaiting'].includes(currentEntry?.state);
   el('send-reply').disabled = sending || replyError === 'unknown' || unavailable || !draft.value.trim();
   draft.readOnly = sending;
-  el('back').disabled = sending;
+  el('back').setAttribute('aria-disabled', String(sending));
   el('cancel-reply').disabled = sending;
   if (!composer.hidden && !sending) {
     let hint = replyErrors[replyError] || '';
@@ -68,6 +100,23 @@ const stateNames = new Map([
   ['running', '运行中'], ['awaiting', '待确认'], ['your_turn', '轮到你'],
   ['completed', '已完成'], ['aborted', '异常中止'], ['idle', '空闲'],
 ]);
+
+function setPageTitle(...parts) {
+  const next = parts.filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
+  if (document.title === next) return false;
+  document.title = next;
+  return true;
+}
+
+function updateThreadTitle(stateLabel) {
+  const {title, project, source} = currentEntry;
+  const name = title?.replace(/\s+/g, ' ').trim() || '未命名会话';
+  const projectName = project?.replace(/\s+/g, ' ').trim();
+  if (setPageTitle(source, stateLabel, projectName, name === projectName ? '' : name)) {
+    // WebView hosts can sample the title on navigation. Neither fragment has a scroll target.
+    location.replace(location.hash === '#status-1' ? '#status-2' : '#status-1');
+  }
+}
 
 function portrait(entry) {
   const canvas = document.createElement('canvas');
@@ -109,8 +158,7 @@ async function request(path, options) {
 }
 
 function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry} = {}) {
-  if (currentEntry && draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
-  else if (currentEntry) drafts.delete(currentEntry.key);
+  rememberDraft();
   const savedDraft = entry && drafts.get(entry.key);
   el('messages').replaceChildren();
   el('list').replaceChildren();
@@ -121,7 +169,6 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   following = true;
   stopped = false;
   interrupted = false;
-  homeNotice = '';
   status('');
   el('latest').hidden = true;
   if (!fromHistory && historyList) {
@@ -130,9 +177,9 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
     projectFilter.value = '';
   }
   const listingHistory = fromHistory && !entry;
-  el('back').hidden = !entry && !listingHistory;
-  el('back-label').textContent = listingHistory ? '首页' : fromHistory ? '历史' : '列表';
-  el('back').setAttribute('aria-label', fromHistory && entry ? '返回历史列表' : '返回会话列表');
+  el('history-home').hidden = !listingHistory;
+  el('back').textContent = fromHistory ? '返回历史' : '返回列表';
+  el('back').setAttribute('href', fromHistory ? '/archive' : '/#list');
   el('open-history').hidden = true;
   projectFilter.hidden = el('history-list').hidden = !listingHistory;
   footer.hidden = !entry;
@@ -150,16 +197,13 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   el('reply-info').textContent = replyErrors[replyError] || '';
   updateReply();
   document.body.dataset.page = entry ? 'thread' : listingHistory ? 'history' : 'list';
-  el('count').hidden = true;
-  el('source').hidden = !entry;
-  el('title').textContent = entry ? entry.title || entry.project : listingHistory ? '历史' : '桌面伙伴';
-  el('title').title = entry ? el('title').textContent : '';
-  el('state').textContent = readOnly ? '' : stateNames.get(entry?.state) || '';
   if (entry) {
-    el('source').textContent = entry.source + ' / ' + (fromHistory ? entry.project : entry.key.slice(-8));
     state.open(entry.key);
     updateNavigation();
-  } else state.back();
+  } else {
+    setPageTitle('red-green', listingHistory ? '历史会话' : '当前会话');
+    state.back();
+  }
   if (listingHistory) renderHistoryList();
   view.scrollTop = listingHistory ? historyList.scroll : 0;
 }
@@ -173,17 +217,16 @@ function sessionRow(entry) {
   name.className = 'session-project';
   const detail = document.createElement('span');
   detail.className = 'session-detail';
-  const shortId = document.createElement('span');
-  shortId.className = 'session-id';
-  shortId.textContent = entry.key.slice(-8);
+  const title = document.createElement('span');
+  title.className = 'session-title';
   const identity = document.createElement('span');
   identity.className = 'identity';
-  identity.append(name, detail, shortId);
+  identity.append(name, detail, title);
   const badge = document.createElement('span');
   badge.className = 'session-state';
   button.append(badge, avatar, identity);
-  const row = { button, name, detail, badge, avatar, entry: null };
-  button.onclick = () => { display(row.entry); poll(); };
+  const row = { button, name, detail, title, badge, avatar, entry: null };
+  button.onclick = () => navigate('/read/current/' + encodeURIComponent(entry.key));
   sessionRows.set(entry.key, row);
   return row;
 }
@@ -193,14 +236,9 @@ function showList(entries) {
   status(homeNotice || (entries.length ? '' : '等待可读会话'));
   const key = state.autoOpen(entries);
   if (key) {
-    display(entries[0]);
-    queued = true;
+    navigate('/read/current/' + encodeURIComponent(key));
     return;
   }
-  if (el('title').textContent !== '桌面伙伴') el('title').textContent = '桌面伙伴';
-  const count = entries.length + ' 个会话';
-  if (el('count').textContent !== count) el('count').textContent = count;
-  if (el('count').hidden) el('count').hidden = false;
   const keys = new Set(entries.map(entry => entry.key));
   const list = el('list');
   for (const [key, row] of sessionRows) {
@@ -216,6 +254,7 @@ function showList(entries) {
     }
     if (!previous || previous.project !== entry.project) row.name.textContent = entry.project;
     if (!previous || previous.source !== entry.source) row.detail.textContent = entry.source;
+    if (!previous || previous.title !== entry.title) row.title.textContent = entry.title || '未命名会话';
     if (!previous || previous.state !== entry.state) {
       row.badge.textContent = stateNames.get(entry.state) || '';
     }
@@ -237,9 +276,9 @@ function addHistoryRow(entry) {
   detail.textContent = entry.project + ' · ' + localDate.format(new Date(entry.updatedAt * 1000));
   button.append(title, detail);
   button.onclick = () => {
-    historyList.scroll = view.scrollTop;
-    display(entry, {fromHistory: true});
-    poll();
+    putTabValue('history', {filter: projectFilter.value, scroll: view.scrollTop,
+      count: historyList.rows.size, generation: historyList.generation});
+    navigate('/read/history/' + encodeURIComponent(entry.key));
   };
   const project = entry.project.toLocaleLowerCase();
   button.hidden = !project.includes(historyList.filter);
@@ -279,11 +318,16 @@ async function tickHistoryList(generation) {
   const previousCount = historyList.matches;
   page.entries.forEach(addHistoryRow);
   historyList.cursor = page.nextCursor;
-  historyList.load = !!historyList.cursor && historyList.matches === previousCount;
+  const restoring = historyList.restoreCount > historyList.rows.size;
+  historyList.load = !!historyList.cursor && (restoring || historyList.matches === previousCount);
   if (historyList.load) queued = true;
   historyList.error = '';
   interrupted = false;
   renderHistoryList();
+  if (!historyList.load && historyList.restoreCount) {
+    view.scrollTop = historyList.scroll;
+    historyList.restoreCount = 0;
+  }
 }
 
 const readingBlocks = 'p, li, tr, pre, h1, h2, h3, h4, h5, h6, hr';
@@ -393,6 +437,15 @@ function canSwitchToLive() {
 async function tick() {
   const generation = state.generation;
   if (!state.key) {
+    if (threadDocument) {
+      // An initially unavailable document regains its native title on a fresh document load.
+      await request(location.pathname, {headers: {Accept: 'application/json'}});
+      if (generation === state.generation) {
+        if (document.body.dataset.readerError === '401') drafts.clear();
+        navigate(location.pathname);
+      }
+      return;
+    }
     if (historyList) return tickHistoryList(generation);
     const entries = await request('/sessions');
     if (generation === state.generation) showList(entries);
@@ -406,6 +459,7 @@ async function tick() {
   const page = await request(endpoint + query);
   if (generation !== state.generation) return;
   if (readingHistory) {
+    if ('title' in page) currentEntry.title = page.title;
     let bound = page.live;
     resumeTicket = page.resumeTicket || null;
     if (resumeTicket && resumeNotice === needsReplyPermission) resumeNotice = '';
@@ -434,16 +488,18 @@ async function tick() {
       }
     }
     if (!bound && resumeNotice === liveUnavailableNotice) resumeNotice = '';
-    if (el('state').textContent !== '只读') el('state').textContent = '只读';
+    currentEntry.state = bound ? page.state : null;
+    updateThreadTitle(stateNames.get(currentEntry.state) || '只读');
     el('resume').hidden = bound;
   }
   await showMessages(page, earlier, endpoint, generation);
 }
 
 async function showMessages(page, earlier, endpoint, generation) {
-  if (!readingHistory && 'state' in page && currentEntry.state !== page.state) {
-    currentEntry.state = page.state;
-    el('state').textContent = stateNames.get(page.state) || '';
+  if (!readingHistory && ('state' in page || 'title' in page)) {
+    if ('state' in page) currentEntry.state = page.state;
+    if ('title' in page) currentEntry.title = page.title;
+    updateThreadTitle(stateNames.get(currentEntry.state));
   }
   replyTicket = readingHistory ? null : page.replyTicket || null;
   if (!replyTicket && !composer.hidden) {
@@ -489,18 +545,27 @@ async function showMessages(page, earlier, endpoint, generation) {
 function requirePairing() {
   display(null);
   drafts.clear();
+  takeTabValue('history');
+  delete document.body.dataset.entry;
   state.manualList = false;
+  if (!threadDocument && !pairingDocument) {
+    const destination = location.pathname === '/archive' ? '#archive' : location.hash;
+    return navigate('/pair' + destination);
+  }
   el('pair').hidden = false;
   document.body.dataset.page = 'pair';
-  el('title').textContent = '设备配对';
+  setPageTitle('red-green', '设备配对');
   status('');
+  if (threadDocument && document.body.dataset.readerError !== '401') location.reload();
 }
 
 function sourceChanged(notice = '会话来源已变更，请重新选择') {
   display(null);
   drafts.clear();
-  homeNotice = notice;
-  status(homeNotice);
+  delete document.body.dataset.entry;
+  takeTabValue('history');
+  putTabValue('notice', notice);
+  navigate('/#list');
 }
 
 async function poll() {
@@ -521,10 +586,10 @@ async function poll() {
       updateReply();
       if (error.message === '401') {
         requirePairing();
-      } else if (error.message === '501' && historyList) {
+      } else if (error.message === '501' && (historyList || fromHistoryThread)) {
         sourceChanged(historyUnsupported);
         queued = true;
-      } else if (error.message === '409' || (readingHistory && ['404', '410'].includes(error.message))) {
+      } else if (error.message === '409' || ((readingHistory || (threadDocument && !state.key)) && ['404', '410'].includes(error.message))) {
         sourceChanged();
         queued = true;
       } else if (historyList && !state.key && historyList.load) {
@@ -533,7 +598,7 @@ async function poll() {
         renderHistoryList();
       } else if (error.message === '410') {
         stopped = true;
-        el('state').textContent = '';
+        if (currentEntry) updateThreadTitle('已结束');
         status(interrupted ? '会话已结束，离线期间可能还有未同步的消息' : '会话已结束');
       } else if (error.message === '404' || error.message === '503') status('会话暂不可用');
       else { interrupted = true; status('正在重连 Mac…'); }
@@ -587,7 +652,7 @@ el('resume').onclick = async () => {
       '412': '会话凭据已更新，请重新点继续对话',
       '422': '项目目录已移动或不存在，请在 Mac 上检查',
       '424': '请在 Mac 检查终端和自动化权限后重试',
-      '428': '请在 Mac 检查新终端。若已打开，请完成终端提示；若没有，请关闭并重新开启局域网阅读，再允许设备回复。',
+      '428': '请在 Mac 检查新终端。若已打开，请完成终端提示；若没有，请关闭并重新开启局域网会话共享，再允许设备回复。',
       '503': '会话暂不可用，请稍后重试',
     }[error.message];
     if (reason) {
@@ -605,11 +670,45 @@ el('resume').onclick = async () => {
   poll();
 };
 
-el('open-history').onclick = () => {
-  historyList = {generation: null, rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
-  display(null, {fromHistory: true});
-  poll();
-};
+for (const link of document.querySelectorAll('.nav-link')) {
+  link.onclick = event => {
+    if (sending) { event.preventDefault(); return; }
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (link.id === 'open-history' || link.id === 'history-home') takeTabValue('history');
+    navigate(link.href);
+  };
+}
+
+function startReader() {
+  if (pairingDocument) return requirePairing();
+  if (threadDocument) {
+    const {entry, readerError} = document.body.dataset;
+    delete document.body.dataset.entry;
+    if (entry) {
+      display(JSON.parse(entry), {fromHistory: fromHistoryThread});
+    } else {
+      el('back').href = fromHistoryThread ? '/archive' : '/#list';
+      el('back').textContent = fromHistoryThread ? '返回历史' : '返回列表';
+      footer.hidden = false;
+      // A link from a note can omit a Strict cookie on its first navigation.
+      status(readerError === '401' ? '正在核对配对状态…' : '正在重新打开会话…');
+    }
+  } else if (location.pathname === '/archive') {
+    const saved = takeTabValue('history');
+    projectFilter.value = saved?.filter || '';
+    historyList = {generation: saved?.generation || null, rows: new Map(), cursors: new Set(), cursor: null,
+      scroll: saved?.scroll || 0, restoreCount: saved?.count || 0, load: true, error: '', matches: 0,
+      filter: projectFilter.value.trim().toLocaleLowerCase()};
+    display(null, {fromHistory: true});
+  } else if (location.hash === '#history-list') {
+    return navigate('/archive');
+  } else if (location.hash === '#list') {
+    display(null);
+  }
+  return poll();
+}
+
 el('history-more').onclick = () => {
   historyList.load = true;
   historyList.error = '';
@@ -618,6 +717,7 @@ el('history-more').onclick = () => {
 };
 projectFilter.oninput = () => {
   view.scrollTop = 0;
+  historyList.restoreCount = 0;
   historyList.filter = projectFilter.value.trim().toLocaleLowerCase();
   historyList.matches = 0;
   for (const {button, project} of historyList.rows.values()) {
@@ -671,14 +771,14 @@ el('pair').onsubmit = async event => {
     await request('/pair', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:el('code').value})});
     el('pair').hidden = true;
     document.body.dataset.page = 'list';
-    el('title').textContent = '桌面伙伴';
+    setPageTitle('red-green', '当前会话');
     el('code').value = '';
-    await poll();
+    if (pairingDocument) navigate(location.hash === '#archive' ? '/archive' : '/' + location.hash);
+    else location.reload();
   } catch (error) {
     status(error.message === '403' ? '配对码无效或已过期，请查看 Mac 上的配对码。' : '连接失败，请重试。');
   }
 };
-el('back').onclick = () => { display(null, {fromHistory: !!currentEntry && !!historyList}); poll(); };
 el('prev').onclick = () => {
   following = false;
   if (view.scrollTop <= 1 && before) { wantEarlier = true; poll(); }
@@ -707,4 +807,4 @@ window.addEventListener('offline', () => {
 });
 window.addEventListener('online', poll);
 window.addEventListener('pageshow', poll);
-poll();
+startReader();
