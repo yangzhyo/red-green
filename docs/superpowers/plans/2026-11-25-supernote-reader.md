@@ -1,6 +1,6 @@
 # Supernote Nomad 会话阅读实施计划
 
-按 `superpowers:executing-plans` 在本地逐项实施。勾选框表示已经有对应的代码或实测结果。
+本计划和勾选项记录首版只读功能的实施过程。后续的历史会话、设备回复及详情导航见[当前使用说明](../../../README.md#在-supernote-nomad-上查看和回复会话)。
 
 **目标**　在 Supernote Nomad 上选取 Mac 的会话，回看对话，并自动读到新消息。[已确认的设计](../specs/2026-11-25-supernote-reader-design.md) · [需求 #27](https://github.com/yangzhyo/red-green/issues/27)
 
@@ -76,3 +76,9 @@
 - 常驻应用提供「读」菜单。读取器由 Mac 显式开启，按所选会话读取 Claude 的完整 JSONL 记录或 Codex 完整回合。集成测试覆盖实际磁盘增量、结束事件、模拟 App Server 的补页与续写。真实 CLI 与 Nomad 的端到端延迟尚待单独测量。
 
 - 实机 Mac 上使用正式 Rust 阅读路径连接 Codex CLI 0.172.0 的本机 App Server，从当前项目已绑定会话取回 24 条正文，用时 44 毫秒。已将首次初始化期间收到账号通知的情形加入回归用例。该耗时仅计 Mac 来源读取。
+
+## 后续版本验证（2026-11-26）
+
+- **Nomad 真机**已成功发送 Codex 回复。前述样本验证覆盖了早期阅读流程。最新版在没有新消息时能否让 Nomad 原生标题栏随状态更新，仍待真机复测。
+- **Chrome 触屏视口**验证了详情直达、刷新和后退回到笔记。没有新消息时，浏览器标题随「运行中 → 待确认 → 轮到你」更新，正文、草稿、输入焦点和选区均保留。从历史入口回看已激活的会话时，状态变化也能保留阅读位置。[前端回归用例](../../../app/tests/reader-history.test.js)
+- **Rust 服务**验证了配对后返回的首个 HTML 包含详情标题，以及历史正文增量为空时仍能返回已绑定终端的新状态。[详情文档测试](../../../app/src-tauri/tests/reader_documents.rs) · [历史会话测试](../../../app/src-tauri/tests/history.rs)
