@@ -190,7 +190,11 @@ test('已激活会话的实况暂不可用时保留正文，恢复后直接显�
     el('history-rows').firstChild.click();
     await until(() => el('messages').textContent.includes('历史正文'), '实况暂不可用时丢失正文');
     check(el('resume').hidden && el('open-reply').hidden && el('status').textContent.includes('暂不可用'), '把实况中断当成终端退出');
+    el('prev').click();
+    await until(() => el('messages').textContent.includes('较早一页'), '断连后不能向前翻页');
+    check(el('resume').hidden && el('status').textContent.includes('暂不可用'), '翻页后误显示继续对话或丢失中断提示');
     mac.liveError = 0;
+    el('latest').click();
     refresh();
     await until(() => !el('open-reply').hidden, '实况恢复后缺少回复入口');
     check(el('composer').hidden && mac.writes.length === 0, '自动重试唤起了键盘或终端');

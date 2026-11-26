@@ -28,6 +28,7 @@ let activation = null;
 let resumeNotice = '';
 const historyUnsupported = '请更新 Mac 上的 Codex CLI 后再查看历史';
 const needsReplyPermission = '请在 Mac 上开启回复后再继续对话';
+const liveUnavailableNotice = '实况暂不可用，可继续回看';
 let sending = false;
 let replyError = '';
 const replyErrors = {
@@ -404,12 +405,12 @@ async function tick() {
   const endpoint = (readingHistory ? '/history/' : '/sessions/') + key + '/messages';
   const page = await request(endpoint + query);
   if (generation !== state.generation) return;
-  let liveUnavailable = false;
   if (readingHistory) {
+    let bound = page.live;
     resumeTicket = page.resumeTicket || null;
     if (resumeTicket && resumeNotice === needsReplyPermission) resumeNotice = '';
     if (activation?.stage === 'waiting' && !resumeTicket) finishActivation(needsReplyPermission);
-    if (page.live && canSwitchToLive()) {
+    if (bound && canSwitchToLive()) {
       // The live reader owns its cursors, terminal state and reply permission.
       const liveEndpoint = '/sessions/' + key + '/messages';
       let livePage;
@@ -417,8 +418,10 @@ async function tick() {
         livePage = await request(liveEndpoint);
       } catch (error) {
         // A terminal can close between the history lookup and the live read.
-        if (error.message === '503') liveUnavailable = true;
-        else if (!['404', '410'].includes(error.message)) throw error;
+        if (generation !== state.generation) return;
+        if (error.message === '503') resumeNotice = liveUnavailableNotice;
+        else if (['404', '410'].includes(error.message)) bound = false;
+        else throw error;
       }
       if (generation !== state.generation) return;
       if (livePage && canSwitchToLive()) {
@@ -430,11 +433,11 @@ async function tick() {
         return;
       }
     }
+    if (!bound && resumeNotice === liveUnavailableNotice) resumeNotice = '';
     if (el('state').textContent !== '只读') el('state').textContent = '只读';
-    el('resume').hidden = liveUnavailable;
+    el('resume').hidden = bound;
   }
   await showMessages(page, earlier, endpoint, generation);
-  if (liveUnavailable && generation === state.generation) status('实况暂不可用，正在重试…');
 }
 
 async function showMessages(page, earlier, endpoint, generation) {
