@@ -9,9 +9,10 @@
 </head>
 <body data-page="list">
   <header class="masthead">
-    <div class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green</div>
-    <span class="section-name">会话</span>
+    <h1 class="wordmark"><canvas id="brand-crab" aria-hidden="true"></canvas>red-green<small id="history-heading" hidden>历史</small></h1>
+    <a class="nav-link" id="history-home" href="#list" hidden>返回首页</a>
   </header>
+  <a class="nav-link" id="open-history" href="#history-list" hidden>历史会话</a>
   <form id="composer" hidden>
     <textarea id="reply-text" aria-label="回复当前 Codex 会话" placeholder="输入回复…" rows="2" maxlength="8192" required></textarea>
     <div class="reply-actions">
@@ -21,13 +22,8 @@
     </div>
   </form>
   <section class="session-head" aria-labelledby="title">
-    <button id="back" hidden><canvas id="back-crab" aria-hidden="true"></canvas><span id="back-label">返回列表</span></button>
-    <div class="head-line">
-      <h1 id="title">桌面伙伴</h1>
-      <span id="count" hidden></span>
-      <button id="open-history" hidden>历史</button>
-      <span id="state"></span>
-    </div>
+    <h1 id="title"></h1>
+    <span id="state"></span>
     <div id="source" hidden></div>
   </section>
   <p id="status" role="status">正在连接 Mac…</p>
@@ -48,6 +44,7 @@
     <div id="messages"></div>
   </main>
   <footer hidden>
+    <a class="nav-link" id="back" href="#list">返回列表</a>
     <button id="prev" disabled>上一屏</button>
     <button id="latest" hidden>有新消息 ↓</button>
     <span id="position" title="当前已经载入的正文"></span>

@@ -6,7 +6,6 @@ const view = el('view');
 const footer = document.querySelector('footer');
 const brandFrame = window.SPRITES.spec('crab', 'completed').frames[0];
 window.SPRITES.draw(el('brand-crab'), brandFrame, 4);
-window.SPRITES.draw(el('back-crab'), brandFrame, 3);
 const nodes = new Map();
 const sessionRows = new Map();
 let before = null;
@@ -50,7 +49,7 @@ function updateReply() {
   const unavailable = !active || ['running', 'awaiting'].includes(currentEntry?.state);
   el('send-reply').disabled = sending || replyError === 'unknown' || unavailable || !draft.value.trim();
   draft.readOnly = sending;
-  el('back').disabled = sending;
+  el('back').setAttribute('aria-disabled', String(sending));
   el('cancel-reply').disabled = sending;
   if (!composer.hidden && !sending) {
     let hint = replyErrors[replyError] || '';
@@ -130,8 +129,9 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
     projectFilter.value = '';
   }
   const listingHistory = fromHistory && !entry;
-  el('back').hidden = !entry && !listingHistory;
-  el('back-label').textContent = listingHistory ? '返回首页' : fromHistory ? '返回历史' : '返回列表';
+  el('history-heading').hidden = el('history-home').hidden = !listingHistory;
+  el('back').textContent = fromHistory ? '返回历史' : '返回列表';
+  el('back').setAttribute('href', fromHistory ? '#history-list' : '#list');
   el('open-history').hidden = true;
   projectFilter.hidden = el('history-list').hidden = !listingHistory;
   footer.hidden = !entry;
@@ -149,9 +149,8 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   el('reply-info').textContent = replyErrors[replyError] || '';
   updateReply();
   document.body.dataset.page = entry ? 'thread' : listingHistory ? 'history' : 'list';
-  el('count').hidden = true;
   el('source').hidden = !entry;
-  el('title').textContent = entry ? entry.title || entry.project : listingHistory ? '历史' : '桌面伙伴';
+  el('title').textContent = entry ? entry.title || entry.project : '';
   el('title').title = entry ? el('title').textContent : '';
   el('state').textContent = readOnly ? '' : stateNames.get(entry?.state) || '';
   if (entry) {
@@ -196,10 +195,6 @@ function showList(entries) {
     queued = true;
     return;
   }
-  if (el('title').textContent !== '桌面伙伴') el('title').textContent = '桌面伙伴';
-  const count = entries.length + ' 个会话';
-  if (el('count').textContent !== count) el('count').textContent = count;
-  if (el('count').hidden) el('count').hidden = false;
   const keys = new Set(entries.map(entry => entry.key));
   const list = el('list');
   for (const [key, row] of sessionRows) {
@@ -604,11 +599,38 @@ el('resume').onclick = async () => {
   poll();
 };
 
-el('open-history').onclick = () => {
-  historyList = {generation: null, rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
-  display(null, {fromHistory: true});
-  poll();
-};
+function openDirectory(hash) {
+  const fromHistory = hash === '#history-list';
+  if (fromHistory && !historyList) {
+    historyList = {generation: null, rows: new Map(), cursors: new Set(), cursor: null, scroll: 0, load: true, error: '', matches: 0, filter: ''};
+  }
+  display(null, {fromHistory});
+  return poll();
+}
+
+for (const link of document.querySelectorAll('.nav-link')) {
+  link.onclick = event => {
+    if (sending) { event.preventDefault(); return; }
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (link.hash !== location.hash) {
+      const target = new URL(location.href);
+      target.hash = link.hash;
+      window.history.pushState(null, '', target.href);
+    }
+    openDirectory(link.hash);
+  };
+}
+
+function startReader() {
+  if (location.hash === '#list' || location.hash === '#history-list') return openDirectory(location.hash);
+  return poll();
+}
+
+window.addEventListener('popstate', () => {
+  if (el('pair').hidden && !sending) openDirectory(location.hash);
+});
+
 el('history-more').onclick = () => {
   historyList.load = true;
   historyList.error = '';
@@ -670,14 +692,13 @@ el('pair').onsubmit = async event => {
     await request('/pair', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:el('code').value})});
     el('pair').hidden = true;
     document.body.dataset.page = 'list';
-    el('title').textContent = '桌面伙伴';
+    el('title').textContent = '';
     el('code').value = '';
-    await poll();
+    await startReader();
   } catch (error) {
     status(error.message === '403' ? '配对码无效或已过期，请查看 Mac 上的配对码。' : '连接失败，请重试。');
   }
 };
-el('back').onclick = () => { display(null, {fromHistory: !!currentEntry && !!historyList}); poll(); };
 el('prev').onclick = () => {
   following = false;
   if (view.scrollTop <= 1 && before) { wantEarlier = true; poll(); }
@@ -706,4 +727,4 @@ window.addEventListener('offline', () => {
 });
 window.addEventListener('online', poll);
 window.addEventListener('pageshow', poll);
-poll();
+startReader();

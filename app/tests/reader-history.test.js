@@ -74,38 +74,56 @@ async function runReader(scenario) {
   assert.equal(stdout.match(/<body[^>]*data-test-result="([^"]+)"/)?.[1], 'pass');
 }
 
-test('窄屏上从详情右侧返回对应的列表，长标题也能留出触控空间', {skip: !hasChrome}, async () => {
+test('首页、历史页与详情工具条使用各自的导航链接', {skip: !hasChrome}, async () => {
   await runReader(async ({el, until, check}) => {
-    function checkBack(label) {
-      const back = el('back');
-      check(back.textContent.trim() === label, '返回按钮没有写明目的地');
+    const masthead = document.querySelector('.masthead');
+    function link(container, label) {
+      const target = [...container.querySelectorAll('a[href]')].find(a => a.innerText === label && a.getClientRects().length);
+      check(target && getComputedStyle(target).textDecorationLine.includes('underline'), '缺少可见的超链接：' + label);
+      return target;
+    }
+    function checkDetail(label) {
+      const bar = document.querySelector('footer');
+      const back = link(bar, label);
+      check(!document.querySelector('.session-head a, .session-head button'), '详情页顶部仍有导航控件');
       for (const width of [320, 420]) {
         document.body.style.width = width + 'px';
         const rect = back.getBoundingClientRect();
-        const head = back.parentElement.getBoundingClientRect();
-        check(Math.abs(rect.right - head.right) < 1 && rect.left > head.left + head.width / 2, '返回按钮没有移到右侧');
-        check(rect.width >= 44 && rect.height >= 44 && head.height < 54, '触控区过小或标题栏过高');
-        check(back.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)), '返回按钮被遮挡');
-        for (const id of ['title', 'source', 'state']) {
-          const text = el(id).getBoundingClientRect();
-          check(text.width > 0 && text.right <= rect.left, '返回按钮与标题信息重叠');
+        const bounds = bar.getBoundingClientRect();
+        check(rect.width >= 44 && rect.height >= 44 && bounds.top >= el('view').getBoundingClientRect().bottom - 1, '返回链接未放入底部触控区');
+        for (const item of bar.children) {
+          if (!item.getClientRects().length) continue;
+          const r = item.getBoundingClientRect();
+          check(r.left >= bounds.left - 1 && r.right <= bounds.right + 1, '工具条超出窄屏');
+          if (item.matches('button, a')) {
+            check(item.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)), '工具条控件被遮挡：' + item.id);
+          }
         }
       }
+      return back;
     }
+    const home = link(masthead, '返回首页');
+    const subtitle = el('history-heading');
+    check(subtitle?.innerText === '历史' && subtitle.parentElement.classList.contains('wordmark'), '历史没有并入品牌标题');
+    check(home.getBoundingClientRect().left >= subtitle.getBoundingClientRect().right, '返回首页未放在标题右侧');
+    check(!document.querySelector('.session-head').getClientRects().length, '历史页仍占用第二行标题');
     el('history-rows').firstChild.click();
     await until(() => el('state').textContent === '只读', '未进入历史详情');
-    el('title').textContent = '很长的会话标题'.repeat(12);
-    checkBack('返回历史');
-    el('back').click();
+    checkDetail('返回历史').click();
     check(document.body.dataset.page === 'history', '没有返回历史列表');
-    el('back').click();
-    await until(() => !!el('list').firstElementChild, '没有回到当前会话列表');
-    check(document.title === 'red-green · 会话' && document.querySelector('.section-name').textContent === '会话', '页面名称不一致');
+    link(masthead, '返回首页').click();
+    await until(() => !!el('list').firstElementChild, '没有回到首页');
+    const historyLink = link(document.body, '历史会话');
+    check(masthead.innerText.trim() === 'red-green' && !/桌面伙伴|\d+\s*个会话/.test(document.body.innerText), '首页仍显示多余标题或会话计数');
+    check(historyLink.getBoundingClientRect().top >= masthead.getBoundingClientRect().bottom - 1, '历史入口未放在原计数行');
     el('list').firstElementChild.click();
     await until(() => el('state').textContent === '空闲', '未进入当前会话');
-    checkBack('返回列表');
-    el('back').click();
+    checkDetail('返回列表').click();
     check(document.body.dataset.page === 'list', '没有返回当前列表');
+    history.back();
+    await until(() => document.body.dataset.page === 'history', '浏览器后退未回到历史目录');
+    history.forward();
+    await until(() => document.body.dataset.page === 'list', '浏览器前进未回到首页');
   });
 });
 
@@ -184,9 +202,13 @@ test('从历史查看已激活会话时沿用实时状态和设备回复权限',
     await until(() => !el('open-reply').hidden, '重新授权后不能回复');
     el('open-reply').click();
     check(el('reply-text').value === '来自历史入口' && !el('send-reply').disabled, '重新授权后草稿无法发送');
+    mac.delay = 100;
     el('send-reply').click();
+    el('back').click();
+    check(document.body.dataset.page === 'thread' && el('back').getAttribute('aria-disabled') === 'true', '发送中误触返回离开了详情');
     await until(() => mac.writes.length === 1, '点击发送无效');
     check(mac.writes[0].url === '/sessions/codex-0/messages' && mac.writes[0].payload.ticket === 'send-only', '没有向原会话发送');
+    await until(() => el('back').getAttribute('aria-disabled') !== 'true', '发送完成后仍不能返回');
   });
 });
 
