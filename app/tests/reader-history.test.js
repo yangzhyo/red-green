@@ -107,6 +107,15 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     check(subtitle?.innerText === '历史' && subtitle.parentElement.classList.contains('wordmark'), '历史没有并入品牌标题');
     check(home.getBoundingClientRect().left >= subtitle.getBoundingClientRect().right, '返回首页未放在标题右侧');
     check(!document.querySelector('.session-head').getClientRects().length, '历史页仍占用第二行标题');
+    const filter = el('project-filter');
+    const filterTop = filter.getBoundingClientRect().top;
+    filter.value = '没有这个项目';
+    filter.dispatchEvent(new Event('input'));
+    await until(() => el('status').textContent.includes('没有匹配的项目'), '缺少筛选结果提示');
+    check(filter.getBoundingClientRect().top === filterTop, '提示挤开了品牌栏下面的筛选框');
+    filter.value = '';
+    filter.dispatchEvent(new Event('input'));
+    const browserEntries = window.history.length;
     el('history-rows').firstChild.click();
     await until(() => el('state').textContent === '只读', '未进入历史详情');
     checkDetail('返回历史').click();
@@ -120,10 +129,7 @@ test('首页、历史页与详情工具条使用各自的导航链接', {skip: !
     await until(() => el('state').textContent === '空闲', '未进入当前会话');
     checkDetail('返回列表').click();
     check(document.body.dataset.page === 'list', '没有返回当前列表');
-    history.back();
-    await until(() => document.body.dataset.page === 'history', '浏览器后退未回到历史目录');
-    history.forward();
-    await until(() => document.body.dataset.page === 'list', '浏览器前进未回到首页');
+    check(location.hash === '#list' && window.history.length === browserEntries, '应用内导航增加了浏览器返回步骤');
   });
 });
 

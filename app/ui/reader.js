@@ -616,7 +616,8 @@ for (const link of document.querySelectorAll('.nav-link')) {
     if (link.hash !== location.hash) {
       const target = new URL(location.href);
       target.hash = link.hash;
-      window.history.pushState(null, '', target.href);
+      // Keep the reader in one browser entry so Back still returns to the Nomad note.
+      window.history.replaceState(null, '', target.href);
     }
     openDirectory(link.hash);
   };
@@ -626,10 +627,6 @@ function startReader() {
   if (location.hash === '#list' || location.hash === '#history-list') return openDirectory(location.hash);
   return poll();
 }
-
-window.addEventListener('popstate', () => {
-  if (el('pair').hidden && !sending) openDirectory(location.hash);
-});
 
 el('history-more').onclick = () => {
   historyList.load = true;
