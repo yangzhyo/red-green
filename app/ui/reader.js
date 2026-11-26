@@ -131,8 +131,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   }
   const listingHistory = fromHistory && !entry;
   el('back').hidden = !entry && !listingHistory;
-  el('back-label').textContent = listingHistory ? '首页' : fromHistory ? '历史' : '列表';
-  el('back').setAttribute('aria-label', fromHistory && entry ? '返回历史列表' : '返回会话列表');
+  el('back-label').textContent = listingHistory ? '返回首页' : fromHistory ? '返回历史' : '返回列表';
   el('open-history').hidden = true;
   projectFilter.hidden = el('history-list').hidden = !listingHistory;
   footer.hidden = !entry;
@@ -587,7 +586,7 @@ el('resume').onclick = async () => {
       '412': '会话凭据已更新，请重新点继续对话',
       '422': '项目目录已移动或不存在，请在 Mac 上检查',
       '424': '请在 Mac 检查终端和自动化权限后重试',
-      '428': '请在 Mac 检查新终端。若已打开，请完成终端提示；若没有，请关闭并重新开启局域网阅读，再允许设备回复。',
+      '428': '请在 Mac 检查新终端。若已打开，请完成终端提示；若没有，请关闭并重新开启局域网会话共享，再允许设备回复。',
       '503': '会话暂不可用，请稍后重试',
     }[error.message];
     if (reason) {

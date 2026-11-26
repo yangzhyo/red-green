@@ -74,6 +74,41 @@ async function runReader(scenario) {
   assert.equal(stdout.match(/<body[^>]*data-test-result="([^"]+)"/)?.[1], 'pass');
 }
 
+test('窄屏上从详情右侧返回对应的列表，长标题也能留出触控空间', {skip: !hasChrome}, async () => {
+  await runReader(async ({el, until, check}) => {
+    function checkBack(label) {
+      const back = el('back');
+      check(back.textContent.trim() === label, '返回按钮没有写明目的地');
+      for (const width of [320, 420]) {
+        document.body.style.width = width + 'px';
+        const rect = back.getBoundingClientRect();
+        const head = back.parentElement.getBoundingClientRect();
+        check(Math.abs(rect.right - head.right) < 1 && rect.left > head.left + head.width / 2, '返回按钮没有移到右侧');
+        check(rect.width >= 44 && rect.height >= 44 && head.height < 54, '触控区过小或标题栏过高');
+        check(back.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)), '返回按钮被遮挡');
+        for (const id of ['title', 'source', 'state']) {
+          const text = el(id).getBoundingClientRect();
+          check(text.width > 0 && text.right <= rect.left, '返回按钮与标题信息重叠');
+        }
+      }
+    }
+    el('history-rows').firstChild.click();
+    await until(() => el('state').textContent === '只读', '未进入历史详情');
+    el('title').textContent = '很长的会话标题'.repeat(12);
+    checkBack('返回历史');
+    el('back').click();
+    check(document.body.dataset.page === 'history', '没有返回历史列表');
+    el('back').click();
+    await until(() => !!el('list').firstElementChild, '没有回到当前会话列表');
+    check(document.title === 'red-green · 会话' && document.querySelector('.section-name').textContent === '会话', '页面名称不一致');
+    el('list').firstElementChild.click();
+    await until(() => el('state').textContent === '空闲', '未进入当前会话');
+    checkBack('返回列表');
+    el('back').click();
+    check(document.body.dataset.page === 'list', '没有返回当前列表');
+  });
+});
+
 test('历史跨页查项目，正文只读可翻页，继续原会话后可返回原列表位置', {skip: !hasChrome}, async () => {
   await runReader(async ({el, mac, check, until, refresh}) => {
     const query = el('project-filter');
@@ -247,7 +282,7 @@ test('恢复出错保留正文，离开后忽略迟到结果，撤销配对清�
     await until(() => !el('resume').disabled, '找不到重试入口');
     mac.fail = 428;
     el('resume').click();
-    await until(() => el('status').textContent.includes('重新开启局域网阅读'), '系统未返回标签时缺少安全恢复步骤');
+    await until(() => el('status').textContent.includes('重新开启局域网会话共享'), '系统未返回标签时缺少安全恢复步骤');
     await until(() => !el('resume').disabled, '完成 Mac 端检查后无法继续');
     mac.fail = 0;
     mac.live = true;
