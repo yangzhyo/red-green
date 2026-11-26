@@ -384,6 +384,11 @@ function render(message) {
   renderBody(article.lastElementChild, message);
 }
 
+function canSwitchToLive() {
+  // Explicit activation can leave an older page. Browsing follows live only at the end.
+  return activation ? activation.stage === 'waiting' : following;
+}
+
 async function tick() {
   const generation = state.generation;
   if (!state.key) {
@@ -399,13 +404,12 @@ async function tick() {
   const endpoint = (readingHistory ? '/history/' : '/sessions/') + key + '/messages';
   const page = await request(endpoint + query);
   if (generation !== state.generation) return;
+  let liveUnavailable = false;
   if (readingHistory) {
     resumeTicket = page.resumeTicket || null;
     if (resumeTicket && resumeNotice === needsReplyPermission) resumeNotice = '';
-    const waiting = activation?.stage === 'waiting';
-    if (waiting && !resumeTicket) finishActivation(needsReplyPermission);
-    // Keep an older page in place while the reader is paging back.
-    if (page.live && (waiting || (!activation && following))) {
+    if (activation?.stage === 'waiting' && !resumeTicket) finishActivation(needsReplyPermission);
+    if (page.live && canSwitchToLive()) {
       // The live reader owns its cursors, terminal state and reply permission.
       const liveEndpoint = '/sessions/' + key + '/messages';
       let livePage;
@@ -413,21 +417,24 @@ async function tick() {
         livePage = await request(liveEndpoint);
       } catch (error) {
         // A terminal can close between the history lookup and the live read.
-        if (!['404', '410', '503'].includes(error.message)) throw error;
+        if (error.message === '503') liveUnavailable = true;
+        else if (!['404', '410'].includes(error.message)) throw error;
       }
       if (generation !== state.generation) return;
-      if (livePage) {
+      if (livePage && canSwitchToLive()) {
+        const continued = activation?.stage === 'waiting';
         display(currentEntry, {fromHistory: true, readOnly: false});
         const liveGeneration = state.generation;
         await showMessages(livePage, false, liveEndpoint, liveGeneration);
-        if (waiting && liveGeneration === state.generation) openComposer();
+        if (continued && liveGeneration === state.generation) openComposer();
         return;
       }
     }
     if (el('state').textContent !== '只读') el('state').textContent = '只读';
-    el('resume').hidden = false;
+    el('resume').hidden = liveUnavailable;
   }
   await showMessages(page, earlier, endpoint, generation);
+  if (liveUnavailable && generation === state.generation) status('实况暂不可用，正在重试…');
 }
 
 async function showMessages(page, earlier, endpoint, generation) {
@@ -436,6 +443,10 @@ async function showMessages(page, earlier, endpoint, generation) {
     el('state').textContent = stateNames.get(page.state) || '';
   }
   replyTicket = readingHistory ? null : page.replyTicket || null;
+  if (!replyTicket && !composer.hidden) {
+    draft.blur();
+    composer.hidden = true;
+  }
   updateReply();
   const saved = !following && (page.reset || page.messages.length) ? anchor() : null;
   if (page.reset) {
