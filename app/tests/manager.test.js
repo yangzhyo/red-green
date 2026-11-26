@@ -74,9 +74,11 @@ for (const source of ["codex", "claude"]) {
     await update("running", "4");
     await update("completed", "5");
     assert.equal(model().state, "idle");
+    assert.equal(submissions().at(-1).acknowledged[`${source}-test`], "5");
     assert.equal(callCount(), 1);
     await update("your_turn", "6");
     assert.equal(model().state, "your_turn");
+    assert.equal(Object.keys(submissions().at(-1).acknowledged).length, 0);
     assert.equal(callCount(), 1);
     front = null;
     await update("your_turn", "6");
