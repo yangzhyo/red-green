@@ -13,6 +13,14 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 pub trait Source: Send + 'static {
     fn sessions(&mut self) -> serde_json::Value;
+    fn send_reply(
+        &mut self,
+        _key: &str,
+        _text: &str,
+        _admit: impl FnOnce() -> Result<(), u16>,
+    ) -> Result<(), u16> {
+        Err(405)
+    }
     fn messages(&mut self, key: &str, query: &str) -> Result<serde_json::Value, u16>;
 }
 
@@ -54,7 +62,7 @@ impl Reader {
             thread::spawn(move || {
                 while running.load(Ordering::Acquire) {
                     let Ok(request) = server.recv() else { break };
-                    handle(request, &pairing, &mut source);
+                    handle(request, address, &pairing, &mut source);
                 }
             })
         };
@@ -71,6 +79,9 @@ impl Reader {
     }
     pub fn new_code(&self) -> String {
         self.pairing.lock().unwrap().issue()
+    }
+    pub fn toggle_replies(&self) -> Option<bool> {
+        self.pairing.lock().unwrap().toggle_replies()
     }
     pub fn revoke(&self) -> io::Result<()> {
         self.pairing.lock().unwrap().revoke()
@@ -108,7 +119,12 @@ fn reply(request: Request, status: u16, mime: &str, body: String, cookie: Option
     let _ = request.respond(response);
 }
 const JSON: &str = "application/json";
-fn handle(mut request: Request, pairing: &Mutex<Pairing>, source: &mut impl Source) {
+fn handle(
+    mut request: Request,
+    address: SocketAddr,
+    pairing: &Mutex<Pairing>,
+    source: &mut impl Source,
+) {
     let url = request.url().to_owned();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     if request.method() == &Method::Get {
@@ -176,27 +192,102 @@ fn handle(mut request: Request, pairing: &Mutex<Pairing>, source: &mut impl Sour
         .iter()
         .find(|h| h.field.equiv("Cookie"))
         .map(|h| h.value.as_str())
-        .unwrap_or("");
-    if !pairing.lock().unwrap().allows(cookie) {
+        .unwrap_or("")
+        .to_owned();
+    if !pairing.lock().unwrap().allows(&cookie) {
         return reply(request, 401, JSON, "{}".into(), None);
+    }
+    let key = path
+        .strip_prefix("/sessions/")
+        .and_then(|p| p.strip_suffix("/messages"));
+    if request.method() == &Method::Post {
+        let result = key
+            .ok_or(405u16)
+            .and_then(|key| send_reply(&mut request, address, pairing, &cookie, source, key));
+        return reply(
+            request,
+            result.err().unwrap_or(200),
+            JSON,
+            "{}".into(),
+            None,
+        );
     }
     if request.method() != &Method::Get {
         return reply(request, 405, JSON, "{}".into(), None);
     }
-    let data = match path {
+    let mut data = match path {
         "/sessions" => Ok(source.sessions()),
-        _ => path
-            .strip_prefix("/sessions/")
-            .and_then(|p| p.strip_suffix("/messages"))
+        _ => key
             .ok_or(404u16)
             .and_then(|key| source.messages(key, query)),
     };
     // A slow source read might have overlapped a revocation on the Mac.
-    if !pairing.lock().unwrap().allows(cookie) {
-        return reply(request, 401, JSON, "{}".into(), None);
+    {
+        let mut device = pairing.lock().unwrap();
+        if !device.allows(&cookie) {
+            return reply(request, 401, JSON, "{}".into(), None);
+        }
+        if let (Some(key), Ok(page)) = (key.filter(|k| k.starts_with("codex-")), &mut data) {
+            if let Some(ticket) = device.reply_ticket(key) {
+                page["replyTicket"] = ticket.into();
+            }
+        }
     }
     match data {
         Ok(value) => reply(request, 200, JSON, value.to_string(), None),
         Err(status) => reply(request, status, JSON, "{}".into(), None),
     }
+}
+
+fn send_reply(
+    request: &mut Request,
+    address: SocketAddr,
+    pairing: &Mutex<Pairing>,
+    cookie: &str,
+    source: &mut impl Source,
+    key: &str,
+) -> Result<(), u16> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Submission {
+        ticket: String,
+        text: String,
+    }
+    if !key.starts_with("codex-") {
+        return Err(405);
+    }
+    let has_header = |name: &'static str, value: &str| {
+        request
+            .headers()
+            .iter()
+            .any(|h| h.field.equiv(name) && h.value.as_str() == value)
+    };
+    if !has_header("Origin", &format!("http://{address}")) || !has_header("Content-Type", JSON) {
+        return Err(403);
+    }
+    const MAX_BODY: usize = 64 * 1024;
+    if !request.body_length().is_some_and(|n| n <= MAX_BODY) {
+        return Err(413);
+    }
+    let mut bytes = Vec::new();
+    request
+        .as_reader()
+        .take(MAX_BODY as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| 400u16)?;
+    let submission: Submission = serde_json::from_slice(&bytes).map_err(|_| 400u16)?;
+    if submission.text.trim().is_empty() || submission.text.chars().count() > 8192 {
+        return Err(422);
+    }
+    pairing
+        .lock()
+        .unwrap()
+        .check_ticket(key, &submission.ticket)?;
+    source.send_reply(key, &submission.text, || {
+        let mut device = pairing.lock().unwrap();
+        if !device.allows(cookie) {
+            return Err(401);
+        }
+        device.take_ticket(key, &submission.ticket)
+    })
 }

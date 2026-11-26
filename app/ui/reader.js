@@ -19,6 +19,39 @@ let wantEarlier = false;
 let stopped = false;
 let interrupted = false;
 let currentEntry = null;
+let replyTicket = null;
+let sending = false;
+let replyError = '';
+const replyErrors = {
+  '401':'请重新配对', '403':'请在 Mac 上开启回复', '409':'请等待当前回合结束',
+  '410':'会话已结束', '412':'发送凭据已更新，请核对正文后再点发送',
+  '422':'请输入 1 至 8192 个字', '503':'会话暂不可用，可稍后重试',
+  '424':'Codex 未受理，可稍后重试',
+  'unknown':'发送结果待核对，请先查看正文。修改文字后可再发送。',
+};
+const drafts = new Map();
+const composer = el('composer');
+const draft = el('reply-text');
+
+function updateReply() {
+  const active = !stopped && !!replyTicket;
+  el('open-reply').hidden = !active || !composer.hidden;
+  const unavailable = !active || ['running', 'awaiting'].includes(currentEntry?.state);
+  el('send-reply').disabled = sending || replyError === 'unknown' || unavailable || !draft.value.trim();
+  draft.readOnly = sending;
+  el('back').disabled = sending;
+  el('cancel-reply').disabled = sending;
+  if (!composer.hidden && !sending) {
+    let hint = replyErrors[replyError] || '';
+    if (replyError !== 'unknown') {
+      if (!active && !hint) hint = '回复暂不可用';
+      else if (active && unavailable) hint = '请等待当前回合结束';
+      else if (active && ['401','403','409','503'].includes(replyError)) hint = '上次未发送，可重试';
+    }
+    if (el('reply-info').textContent !== hint) el('reply-info').textContent = hint;
+  }
+}
+
 const stateNames = new Map([
   ['running', '运行中'], ['awaiting', '待确认'], ['your_turn', '轮到你'],
   ['completed', '已完成'], ['aborted', '异常中止'], ['idle', '空闲'],
@@ -64,6 +97,9 @@ async function request(path, options) {
 }
 
 function display(entry) {
+  if (currentEntry && draft.value) drafts.set(currentEntry.key, {text: draft.value, replyError});
+  else if (currentEntry) drafts.delete(currentEntry.key);
+  const savedDraft = entry && drafts.get(entry.key);
   el('messages').replaceChildren();
   el('list').replaceChildren();
   sessionRows.clear();
@@ -77,6 +113,14 @@ function display(entry) {
   el('latest').hidden = true;
   el('back').hidden = footer.hidden = !entry;
   currentEntry = entry;
+  composer.hidden = true;
+  replyTicket = null;
+  sending = false;
+  replyError = savedDraft?.replyError || '';
+  el('open-reply').textContent = replyError === 'unknown' ? '核对回复' : '回复';
+  draft.value = savedDraft?.text || '';
+  el('reply-info').textContent = replyErrors[replyError] || '';
+  updateReply();
   document.body.dataset.page = entry ? 'thread' : 'list';
   el('count').hidden = true;
   el('source').hidden = !entry;
@@ -264,6 +308,8 @@ async function tick() {
     currentEntry.state = page.state;
     el('state').textContent = stateNames.get(page.state) || '';
   }
+  replyTicket = page.replyTicket || null;
+  updateReply();
   const saved = !following && (page.reset || page.messages.length) ? anchor() : null;
   if (page.reset) {
     // Rebuild the visible history before replacing the DOM when the source resets its cursor.
@@ -306,8 +352,11 @@ async function poll() {
     await tick();
   } catch (error) {
     if (generation === state.generation) {
+      replyTicket = null;
+      updateReply();
       if (error.message === '401') {
         display(null);
+        drafts.clear();
         state.manualList = false;
         el('pair').hidden = false;
         document.body.dataset.page = 'pair';
@@ -315,6 +364,7 @@ async function poll() {
         status('');
       } else if (error.message === '409') {
         display(null);
+        drafts.clear();
         status('会话来源已变更，请重新选择');
         queued = true;
       } else if (error.message === '410') {
@@ -333,6 +383,50 @@ async function poll() {
   }
 }
 
+el('open-reply').onclick = () => {
+  composer.hidden = false;
+  el('open-reply').textContent = '回复';
+  updateReply();
+  if (following) view.scrollTop = view.scrollHeight;
+  draft.focus();
+};
+el('cancel-reply').onclick = () => {
+  composer.hidden = true;
+  updateReply();
+  el('open-reply').focus();
+};
+draft.oninput = () => { replyError = ''; updateReply(); };
+composer.onsubmit = async event => {
+  event.preventDefault();
+  if (el('send-reply').disabled) return;
+  const generation = state.generation;
+  const ticket = replyTicket;
+  replyError = '';
+  sending = true;
+  el('reply-info').textContent = '正在发送…';
+  updateReply();
+  try {
+    await request('/sessions/' + encodeURIComponent(state.key) + '/messages', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ticket, text:draft.value}),
+    });
+    if (state.generation !== generation) return;
+    draft.value = '';
+    draft.blur();
+    composer.hidden = true;
+    el('open-reply').textContent = '已发送 · 回复';
+  } catch (error) {
+    if (state.generation !== generation) return;
+    replyError = Object.prototype.hasOwnProperty.call(replyErrors, error.message) ? error.message : 'unknown';
+  } finally {
+    if (state.generation === generation) {
+      sending = false;
+      replyTicket = null;
+      updateReply();
+      poll();
+    }
+  }
+};
 el('pair').onsubmit = async event => {
   event.preventDefault();
   try {
@@ -359,7 +453,10 @@ view.onscroll = () => {
   if (following) el('latest').hidden = true;
   updateNavigation();
 };
-window.addEventListener('resize', updateNavigation);
+window.addEventListener('resize', () => {
+  if (!composer.hidden && following) view.scrollTop = view.scrollHeight;
+  updateNavigation();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.key) interrupted = true;
   poll();
