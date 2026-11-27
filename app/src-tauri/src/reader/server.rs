@@ -343,6 +343,10 @@ fn handle(
                 )
             }
             "/reader.js" => Some(("text/javascript", include_str!("../../../ui/reader.js"))),
+            "/reading-gestures.js" => Some((
+                "text/javascript",
+                include_str!("../../../ui/reading-gestures.js"),
+            )),
             "/reader-model.js" => Some((
                 "text/javascript",
                 include_str!("../../../ui/reader-model.js"),

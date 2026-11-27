@@ -1,6 +1,6 @@
 # 在 Supernote Nomad 上阅读会话
 
-本文保留首版只读方案及当时的验收目标。当前版本已支持 Codex 历史会话、授权回复和详情标题自动更新。[首版需求 #27](https://github.com/yangzhyo/red-green/issues/27) · [当前使用说明](../../../README.md#在-supernote-nomad-上查看和回复会话) · [局域网接口](../../protocol.md#nomad-会话共享)
+本文保留首版只读方案及当时的验收目标。当前版本已支持 Codex 历史会话、授权回复和详情标题自动更新。详情每页显示一轮，轻点左右半屏可上下滚动，左右滑动切换轮次。Nomad 和 Kindle 各用一个一次性码配对后可交替使用。[首版需求 #27](https://github.com/yangzhyo/red-green/issues/27) · [当前使用说明](../../../README.md#在-supernote-nomad-上查看和回复会话) · [局域网接口](../../protocol.md#nomad-会话共享)
 
 ## 阅读入口
 

@@ -226,8 +226,8 @@ impl CodexHistory {
             }
         }
         // The newest turns may contain only tools or images. Fetch the first
-        // readable segment before showing an empty Kindle document.
-        if requested_older || (matches!(view, View::Kindle(_)) && body.is_empty()) {
+        // readable segment before showing an empty document.
+        if requested_older || body.is_empty() {
             seen.clear();
             cursor = self.older.clone();
             while let Some(token) = cursor.as_deref() {

@@ -9,14 +9,16 @@ test('输入法覆盖页面底部时，仍能编辑回复并点到发送和收�
     documents: {[entryPath]: {entry, page: 'thread', title: 'Codex CLI · 空闲 · 示例 · 测试键盘'}},
     setup: () => {
       const messages = Array.from({length: 45}, (_, i) => ({
-        id: String(i), order: i, role: 'user', text: '这是一段可回看的消息。',
+        id: String(i), order: i, startsTurn: i === 0, role: i === 0 ? 'user' : 'assistant', text: '这是一段可回看的消息。',
       }));
       return {fetch: async () => ({ok: true, json: async () => ({messages, replyTicket: 'sample'})})};
     },
     scenario: async ({reader, el, until, check}) => {
       await until(() => !el('open-reply').hidden, '未显示回复入口');
-      el('open-reply').click();
       const view = el('view');
+      view.scrollTop = view.scrollHeight;
+      view.dispatchEvent(new Event('scroll'));
+      el('open-reply').click();
       check(view.scrollHeight - view.clientHeight - view.scrollTop < 2, '展开输入框后没有跟随正文末尾');
       const field = el('reply-text');
       field.value = '在墨水屏上输入中文';
