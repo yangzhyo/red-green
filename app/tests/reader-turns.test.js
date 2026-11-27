@@ -10,7 +10,7 @@ test('Nomad 从最新轮开头读，点按只滚本轮，横滑换轮，回看�
       const row = (id, role, html, startsTurn) => ({id: String(id), order: id, role, text: html, html, startsTurn});
       const rows = [row(1, 'user', '<p>第一轮</p>', true), row(2, 'user', '<p>第二轮</p>', true),
         row(3, 'user', '<p>补充</p>', false), row(4, 'assistant',
-          '<p><a href="#note">链接</a></p><table><tr><td style="min-width:1000px">宽表</td></tr></table>'
+          '<p><a href="#note">链接</a></p><table><tr>' + '<td>列</td>'.repeat(80) + '</tr></table>'
           + '<p>长段落</p>'.repeat(80), false)];
       const mac = {next: []};
       mac.fetch = async url => ({ok: true, json: async () => ({
@@ -61,6 +61,39 @@ test('Nomad 从最新轮开头读，点按只滚本轮，横滑换轮，回看�
       mac.next.push({id: '6', role: 'user', order: 6, text: '第四轮', startsTurn: true});
       refresh();
       await until(() => ids() === '6', '末尾未跟随新的对话轮次');
+    },
+  });
+});
+
+test('向前翻轮的请求遇到在途更新时仍按一次点击切换', {skip: !hasChrome}, async () => {
+  const entryPath = '/read/current/sample';
+  const entry = {key: 'sample', source: 'Codex CLI', project: '示例', title: '历史分页'};
+  await runReaderBrowser({
+    entryPath, documents: {[entryPath]: {entry, page: 'thread', title: '历史分页'}},
+    setup: () => {
+      const row = (id, text) => ({id, order: Number(id), role: 'assistant', text, startsTurn: true});
+      const mac = {hold: false};
+      mac.fetch = async url => {
+        const page = {since: 'rev', messages: []};
+        if (url.includes('before=')) Object.assign(page, {before: null, messages: [row('0', '上一轮')]});
+        else if (!url.includes('since=')) Object.assign(page, {before: 'older', messages: [row('1', '最新轮')]});
+        else if (mac.hold) {
+          mac.hold = false;
+          await new Promise(resolve => { mac.release = resolve; });
+          page.messages = [row('1', '最新轮更新')];
+        }
+        return {ok: true, json: async () => page};
+      };
+      return mac;
+    },
+    scenario: async ({el, mac, until, refresh}) => {
+      await until(() => el('messages').textContent.includes('最新轮'), '未载入最新轮');
+      mac.hold = true;
+      refresh();
+      await until(() => !!mac.release, '没有在途请求');
+      el('prev').click();
+      mac.release();
+      await until(() => el('messages').textContent.includes('上一轮'), '在途更新取消了翻轮');
     },
   });
 });

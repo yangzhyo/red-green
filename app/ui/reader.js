@@ -17,7 +17,7 @@ let following = true;
 let busy = false;
 let queued = false;
 let timer;
-let wantEarlier = null;
+let previousFromId = null;
 let turns = [];
 let turnIndex = -1;
 let stopped = false;
@@ -168,7 +168,7 @@ function showTurn(index, changes = []) {
 
 function goToTurn(index) {
   if (index < 0 || index >= turns.length) return;
-  wantEarlier = null;
+  previousFromId = null;
   showTurn(index);
   view.scrollTop = 0;
   following = atLatestEnd();
@@ -193,7 +193,7 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   sessionRows.clear();
   nodes.clear();
   before = since = null;
-  wantEarlier = null;
+  previousFromId = null;
   turns = [];
   turnIndex = -1;
   following = true;
@@ -461,7 +461,7 @@ function render(message) {
 
 function canSwitchToLive() {
   // Explicit activation can leave an older page. Browsing follows live only at the end.
-  return activation ? activation.stage === 'waiting' : following;
+  return activation ? activation.stage === 'waiting' : following && !previousFromId;
 }
 
 async function tick() {
@@ -481,8 +481,7 @@ async function tick() {
     if (generation === state.generation) showList(entries);
     return;
   }
-  const earlier = before && wantEarlier;
-  wantEarlier = null;
+  const earlier = before && previousFromId;
   const query = earlier ? '?before=' + encodeURIComponent(before) : since ? '?since=' + encodeURIComponent(since) : '';
   const key = encodeURIComponent(state.key);
   const endpoint = (readingHistory ? '/history/' : '/sessions/') + key + '/messages';
@@ -563,13 +562,13 @@ async function showMessages(page, earlier, endpoint, generation) {
   else status(readingHistory && !resumeTicket ? needsReplyPermission : '');
   if (changes.length || page.reset) {
     const oldId = turns[turnIndex]?.[0].id;
-    const wasFollowing = following;
+    const wasFollowing = following && !previousFromId;
     turns = state.turns();
     const anchorId = saved?.id ?? oldId;
     const previous = turns.findIndex(turn => turn.some(message => message.id === anchorId));
     const tail = turns.length - 1;
     let index = wasFollowing || previous < 0 ? tail : previous;
-    if (!wasFollowing && earlier && earlier === oldId && previous > 0) index = previous - 1;
+    if (earlier && earlier === previousFromId && earlier === oldId && previous > 0) index = previous - 1;
     showTurn(index, changes);
     if (oldId !== turns[index]?.[0].id) view.scrollTop = 0;
     else if (wasFollowing) view.scrollTop = view.scrollHeight;
@@ -578,6 +577,7 @@ async function showMessages(page, earlier, endpoint, generation) {
     if (following) el('latest').hidden = true;
     else if (!earlier && oldId != null && !wasFollowing) el('latest').hidden = false;
   }
+  if (earlier === previousFromId) previousFromId = null;
   interrupted = false;
 }
 
@@ -822,7 +822,7 @@ el('prev').onclick = () => {
   if (turnIndex > 0) goToTurn(turnIndex - 1);
   else if (before && !stopped) {
     following = false;
-    wantEarlier = turns[turnIndex]?.[0].id;
+    previousFromId = turns[turnIndex]?.[0].id;
     poll();
   }
 };
@@ -839,7 +839,7 @@ view.onscroll = () => {
   if (following) el('latest').hidden = true;
 };
 
-if (threadDocument) {
+if (threadDocument && window.enableReadingGestures) {
   window.enableReadingGestures(view, x => {
     const bounds = view.getBoundingClientRect();
     const line = parseFloat(getComputedStyle(view.querySelector('.markdown') || view).lineHeight);
