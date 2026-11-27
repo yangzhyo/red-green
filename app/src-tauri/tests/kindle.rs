@@ -103,7 +103,7 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     convo.put("a / & 字", "assistant", long.clone());
     lib.lock().unwrap().add(convo);
     let list = get("/kindle");
-    assert!(list.contains("项目") && list.contains("样本"));
+    assert!(list.contains("<small>项目 · 样本</small>"));
     let path = attr(&list, r#"class="row"><a href=""#);
     let latest = get(path);
     assert!(latest.contains("最后一行") && !latest.contains('🦀'));

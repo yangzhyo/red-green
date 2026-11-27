@@ -253,12 +253,11 @@ fn listing(entries: Value) -> Result<String, u16> {
             .unwrap_or("未命名会话");
         write!(
             html,
-            r#"<p class="row"><a href="/kindle/read/{}">{}</a><br><small>{} · {} · {}</small></p>"#,
+            r#"<p class="row"><a href="/kindle/read/{}">{}</a><br><small>{} · {}</small></p>"#,
             utf8_percent_encode(key, NON_ALPHANUMERIC),
             escaped(title),
             escaped(entry["project"].as_str().unwrap_or("")),
-            escaped(entry["source"].as_str().unwrap_or("")),
-            escaped(key)
+            escaped(entry["source"].as_str().unwrap_or(""))
         )
         .unwrap();
     }
