@@ -212,7 +212,7 @@ fn thread(page: &Value, path: &str) -> String {
         };
         write!(
             html,
-            "<h1>{speaker}</h1><pre>{}</pre><nav>",
+            "<h1>{speaker}</h1><pre><span>{}</span></pre><nav>",
             escaped(page["text"].as_str().unwrap_or(""))
         )
         .unwrap();

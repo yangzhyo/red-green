@@ -87,10 +87,10 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     assert!(question.contains("最早的提问") && !question.contains("rel=\"prev\""));
     assert_eq!(attr(&follow(&question, "next"), "data-tail=\""), "false");
     let part = |html: &str| {
-        html.split_once("<pre>")
+        html.split_once("<pre><span>")
             .unwrap()
             .1
-            .split_once("</pre>")
+            .split_once("</span></pre>")
             .unwrap()
             .0
             .to_owned()

@@ -11,10 +11,11 @@ function openPage(tail) {
   const notice = {textContent: ''};
   const reader = {
     innerHTML: '已读正文',
+    getBoundingClientRect() { return {bottom: 900 - window.pageYOffset}; },
     getAttribute(name) { return name === 'data-tail' ? String(tail) : '版本一'; },
   };
   const document = {
-    body: {scrollHeight: 900},
+    body: {get scrollHeight() { return notice.textContent ? 950 : 900; }},
     documentElement: {scrollHeight: 900},
     getElementById(id) { return {reader, notice, latest}[id]; },
   };
@@ -48,7 +49,8 @@ test('Kindle 只在末尾替换正文，断网后接续更新，撤销后回到�
   page.respond(0);
   assert.equal(page.reader.innerHTML, '新增正文');
   assert.match(page.notice.textContent, /重试/);
-  assert.equal(page.respond(204), '版本二');
+  assert.equal(page.respond(200, '版本三', '重连后追加'), '版本二');
+  assert.equal(page.reader.innerHTML, '重连后追加');
   assert.equal(page.notice.textContent, '');
   page.respond(401);
   assert.equal(page.destination(), '/kindle');

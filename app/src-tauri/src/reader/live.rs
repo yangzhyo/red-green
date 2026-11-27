@@ -169,22 +169,8 @@ impl CodexHistory {
     ) -> Result<Value, u16> {
         let mut cursor = None;
         let mut seen = HashSet::new();
-        if view.needs_history(body) && self.older.is_some() {
-            cursor = self.older.clone();
-            while let Some(token) = cursor.as_deref() {
-                if !seen.insert(token.to_owned()) {
-                    return Err(UNAVAILABLE);
-                }
-                let (turns, next) = self.read(socket, id, Some(token))?;
-                let rows: Vec<_> = turns.iter().rev().flat_map(visible_items).collect();
-                cursor = next;
-                if !rows.is_empty() {
-                    body.prepend(rows);
-                    break;
-                }
-            }
-            self.older = cursor;
-        } else {
+        let requested_older = view.needs_history(body) && self.older.is_some();
+        if !requested_older {
             // Read newest first, stopping at the last observed turn. Include it: its final reply can still grow.
             let mut turns = Vec::new();
             loop {
@@ -228,6 +214,25 @@ impl CodexHistory {
             for (id, role, text) in turns.iter().rev().flat_map(visible_items) {
                 body.put(&id, role, text);
             }
+        }
+        // The newest turns may contain only tools or images. Fetch the first
+        // readable segment before showing an empty Kindle document.
+        if requested_older || (matches!(view, View::Kindle(_)) && body.is_empty()) {
+            seen.clear();
+            cursor = self.older.clone();
+            while let Some(token) = cursor.as_deref() {
+                if !seen.insert(token.to_owned()) {
+                    return Err(UNAVAILABLE);
+                }
+                let (turns, next) = self.read(socket, id, Some(token))?;
+                let rows: Vec<_> = turns.iter().rev().flat_map(visible_items).collect();
+                cursor = next;
+                if !rows.is_empty() {
+                    body.prepend(rows);
+                    break;
+                }
+            }
+            self.older = cursor;
         }
         view.render(body, self.older.is_some())
     }

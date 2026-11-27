@@ -8,9 +8,8 @@
   var path = location.pathname;
 
   function atBottom() {
-    var top = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop;
     var height = window.innerHeight || document.documentElement.clientHeight;
-    return top + height >= Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - 4;
+    return reader.getBoundingClientRect().bottom <= height + 4;
   }
 
   function show(text) {

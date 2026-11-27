@@ -57,6 +57,10 @@ impl View<'_> {
 }
 
 impl Conversation {
+    pub(super) fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
     pub(super) fn kindle_page(
         &self,
         pos: &super::kindle::Position,
