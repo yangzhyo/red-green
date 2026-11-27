@@ -20,5 +20,5 @@ p { margin: .5em 0; }
 .markdown th, .markdown td { padding: .15em .25em; border: 1px solid; vertical-align: top; }
 
 /* Keep page links accessible to assistive technology and keyboard users. */
-.swipe-reader #reader nav { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-.swipe-reader #reader nav:focus-within { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+.tap-reader #reader nav { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.tap-reader #reader nav:focus-within { position: static; width: auto; height: auto; overflow: visible; clip: auto; }

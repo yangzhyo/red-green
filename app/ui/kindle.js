@@ -2,10 +2,10 @@
 (function () {
   var reader = document.getElementById('reader');
   if (!reader) return;
-  enableSwipePaging();
+  enableTapPaging();
   if (!window.XMLHttpRequest || !window.JSON) return;
 
-  function enableSwipePaging() {
+  function enableTapPaging() {
     var root = document.documentElement;
     if (!root.addEventListener || !reader.querySelector) return;
     var start = null;
@@ -24,37 +24,34 @@
       // Paperwhite delivers touch events even when it omits the window touch flag.
       if (!touchKnown) {
         touchKnown = true;
-        root.className += ' swipe-reader';
+        root.className += ' tap-reader';
         try { window.sessionStorage.setItem(storageKey, '1'); } catch (ignore) {}
       }
-      start = event.touches[0];
+      start = {x: event.touches[0].clientX, y: event.touches[0].clientY, time: event.timeStamp};
     }, false);
 
+    function moved(origin, point) {
+      return Math.abs(point.clientX - origin.x) > 12 || Math.abs(point.clientY - origin.y) > 12;
+    }
+
     root.addEventListener('touchmove', function (event) {
-      if (!start) return;
-      if (event.touches.length !== 1) { start = null; return; }
-      var dx = Math.abs(event.touches[0].clientX - start.clientX);
-      var dy = Math.abs(event.touches[0].clientY - start.clientY);
-      if (dy > 12 && dy >= dx) start = null;
-      else if (dx > 12 && dx > 1.5 * dy) event.preventDefault();
-    }, {passive: false});
+      if (start && (event.touches.length !== 1 || moved(start, event.touches[0]))) start = null;
+    }, false);
 
     root.addEventListener('touchcancel', function () { start = null; }, false);
     root.addEventListener('touchend', function (event) {
       var origin = start;
       start = null;
-      if (!origin || event.touches.length || !event.changedTouches.length) return;
-      var end = event.changedTouches[0];
-      var dx = end.clientX - origin.clientX;
-      var dy = end.clientY - origin.clientY;
-      if (Math.abs(dx) < 48 || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
-      var link = reader.querySelector(dx < 0 ? 'nav a[rel="next"]' : 'nav a[rel="prev"]');
+      if (!origin || event.touches.length || event.changedTouches.length !== 1) return;
+      if (event.timeStamp - origin.time >= 500 || moved(origin, event.changedTouches[0])) return;
+      var width = root.clientWidth || window.innerWidth;
+      var link = reader.querySelector(origin.x < width / 2 ? 'nav a[rel="prev"]' : 'nav a[rel="next"]');
       if (link) {
         event.preventDefault();
         location.href = link.href;
       }
     }, false);
-    if (touchKnown) root.className += ' swipe-reader';
+    if (touchKnown) root.className += ' tap-reader';
   }
 
   var notice = document.getElementById('notice');

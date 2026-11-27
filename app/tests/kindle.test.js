@@ -69,7 +69,7 @@ test('Kindle 回翻到旧页或在末页向上滚动时提示新消息并保留�
 
 function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchstart: null}) {
   const events = {};
-  const root = {className: '', addEventListener(type, callback) { events[type] = callback; }};
+  const root = {className: '', clientWidth: 400, addEventListener(type, callback) { events[type] = callback; }};
   const reader = {querySelector(selector) {
     const href = links[selector.includes('prev') ? 'prev' : 'next'];
     return href ? {href} : null;
@@ -77,50 +77,52 @@ function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchst
   const location = {href: '/current'};
   runInNewContext(script, {document: {documentElement: root, getElementById() { return reader; }},
     window, location});
-  const touch = (type, x, y, count = 1, target = root) => {
+  const touch = (type, x, y, count = 1, target = root, timeStamp = 100) => {
     const point = {clientX: x, clientY: y};
-    events[type]?.({target, touches: Array(count).fill(point), changedTouches: [point], preventDefault() {}});
+    events[type]?.({target, timeStamp, touches: Array(count).fill(point), changedTouches: [point], preventDefault() {}});
   };
   return {root, location, touch};
 }
 
-test('Paperwhite 未声明触摸标记时仍能滑动翻页，换页后继续收起按钮', () => {
+test('Paperwhite 未声明触摸标记时仍能点按翻页，换页后继续收起按钮', () => {
   const values = new Map();
   const window = {PointerEvent() {}, sessionStorage: {
     getItem(key) { return values.get(key); },
     setItem(key, value) { values.set(key, value); },
   }};
   const p = touchPage(undefined, window);
-  assert.doesNotMatch(p.root.className, /swipe-reader/);
+  assert.doesNotMatch(p.root.className, /tap-reader/);
   p.touch('touchstart', 90, 100);
-  p.touch('touchmove', 170, 102);
-  p.touch('touchend', 170, 102, 0);
+  p.touch('touchend', 92, 102, 0);
   assert.equal(p.location.href, '/older');
-  assert.match(touchPage(undefined, window).root.className, /swipe-reader/);
+  assert.match(touchPage(undefined, window).root.className, /tap-reader/);
 });
 
 test('仅报告触点数量且只发送指针事件的浏览器保留翻页链接', () => {
   const p = touchPage(undefined, {PointerEvent() {}, navigator: {maxTouchPoints: 1}});
-  assert.doesNotMatch(p.root.className, /swipe-reader/);
+  assert.doesNotMatch(p.root.className, /tap-reader/);
 });
 
-test('Kindle 左滑向后读、右滑回看，缺少相邻页时停留', () => {
-  for (const [x, links, url] of [[20, {next:'/newer'}, '/newer'], [180, {prev:'/older'}, '/older'], [20, {}, '/current']]) {
+test('Kindle 左半屏点按回看，右半屏点按向后读，首尾没有相邻页就停留', () => {
+  for (const [x, links, url] of [[199, {prev:'/older'}, '/older'], [200, {next:'/newer'}, '/newer'],
+    [40, {next:'/newer'}, '/current'], [360, {prev:'/older'}, '/current']]) {
     const p = touchPage(links);
-    assert.match(p.root.className, /swipe-reader/);
-    p.touch('touchstart', 100, 100); p.touch('touchmove', x, 104); p.touch('touchend', x, 104, 0);
+    p.touch('touchstart', x, 100);
+    p.touch('touchend', x, 104, 0);
     assert.equal(p.location.href, url);
   }
 });
 
-test('Kindle 点按、纵向滚动、链接、多指和取消手势都不翻页', () => {
-  for (const kind of ['tap','vertical','link','multi','cancel']) {
+test('Kindle 拖动、长按、链接、多指和取消触摸都不翻页', () => {
+  for (const kind of ['horizontal', 'vertical', 'drag-back', 'long', 'link', 'multi', 'cancel']) {
     const p = touchPage();
-    p.touch('touchstart', 100, 100, 1, kind === 'link' ? {nodeName: 'A', parentNode: p.root} : p.root);
+    const target = kind === 'link' ? {nodeName: 'SPAN', parentNode: {nodeName: 'A', parentNode: p.root}} : p.root;
+    p.touch('touchstart', 100, 100, 1, target);
     if (kind === 'multi') p.touch('touchstart', 105, 105, 2);
-    if (kind === 'cancel') p.touch('touchcancel', 30, 100, 0);
-    if (kind === 'vertical') p.touch('touchmove', 105, 160);
-    p.touch('touchend', kind === 'tap' ? 99 : 25, kind === 'vertical' ? 160 : 100, 0);
+    if (kind === 'cancel') p.touch('touchcancel', 100, 100, 0);
+    if (kind === 'drag-back') p.touch('touchmove', 200, 110);
+    p.touch('touchend', kind === 'horizontal' ? 160 : 100, kind === 'vertical' ? 160 : 100, 0, target,
+      kind === 'long' ? 1100 : 200);
     assert.equal(p.location.href, '/current', kind);
   }
 });
