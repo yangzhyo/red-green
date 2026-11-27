@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 
 const script = readFileSync(new URL('../ui/kindle.js', import.meta.url), 'utf8');
 
-function openPage(tail) {
+function openPage(tail, search = '?latest=1') {
   let scheduled, request, destination;
   const latest = {textContent: '查看最新'};
   const notice = {textContent: ''};
@@ -21,7 +21,10 @@ function openPage(tail) {
   };
   class XHR {
     open(method, path) { assert.equal(method, 'GET'); assert.equal(path, '/kindle/read/demo'); }
-    setRequestHeader(name, value) { assert.equal(name, 'X-Kindle-Since'); this.revision = value; }
+    setRequestHeader(name, value) {
+      if (name === 'X-Kindle-Status-Only') this.statusOnly = value;
+      else { assert.equal(name, 'X-Kindle-Since'); this.revision = value; }
+    }
     send() { request = this; }
   }
   const window = {
@@ -29,13 +32,14 @@ function openPage(tail) {
     scrollTo() { this.pageYOffset = 400; },
   };
   runInNewContext(script, {
-    window, document, XMLHttpRequest: XHR, location: {pathname: '/kindle/read/demo', replace(path) { destination = path; }},
+    window, document, XMLHttpRequest: XHR, location: {pathname: '/kindle/read/demo', search, replace(path) { destination = path; }},
     clearTimeout() {}, setTimeout(fn, delay) { if (delay === 3000) scheduled = fn; },
   });
   return {reader, latest, notice, window, destination: () => destination,
-    respond(status, revision, html) {
+    statusOnly: () => request.statusOnly,
+    respond(status, revision, html, turn = '版本一') {
       scheduled();
-      Object.assign(request, {status, responseText: JSON.stringify({revision, html}), readyState: 4});
+      Object.assign(request, {status, responseText: JSON.stringify({revision, html, turn}), readyState: 4});
       request.onreadystatechange();
       return request.revision;
     },
@@ -67,6 +71,18 @@ test('Kindle 回翻到旧页或在末页向上滚动时提示新消息并保留�
   }
 });
 
+test('阅读长轮时仅查询更新状态，滚至末尾再取整轮正文', () => {
+  const p = openPage(true, '');
+  p.respond(200, '版本二');
+  assert.equal(p.statusOnly(), '1');
+  assert.equal(p.reader.innerHTML, '已读正文');
+  assert.equal(p.respond(204), '版本二');
+  p.window.pageYOffset = 400;
+  assert.equal(p.respond(200, '版本二', '完整的新正文'), '版本一');
+  assert.equal(p.statusOnly(), undefined);
+  assert.equal(p.reader.innerHTML, '完整的新正文');
+});
+
 function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchstart: null}) {
   const events = {};
   const root = {className: '', clientWidth: 400, addEventListener(type, callback) { events[type] = callback; }};
@@ -84,23 +100,18 @@ function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchst
   return {root, location, touch};
 }
 
-test('Paperwhite 未声明触摸标记时仍能点按翻页，换页后继续收起按钮', () => {
-  const values = new Map();
-  const window = {PointerEvent() {}, sessionStorage: {
-    getItem(key) { return values.get(key); },
-    setItem(key, value) { values.set(key, value); },
-  }};
-  const p = touchPage(undefined, window);
-  assert.doesNotMatch(p.root.className, /tap-reader/);
+test('Paperwhite 未声明触摸标记也能翻页，轻触不会切换导航样式', () => {
+  const p = touchPage(undefined, {});
   p.touch('touchstart', 90, 100);
   p.touch('touchend', 92, 102, 0);
   assert.equal(p.location.href, '/older');
-  assert.match(touchPage(undefined, window).root.className, /tap-reader/);
+  assert.equal(p.root.className, '');
 });
 
-test('仅报告触点数量且只发送指针事件的浏览器保留翻页链接', () => {
-  const p = touchPage(undefined, {PointerEvent() {}, navigator: {maxTouchPoints: 1}});
-  assert.doesNotMatch(p.root.className, /tap-reader/);
+test('从列表打开长对话和手动换轮都从页首读起，查看最新跳到末尾', () => {
+  assert.equal(openPage(true, '').window.pageYOffset, 0);
+  assert.equal(openPage(true, '?id=q&step=next').window.pageYOffset, 0);
+  assert.equal(openPage(true, '?latest=1').window.pageYOffset, 400);
 });
 
 test('Kindle 左半屏点按回看，右半屏点按向后读，首尾没有相邻页就停留', () => {

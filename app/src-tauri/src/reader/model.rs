@@ -17,6 +17,7 @@ pub struct Message {
     pub role: String,
     pub text: String,
     pub order: i64,
+    pub(super) starts_turn: bool,
     version: u64,
 }
 
@@ -83,8 +84,13 @@ impl Conversation {
     }
 
     pub fn put(&mut self, id: &str, role: &str, text: String) {
+        self.put_item(id, role, text, role == "user");
+    }
+
+    pub(super) fn put_item(&mut self, id: &str, role: &str, text: String, starts_turn: bool) {
         if let Some(message) = self.messages.iter_mut().find(|m| m.id == id) {
-            if message.text != text {
+            if message.text != text || message.starts_turn != starts_turn {
+                message.starts_turn = starts_turn;
                 self.version += 1;
                 message.text = text;
                 message.version = self.version;
@@ -95,6 +101,7 @@ impl Conversation {
         self.messages.push(Message {
             id: id.into(),
             role: role.into(),
+            starts_turn,
             text,
             order: self.messages.last().map_or(0, |m| m.order + 1),
             version: self.version,
@@ -119,12 +126,13 @@ impl Conversation {
             .is_some_and(|p| p == self.messages.first().map_or(0, |m| m.order))
     }
 
-    pub(super) fn prepend(&mut self, rows: Vec<(String, &'static str, String)>) {
+    pub(super) fn prepend(&mut self, rows: Vec<(String, &'static str, String, bool)>) {
         let start = self.messages.first().map_or(0, |m| m.order) - rows.len() as i64;
         let mut earlier: Vec<_> = rows
             .into_iter()
             .enumerate()
-            .map(|(i, (id, role, text))| Message {
+            .map(|(i, (id, role, text, starts_turn))| Message {
+                starts_turn,
                 id,
                 role: role.into(),
                 text,
@@ -136,16 +144,17 @@ impl Conversation {
         self.messages = earlier;
     }
 
-    pub(super) fn reconcile(&mut self, rows: Vec<(&str, &'static str, &str)>) {
+    pub(super) fn reconcile(&mut self, rows: Vec<(&str, &'static str, &str, bool)>) {
         if self.messages.len() > rows.len()
             || self.messages.iter().zip(&rows).any(|(m, r)| m.id != r.0)
         {
             self.generation = rand::random();
             self.messages.clear();
         }
-        for (i, (id, role, text)) in rows.into_iter().enumerate() {
+        for (i, (id, role, text, starts_turn)) in rows.into_iter().enumerate() {
             if let Some(msg) = self.messages.get_mut(i) {
-                if msg.text != text {
+                if msg.text != text || msg.starts_turn != starts_turn {
+                    msg.starts_turn = starts_turn;
                     self.version += 1;
                     msg.version = self.version;
                     msg.text = text.into();
@@ -153,6 +162,7 @@ impl Conversation {
             } else {
                 self.version += 1;
                 self.messages.push(Message {
+                    starts_turn,
                     id: id.into(),
                     role: role.into(),
                     text: text.into(),

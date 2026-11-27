@@ -9,23 +9,11 @@
     var root = document.documentElement;
     if (!root.addEventListener || !reader.querySelector) return;
     var start = null;
-    var touchKnown = 'ontouchstart' in window;
-    var storageKey = 'kindle-reader-touch';
-    if (!touchKnown) {
-      try { touchKnown = window.sessionStorage.getItem(storageKey) === '1'; } catch (ignore) {}
-    }
-
     root.addEventListener('touchstart', function (event) {
       start = null;
       if (event.touches.length !== 1) return;
       for (var node = event.target; node && node !== root; node = node.parentNode) {
-        if (/^(A|INPUT|BUTTON|SELECT|TEXTAREA)$/i.test(node.nodeName)) return;
-      }
-      // Paperwhite delivers touch events even when it omits the window touch flag.
-      if (!touchKnown) {
-        touchKnown = true;
-        root.className += ' tap-reader';
-        try { window.sessionStorage.setItem(storageKey, '1'); } catch (ignore) {}
+        if (/^(NAV|A|INPUT|BUTTON|SELECT|TEXTAREA)$/i.test(node.nodeName)) return;
       }
       start = {x: event.touches[0].clientX, y: event.touches[0].clientY, time: event.timeStamp};
     }, false);
@@ -45,18 +33,19 @@
       if (!origin || event.touches.length || event.changedTouches.length !== 1) return;
       if (event.timeStamp - origin.time >= 500 || moved(origin, event.changedTouches[0])) return;
       var width = root.clientWidth || window.innerWidth;
-      var link = reader.querySelector(origin.x < width / 2 ? 'nav a[rel="prev"]' : 'nav a[rel="next"]');
+      var link = reader.querySelector(origin.x < width / 2 ? 'nav a[rel="prev"][href]' : 'nav a[rel="next"][href]');
       if (link) {
         event.preventDefault();
         location.href = link.href;
       }
     }, false);
-    if (touchKnown) root.className += ' tap-reader';
   }
 
   var notice = document.getElementById('notice');
   var revision = reader.getAttribute('data-revision');
-  var following = reader.getAttribute('data-tail') === 'true';
+  var observedRevision = revision;
+  var latestRound = reader.getAttribute('data-tail') === 'true';
+  var currentTurn = reader.getAttribute('data-turn');
   var path = location.pathname;
 
   function atBottom() {
@@ -70,6 +59,7 @@
 
   function poll() {
     if (document.hidden) { setTimeout(poll, 3000); return; }
+    var wantBody = latestRound && atBottom();
     var xhr = new XMLHttpRequest();
     var finished = false;
     var timeout = setTimeout(function () { xhr.abort(); finish(); }, 8000);
@@ -82,16 +72,25 @@
       try {
         if (xhr.status === 200) {
           var page = JSON.parse(xhr.responseText);
-          if (following && atBottom()) {
+          if (wantBody && atBottom()) {
             reader.innerHTML = page.html;
+            currentTurn = page.turn;
+            revision = page.revision;
             show('');
             window.scrollTo(0, document.body.scrollHeight);
           } else {
-            following = false;
+            latestRound = currentTurn === page.turn;
+            if (currentTurn && page.turn && currentTurn !== page.turn) {
+              var next = reader.querySelector('nav a[rel="next"][aria-disabled]');
+              if (next) {
+                next.href = next.getAttribute('data-href');
+                next.removeAttribute('aria-disabled');
+              }
+            }
             document.getElementById('latest').textContent = '有新消息';
             show('');
           }
-          revision = page.revision;
+          observedRevision = page.revision;
         } else if (xhr.status === 204) { show(''); }
         else { show('连接中断，正在重试'); }
       } catch (error) { show('未能更新，可点「查看最新」重试'); }
@@ -99,11 +98,12 @@
     }
     try {
       xhr.open('GET', path, true);
-      xhr.setRequestHeader('X-Kindle-Since', revision);
+      xhr.setRequestHeader('X-Kindle-Since', wantBody ? revision : observedRevision);
+      if (!wantBody) xhr.setRequestHeader('X-Kindle-Status-Only', '1');
       xhr.onreadystatechange = function () { if (xhr.readyState === 4) finish(); };
       xhr.send(null);
     } catch (error) { finish(); }
   }
-  if (following) window.scrollTo(0, document.body.scrollHeight);
+  if (latestRound && location.search === '?latest=1') window.scrollTo(0, document.body.scrollHeight);
   setTimeout(poll, 3000);
 }());

@@ -74,7 +74,14 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
         "user",
         "## 最早的提问\n\n- **强调** 和 `行内代码`".into(),
     );
-    let long = format!("{}最后一行", "🦀".repeat(560));
+    let table = format!(
+        "|项目|说明|\n|---|---|\n|起点|{}|\n|终点|同一张表|",
+        "🦀".repeat(560)
+    );
+    convo.put("a1", "assistant", table);
+    convo.put("a2", "assistant", "第一轮补充".into());
+    convo.put("q2", "user", "第二轮提问".into());
+    let long = "最后一行".to_owned();
     convo.put("a / & 字", "assistant", long.clone());
     lib.lock().unwrap().add(convo);
     let list = get("/kindle");
@@ -85,27 +92,30 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     let follow = |html: &str, rel: &str| {
         get(&attr(html, &format!("rel=\"{rel}\" href=\"")).replace("&amp;", "&"))
     };
-    let middle = follow(&latest, "prev");
-    let first = follow(&middle, "prev");
-    let question = follow(&first, "prev");
-    assert!(question.contains("<h2>最早的提问</h2>") && !question.contains("rel=\"prev\""));
-    assert!(
-        question.contains("<ul>")
-            && question.contains("<strong>强调</strong>")
-            && question.contains("<code>行内代码</code>")
-    );
-    assert_eq!(attr(&follow(&question, "next"), "data-tail=\""), "false");
-    let part = |html: &str| {
-        html.split_once(r#"<div class="markdown"><p>"#)
+    let first = follow(&latest, "prev");
+    assert!(first.contains("<h2>最早的提问</h2>") && first.contains("第一轮补充"));
+    assert!(!first.contains("第二轮提问") && latest.contains("第二轮提问"));
+    assert!(first.contains("<strong>强调</strong>") && first.contains("<code>行内代码</code>"));
+    assert_eq!(first.matches("<table>").count(), 1);
+    assert!(first.contains("<td>起点</td>") && first.contains("<td>终点</td>"));
+    assert_eq!(first.matches('🦀').count(), 560);
+    assert_eq!(attr(&follow(&first, "next"), "data-tail=\""), "true");
+    for page in [&first, &latest] {
+        let nav = page
+            .split_once("<nav")
             .unwrap()
             .1
-            .split_once("</p>")
+            .split_once("</nav>")
             .unwrap()
-            .0
-            .to_owned()
-    };
-    assert_eq!(part(&first) + &part(&middle) + &part(&latest), long);
-    assert_eq!(part(&follow(&first, "next")), part(&middle));
+            .0;
+        for label in ["上一屏", "下一屏", "查看最新", "返回列表"] {
+            assert_eq!(nav.matches(label).count(), 1);
+        }
+        assert_eq!(nav.matches("aria-disabled=\"true\"").count(), 1);
+    }
+    assert!(get(&format!("{path}?id=a1&part=1")).contains("第一轮补充"));
+    assert!(get(&format!("{path}?id=q2&part=0&step=prev")).contains("第一轮补充"));
+    assert!(get(&format!("{path}?id=a2&part=0&step=next")).contains("第二轮提问"));
     let rev = attr(&latest, "data-revision=\"");
     assert!(send(&reader, path, device, rev, "").starts_with("HTTP/1.1 204"));
     lib.lock().unwrap().sessions.get_mut("s").unwrap().put(
@@ -113,6 +123,17 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
         "assistant",
         long + "**更新**<追加>",
     );
+    let status = send(
+        &reader,
+        path,
+        device,
+        &format!("{rev}\r\nX-Kindle-Status-Only: 1"),
+        "",
+    );
+    let status: serde_json::Value =
+        serde_json::from_str(status.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(status["turn"], "q2");
+    assert!(status.get("html").is_none());
     let update = send(&reader, path, device, rev, "");
     let json: serde_json::Value =
         serde_json::from_str(update.split_once("\r\n\r\n").unwrap().1).unwrap();

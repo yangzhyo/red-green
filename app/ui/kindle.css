@@ -3,7 +3,7 @@ h1 { margin: .25em 0; font-size: 1.15em; }
 pre { margin: .45em 0; font: inherit; white-space: pre-wrap; word-wrap: break-word; }
 a, button, input { color: black; font: inherit; }
 a { display: inline-block; padding: .35em .1em; }
-nav a, button { padding: .4em .75em; border: 1px solid black; }
+button { padding: .4em .75em; border: 1px solid black; }
 .row { border-bottom: 1px solid black; margin: .25em 0; padding-bottom: .3em; word-wrap: break-word; }
 p { margin: .5em 0; }
 .markdown { word-wrap: break-word; }
@@ -18,7 +18,6 @@ p { margin: .5em 0; }
 .markdown pre { padding: .35em; border: 1px solid; }
 .markdown table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .markdown th, .markdown td { padding: .15em .25em; border: 1px solid; vertical-align: top; }
-
-/* Keep page links accessible to assistive technology and keyboard users. */
-.tap-reader #reader nav { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-.tap-reader #reader nav:focus-within { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+nav { text-align: right; white-space: nowrap; overflow-x: auto; font-size: 90%; }
+nav a { text-decoration: underline; margin-left: .3em; white-space: nowrap; }
+nav a[aria-disabled] { color: #666; }

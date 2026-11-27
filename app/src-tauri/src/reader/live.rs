@@ -117,6 +117,14 @@ impl<T: Default> ClaudeFile<T> {
     }
 }
 
+// App Server returns complete turns, including turns without a visible user message.
+fn turn_items(turn: &Value) -> impl Iterator<Item = (String, &'static str, String, bool)> {
+    visible_items(turn)
+        .into_iter()
+        .enumerate()
+        .map(|(index, (id, role, text))| (id, role, text, index == 0))
+}
+
 #[derive(Default)]
 struct CodexHistory {
     rpc: Option<Rpc>,
@@ -193,10 +201,12 @@ impl CodexHistory {
                 }
                 let Some(next) = next else {
                     if !turns.is_empty() {
-                        let rows: Vec<_> = turns.iter().rev().flat_map(visible_items).collect();
+                        let rows: Vec<_> = turns.iter().rev().flat_map(turn_items).collect();
                         body.reconcile(
                             rows.iter()
-                                .map(|(id, role, text)| (id.as_str(), *role, text.as_str()))
+                                .map(|(id, role, text, start)| {
+                                    (id.as_str(), *role, text.as_str(), *start)
+                                })
                                 .collect(),
                         );
                         self.older = None;
@@ -211,8 +221,8 @@ impl CodexHistory {
             if let Some(head) = turns.first().and_then(|t| t["id"].as_str()) {
                 self.latest_turn = Some(head.to_owned());
             }
-            for (id, role, text) in turns.iter().rev().flat_map(visible_items) {
-                body.put(&id, role, text);
+            for (id, role, text, start) in turns.iter().rev().flat_map(turn_items) {
+                body.put_item(&id, role, text, start);
             }
         }
         // The newest turns may contain only tools or images. Fetch the first
@@ -225,7 +235,7 @@ impl CodexHistory {
                     return Err(UNAVAILABLE);
                 }
                 let (turns, next) = self.read(socket, id, Some(token))?;
-                let rows: Vec<_> = turns.iter().rev().flat_map(visible_items).collect();
+                let rows: Vec<_> = turns.iter().rev().flat_map(turn_items).collect();
                 cursor = next;
                 if !rows.is_empty() {
                     body.prepend(rows);
@@ -505,6 +515,13 @@ impl Source for LiveSource {
         self.current_messages(key, View::Nomad(query))
     }
 
+    fn kindle_poll(&mut self, key: &str, since: &str, status_only: bool) -> Result<Value, u16> {
+        self.current_messages(
+            key,
+            View::Kindle(&kindle::Position::poll(since, status_only)),
+        )
+    }
+
     fn kindle_messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
         self.current_messages(key, View::Kindle(&kindle::Position::parse(query)?))
     }
@@ -571,7 +588,7 @@ impl LiveSource {
                     selection.body.reconcile(vec![]);
                 }
                 if !matches!(change, FileChange::Unchanged) {
-                    selection.body.reconcile(file.data.visible());
+                    selection.body.reconcile(file.data.visible_with_turns());
                 }
                 view.render(&selection.body, false)
             }

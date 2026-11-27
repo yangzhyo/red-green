@@ -24,6 +24,9 @@ pub trait Source: Send + 'static {
     fn kindle_messages(&mut self, _key: &str, _query: &str) -> Result<Value, u16> {
         Err(501)
     }
+    fn kindle_poll(&mut self, key: &str, _since: &str, _status_only: bool) -> Result<Value, u16> {
+        self.kindle_messages(key, "")
+    }
     fn history_entry(&mut self, _key: &str) -> Result<Value, u16> {
         Err(404)
     }
@@ -65,6 +68,14 @@ impl Source for Arc<Mutex<Library>> {
             .get(key)
             .ok_or(404u16)?
             .kindle_page(&pos, false)
+    }
+    fn kindle_poll(&mut self, key: &str, since: &str, status_only: bool) -> Result<Value, u16> {
+        self.lock()
+            .unwrap()
+            .sessions
+            .get(key)
+            .ok_or(404u16)?
+            .kindle_page(&kindle::Position::poll(since, status_only), false)
     }
     fn messages(&mut self, key: &str, query: &str) -> Result<serde_json::Value, u16> {
         self.lock().unwrap().messages(key, query).ok_or(404)

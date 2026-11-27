@@ -1,5 +1,4 @@
 //! Server-rendered, read-only pages for the Paperwhite browser.
-mod markdown;
 
 use super::{
     model::Message,
@@ -16,8 +15,10 @@ const HTML: &str = "text/html; charset=utf-8";
 #[derive(Default)]
 pub(super) struct Position {
     id: Option<String>,
-    part: usize,
     step: i8,
+    legacy_part: Option<usize>,
+    since: Option<String>,
+    status_only: bool,
 }
 
 impl Position {
@@ -26,10 +27,15 @@ impl Position {
         if query.len() > 8192 {
             return Err(400);
         }
+        if query == "latest=1" {
+            return Ok(pos);
+        }
         for (key, value) in form_urlencoded::parse(query.as_bytes()) {
             match key.as_ref() {
                 "id" => pos.id = Some(value.into_owned()),
-                "part" => pos.part = value.parse().map_err(|_| 400u16)?,
+                "part" => {
+                    pos.legacy_part = Some(value.parse().map_err(|_| 400u16)?);
+                }
                 "step" => {
                     pos.step = match value.as_ref() {
                         "prev" => -1,
@@ -46,13 +52,54 @@ impl Position {
         Ok(pos)
     }
 
-    pub fn needs_older(&self, rows: &[Message]) -> bool {
-        self.step == -1
-            && self.part == 0
-            && rows
-                .first()
-                .is_some_and(|m| Some(&m.id) == self.id.as_ref())
+    pub fn poll(since: &str, status_only: bool) -> Self {
+        Self {
+            since: Some(since.to_owned()),
+            status_only,
+            ..Self::default()
+        }
     }
+
+    pub fn needs_older(&self, rows: &[Message]) -> bool {
+        if let Some(part) = self.legacy_part {
+            return part == 0
+                && self.step == -1
+                && rows
+                    .first()
+                    .is_some_and(|row| Some(&row.id) == self.id.as_ref());
+        }
+        self.step == -1
+            && rows
+                .iter()
+                .enumerate()
+                .take_while(|(i, row)| *i == 0 || !row.starts_turn)
+                .any(|(_, row)| Some(&row.id) == self.id.as_ref())
+    }
+}
+
+// Older bookmarks describe a step from a 280-character fragment. Only the
+// last fragment of the last message in a turn can advance to another turn.
+fn legacy_last_part(text: &str) -> usize {
+    let document = dom_query::Document::fragment(super::markdown::render(text));
+    let length: usize = document
+        .html_root()
+        .descendants_it()
+        .filter(|n| n.first_child().is_none())
+        .map(|n| {
+            if !n.is_text() {
+                return 1;
+            }
+            let text = n.text();
+            if text.as_ref() == "\n"
+                && n.parent().and_then(|p| p.node_name()).as_deref() != Some("code")
+            {
+                0
+            } else {
+                text.chars().count()
+            }
+        })
+        .sum();
+    length.saturating_sub(1) / 280
 }
 
 pub(super) fn page(
@@ -61,45 +108,65 @@ pub(super) fn page(
     older: bool,
     revision: &str,
 ) -> Result<Value, u16> {
-    let Some(last) = rows.len().checked_sub(1) else {
+    if pos.since.as_deref() == Some(revision) {
+        return Ok(json!({"revision":revision}));
+    }
+    if rows.is_empty() {
         return if pos.id.is_some() {
             Err(409)
         } else {
             Ok(json!({"revision":revision,"tail":true}))
         };
-    };
-    let mut index = match &pos.id {
+    }
+    let index = match &pos.id {
         Some(id) => rows.iter().position(|m| &m.id == id).ok_or(409u16)?,
-        None => last,
+        None => rows.len() - 1,
     };
-    let mut pages = markdown::Pages::new(&rows[index].text);
-    let end = pages.last_part();
-    let mut part = if pos.id.is_some() {
-        pos.part.min(end)
-    } else {
-        end
+    let turn_start = |index| {
+        rows[..=index]
+            .iter()
+            .rposition(|m| m.starts_turn)
+            .unwrap_or(0)
     };
-    match pos.step {
-        -1 if part > 0 => part -= 1,
-        -1 if index > 0 => {
-            index -= 1;
-            pages = markdown::Pages::new(&rows[index].text);
-            part = pages.last_part();
+    let turn_end = |start: usize| {
+        rows[start + 1..]
+            .iter()
+            .position(|m| m.starts_turn)
+            .map_or(rows.len(), |offset| start + 1 + offset)
+    };
+    let mut start = turn_start(index);
+    let end = turn_end(start);
+    let step = match (pos.legacy_part, pos.step) {
+        (Some(part), -1) if index != start || part > 0 => 0,
+        (Some(part), 1)
+            if index + 1 != end
+                || end == rows.len()
+                || part < legacy_last_part(&rows[index].text) =>
+        {
+            0
         }
-        1 if part < end => part += 1,
-        1 if index < last => {
-            index += 1;
-            pages = markdown::Pages::new(&rows[index].text);
-            part = 0;
+        _ => pos.step,
+    };
+    match step {
+        -1 if start > 0 => start = turn_start(start - 1),
+        1 => {
+            if end < rows.len() {
+                start = end;
+            }
         }
         _ => (),
     }
-    let m = &rows[index];
-    let next = index < last || part < pages.last_part();
-    let html = pages.render(part);
+    let end = turn_end(start);
+    if pos.status_only {
+        return Ok(json!({"revision":revision, "id":rows[start].id}));
+    }
+    let messages: Vec<_> = rows[start..end]
+        .iter()
+        .map(|m| json!({"role":m.role,"text":m.text}))
+        .collect();
     Ok(
-        json!({"id":m.id,"role":m.role,"html":html,"part":part,"prev":older || index>0 || part>0,
-        "next":next,"tail":!next,"revision":revision}),
+        json!({"id":rows[start].id, "messages":messages, "prev":older || start > 0,
+        "next":end < rows.len(), "tail":end == rows.len(), "revision":revision}),
     )
 }
 
@@ -201,43 +268,41 @@ fn listing(entries: Value) -> Result<String, u16> {
 fn thread(page: &Value, path: &str) -> String {
     let path = escaped(path);
     let mut html = String::new();
-    if let Some(id) = page["id"].as_str() {
-        let speaker = if page["role"] == "user" {
-            "你"
-        } else {
-            "助手"
-        };
-        write!(
-            html,
-            r#"<h1>{speaker}</h1><div class="markdown">{}</div><nav>"#,
-            page["html"].as_str().unwrap_or("")
-        )
-        .unwrap();
-        let part = page["part"].as_u64().unwrap_or(0);
-        for (step, label) in [("prev", "上一屏"), ("next", "下一屏")] {
-            if page[step] == true {
-                let query = form_urlencoded::Serializer::new(String::new())
-                    .append_pair("id", id)
-                    .append_pair("part", &part.to_string())
-                    .append_pair("step", step)
-                    .finish();
-                write!(
-                    html,
-                    r#"<a rel="{step}" href="{path}?{}">{label}</a> "#,
-                    escaped(&query)
-                )
-                .unwrap();
-            }
+    if let Some(messages) = page["messages"].as_array() {
+        for message in messages {
+            let speaker = if message["role"] == "user" {
+                "你"
+            } else {
+                "助手"
+            };
+            let body = super::markdown::render(message["text"].as_str().unwrap_or(""));
+            write!(
+                html,
+                r#"<h1>{speaker}</h1><div class="markdown">{body}</div>"#
+            )
+            .unwrap();
         }
-        html.push_str("</nav>");
     } else {
         html.push_str("<p>等待会话正文</p>");
     }
-    write!(
-        html,
-        r#"<p><a id="latest" href="{path}">查看最新</a> · <a href="/kindle">返回列表</a></p>"#
-    )
-    .unwrap();
+    write!(html, r#"<nav aria-label="阅读导航"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    for (step, label) in [("prev", "上一屏"), ("next", "下一屏")] {
+        let query = form_urlencoded::Serializer::new(String::new())
+            .append_pair("id", page["id"].as_str().unwrap_or(""))
+            .append_pair("step", step)
+            .finish();
+        let url = format!("{path}?{}", escaped(&query));
+        if page[step] == true {
+            write!(html, r#"<a rel="{step}" href="{url}">{label}</a> "#).unwrap();
+        } else {
+            write!(
+                html,
+                r#"<a rel="{step}" aria-disabled="true" data-href="{url}">{label}</a> "#
+            )
+            .unwrap();
+        }
+    }
+    html.push_str("</nav>");
     html
 }
 
@@ -247,23 +312,31 @@ fn thread_response(
     path: &str,
     query: &str,
     polling: Option<&str>,
+    status_only: bool,
 ) -> Result<(u16, &'static str, String), u16> {
     let key = percent_encoding::percent_decode_str(encoded_key)
         .decode_utf8()
         .map_err(|_| 400u16)?;
-    let page = source.kindle_messages(&key, query)?;
+    let page = match polling {
+        Some(old) => source.kindle_poll(&key, old, status_only)?,
+        None => source.kindle_messages(&key, query)?,
+    };
     let revision = page["revision"].as_str().ok_or(503u16)?;
     if let Some(old) = polling {
         if old == revision {
             return Ok((204, "application/json", String::new()));
         }
-        let update = json!({"revision": revision, "html": thread(&page, path)});
+        let mut update = json!({"revision":revision, "turn":page["id"]});
+        if !status_only {
+            update["html"] = thread(&page, path).into();
+        }
         return Ok((200, "application/json", update.to_string()));
     }
     let content = format!(
-        r#"<main id="reader" data-revision="{}" data-tail="{}">{}</main><p id="notice" role="status"></p>"#,
+        r#"<main id="reader" data-revision="{}" data-tail="{}" data-turn="{}">{}</main><p id="notice" role="status"></p>"#,
         escaped(revision),
         page["tail"],
+        escaped(page["id"].as_str().unwrap_or("")),
         thread(&page, path)
     );
     let title = page["title"].as_str().unwrap_or("当前会话");
@@ -324,7 +397,11 @@ pub(super) fn handle(
         .strip_prefix("/kindle/read/")
         .filter(|s| !s.is_empty() && !s.contains('/'))
     {
-        thread_response(source, key, path, query, polling.as_deref())
+        let status_only = req
+            .headers()
+            .iter()
+            .any(|h| h.field.equiv("X-Kindle-Status-Only") && h.value.as_str() == "1");
+        thread_response(source, key, path, query, polling.as_deref(), status_only)
     } else {
         Err(404)
     };
