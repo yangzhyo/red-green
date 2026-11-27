@@ -6,6 +6,24 @@ use std::{
 };
 
 fn send(reader: &Reader, path: &str, cookie: &str, since: &str, body: &str) -> String {
+    send_from(
+        reader,
+        path,
+        cookie,
+        since,
+        body,
+        &format!("Origin: http://{}\r\n", reader.address()),
+    )
+}
+
+fn send_from(
+    reader: &Reader,
+    path: &str,
+    cookie: &str,
+    since: &str,
+    body: &str,
+    origin_header: &str,
+) -> String {
     let mut tcp = TcpStream::connect(reader.address()).unwrap();
     let method = if body.is_empty() { "GET" } else { "POST" };
     let extra = if since.is_empty() {
@@ -13,7 +31,12 @@ fn send(reader: &Reader, path: &str, cookie: &str, since: &str, body: &str) -> S
     } else {
         format!("X-Kindle-Since: {since}\r\n")
     };
-    write!(tcp, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nCookie: {cookie}\r\n{extra}Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",reader.address(),body.len()).unwrap();
+    let content_type = if path == "/pair" {
+        "application/json"
+    } else {
+        "application/x-www-form-urlencoded"
+    };
+    write!(tcp, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{origin_header}Cookie: {cookie}\r\n{extra}Content-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",reader.address(),body.len()).unwrap();
     let mut response = String::new();
     tcp.read_to_string(&mut response).unwrap();
     response
@@ -68,6 +91,14 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     let device = cookie(&result);
     let get = |path: &str| send(&reader, path, device, "", "");
     assert!(get("/kindle").contains("等待可读会话"));
+    // Pair a second browser through the Nomad JSON endpoint while the Kindle stays signed in.
+    let json = |code: &str| serde_json::json!({"code": code}).to_string();
+    assert!(send(&reader, "/pair", "", "", &json(&code)).starts_with("HTTP/1.1 403"));
+    let paired = send(&reader, "/pair", "", "", &json(&reader.new_code()));
+    assert!(paired.starts_with("HTTP/1.1 200"));
+    let nomad = cookie(&paired);
+    assert_ne!(nomad, device);
+    assert!(send(&reader, "/sessions", nomad, "", "").starts_with("HTTP/1.1 200"));
     let mut convo = Conversation::new("s", "项目", "样本");
     convo.put(
         "q",
@@ -85,7 +116,7 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     convo.put("a / & 字", "assistant", long.clone());
     lib.lock().unwrap().add(convo);
     let list = get("/kindle");
-    assert!(list.contains("项目") && list.contains("样本"));
+    assert!(list.contains("<small>项目 · 样本</small>"));
     let path = attr(&list, r#"class="row"><a href=""#);
     let latest = get(path);
     assert!(latest.contains("最后一行") && !latest.contains('🦀'));
@@ -142,6 +173,126 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
         .unwrap()
         .contains("最后一行<strong>更新</strong>&lt;追加&gt;"));
     reader.revoke().unwrap();
+    assert!(send(&reader, "/sessions", nomad, "", "").starts_with("HTTP/1.1 401"));
     assert!(get(path).contains("六位配对码") && !get(path).contains("最后一行"));
     assert!(send(&reader, path, device, rev, "").starts_with("HTTP/1.1 401"));
+}
+
+#[test]
+fn kindle_native_reply_form_sends_once_and_obeys_mac_permission() {
+    use red_green::reader::Source;
+    use serde_json::{json, Value};
+    struct Inbox(Arc<Mutex<Vec<String>>>);
+    impl Source for Inbox {
+        fn sessions(&mut self) -> Value {
+            json!([])
+        }
+        fn messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
+            Ok(json!({}))
+        }
+        fn kindle_messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
+            Ok(json!({"revision":"1","title":"测试对话","tail":true,"messages":[]}))
+        }
+        fn send_reply(
+            &mut self,
+            _: &str,
+            text: &str,
+            admit: impl FnOnce() -> Result<(), u16>,
+        ) -> Result<(), u16> {
+            if text.trim() == "忙" {
+                return Err(409);
+            }
+            admit()?;
+            self.0.lock().unwrap().push(text.into());
+            if text == "回执未知" {
+                return Err(502);
+            }
+            Ok(())
+        }
+    }
+    let sent = Arc::new(Mutex::new(vec![]));
+    let reader = Reader::start("127.0.0.1:0".parse().unwrap(), Inbox(sent.clone())).unwrap();
+    let code = reader.new_code();
+    let pairing = send(&reader, "/kindle", "", "", "");
+    let nonce = attr(&pairing, r#"name="form" value=""#);
+    let paired = send(
+        &reader,
+        "/kindle/pair",
+        cookie(&pairing),
+        "",
+        &format!("form={nonce}&code={code}"),
+    );
+    let device = cookie(&paired);
+    let path = "/kindle/reply/codex-demo";
+    let get = |p| send(&reader, p, device, "", "");
+    let post = |body: &str| send(&reader, path, device, "", body);
+    assert!(get(path).starts_with("HTTP/1.1 403"));
+    reader.toggle_replies();
+    let thread = get("/kindle/read/codex-demo");
+    assert!(thread.contains(r#"href="/kindle/reply/codex-demo">回复</a>"#));
+    assert!(thread.find("id=\"kindle-reply\"").unwrap() < thread.find("rel=\"prev\"").unwrap());
+    assert!(!get("/kindle/read/claude-demo").contains("/kindle/reply/"));
+    let form = get(path);
+    assert!(form.contains("<textarea") && form.contains("测试对话"));
+    let ticket = attr(&form, r#"name="ticket" value=""#);
+    assert!(post(&format!("ticket={ticket}&text=+")).starts_with("HTTP/1.1 422"));
+    assert!(post(&format!("ticket={ticket}&text=忙")).starts_with("HTTP/1.1 409"));
+    let leading = post(&format!("ticket={ticket}&text=%0D%0A忙"));
+    assert!(leading.contains("required>\n\n忙</textarea>"));
+    let body = format!("ticket={ticket}&text=你好%0D%0A第二行%26%3C");
+    assert!(
+        send(&reader, "/kindle/reply/codex-other", device, "", &body).starts_with("HTTP/1.1 412")
+    );
+    assert!(send_from(
+        &reader,
+        path,
+        device,
+        "",
+        &body,
+        "Origin: http://other.invalid\r\n"
+    )
+    .starts_with("HTTP/1.1 403"));
+    let ok = send_from(
+        &reader,
+        path,
+        device,
+        "",
+        &body,
+        &format!("Referer: http://{}{path}\r\n", reader.address()),
+    );
+    assert!(
+        ok.starts_with("HTTP/1.1 303") && ok.contains("Location: /kindle/read/codex-demo?latest=1")
+    );
+    assert!(post(&body).starts_with("HTTP/1.1 412"));
+    let ticket_for = || attr(&get(path), r#"name="ticket" value=""#).to_owned();
+    let boundary = format!("{}\r\n末", "字".repeat(8190));
+    let encoded = form_urlencoded::Serializer::new(String::new())
+        .append_pair("ticket", &ticket_for())
+        .append_pair("text", &boundary)
+        .finish();
+    assert!(post(&encoded).starts_with("HTTP/1.1 303"));
+    let uncertain = format!("ticket={}&text=回执未知", ticket_for());
+    let unknown = post(&uncertain);
+    assert!(
+        unknown.starts_with("HTTP/1.1 502")
+            && unknown.contains("发送结果待核对")
+            && !unknown.contains("<textarea")
+    );
+    assert!(post(&uncertain).starts_with("HTTP/1.1 412"));
+    let fresh = get(path);
+    let stale = format!(
+        "ticket={}&text=撤销后",
+        attr(&fresh, r#"name="ticket" value=""#)
+    );
+    reader.toggle_replies();
+    let denied = post(&stale);
+    assert!(denied.starts_with("HTTP/1.1 403") && denied.contains("撤销后"));
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        [
+            "你好\n第二行&<".to_owned(),
+            boundary.replace("\r\n", "\n"),
+            "回执未知".to_owned()
+        ]
+    );
 }

@@ -2,6 +2,7 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Write},
     os::unix::fs::OpenOptionsExt,
@@ -13,20 +14,22 @@ pub(super) struct Pairing {
     reply_tickets: Option<std::collections::VecDeque<(String, String)>>,
     forms: std::collections::VecDeque<(String, Instant)>,
     challenge: Option<(String, Instant, u8)>,
-    fingerprint: Option<String>,
+    fingerprints: BTreeSet<String>,
     store: Option<PathBuf>,
 }
 
 impl Pairing {
     pub fn load(store: Option<PathBuf>) -> io::Result<Self> {
-        let fingerprint = match store.as_ref().map(fs::read_to_string).transpose() {
-            Ok(value) => value,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        // One digest per line also accepts the original single-device file as-is.
+        let fingerprints = match store.as_ref().map(fs::read_to_string).transpose() {
+            Ok(Some(value)) => value.lines().map(str::to_owned).collect(),
+            Ok(None) => BTreeSet::new(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
             Err(e) => return Err(e),
         };
         Ok(Self {
             store,
-            fingerprint,
+            fingerprints,
             ..Self::default()
         })
     }
@@ -34,7 +37,7 @@ impl Pairing {
     pub fn revoke(&mut self) -> io::Result<()> {
         self.forms.clear();
         self.challenge = None;
-        self.fingerprint = None;
+        self.fingerprints.clear();
         self.reply_tickets = None;
         if let Some(path) = &self.store {
             match fs::remove_file(path) {
@@ -58,15 +61,18 @@ impl Pairing {
                 .create_new(true)
                 .mode(0o600)
                 .open(&temp)?;
-            if let Err(e) = file
-                .write_all(digest.as_bytes())
+            if let Err(e) = self
+                .fingerprints
+                .iter()
+                .chain(std::iter::once(&digest))
+                .try_for_each(|hash| writeln!(file, "{hash}"))
                 .and_then(|()| fs::rename(&temp, path))
             {
                 let _ = fs::remove_file(temp);
                 return Err(e);
             }
         }
-        self.fingerprint = Some(digest);
+        self.fingerprints.insert(digest);
         Ok(())
     }
     pub fn new_form(&mut self) -> String {
@@ -102,28 +108,34 @@ impl Pairing {
         if *attempts == 0 || Instant::now() >= *deadline {
             return Ok(None);
         }
-        *attempts -= 1;
         if code != input {
+            *attempts -= 1;
             return Ok(None);
         }
-        self.challenge = None;
         let token = format!(
             "{:032x}{:032x}",
             rand::random::<u128>(),
             rand::random::<u128>()
         );
         self.remember(&token)?;
+        self.challenge = None;
         Ok(Some(token))
     }
     pub fn toggle_replies(&mut self) -> Option<bool> {
-        self.fingerprint.as_ref()?;
+        if self.fingerprints.is_empty() {
+            return None;
+        }
         if self.reply_tickets.take().is_some() {
             return Some(false);
         }
-        // The grant belongs to the device currently paired with this service.
+        // Close enrollment before granting replies to all currently paired readers.
         self.challenge = None;
         self.reply_tickets = Some(Default::default());
         Some(true)
+    }
+
+    pub fn replies_enabled(&self) -> bool {
+        self.reply_tickets.is_some()
     }
 
     pub fn reply_ticket(&mut self, key: &str) -> Option<&str> {
@@ -162,14 +174,14 @@ impl Pairing {
     }
 
     pub fn allows(&self, cookies: &str) -> bool {
-        let Some(expected) = self.fingerprint.as_ref() else {
-            return false;
-        };
         cookies
             .split(';')
             .filter_map(|part| part.trim().strip_prefix("nomad_reader="))
             .any(|value| {
-                value.len() == 64 && format!("{:x}", Sha256::digest(value.as_bytes())) == *expected
+                value.len() == 64
+                    && self
+                        .fingerprints
+                        .contains(&format!("{:x}", Sha256::digest(value.as_bytes())))
             })
     }
 }
@@ -194,16 +206,31 @@ mod tests {
     }
 
     #[test]
-    fn previous_device_survives_restart_until_revoked() {
+    fn legacy_and_new_devices_survive_restart_until_revoked() {
         let path = std::env::temp_dir().join(format!("rg-pair-{:x}", rand::random::<u64>()));
-        let mut first = Pairing::load(Some(path.clone())).unwrap();
-        let code = first.issue();
-        let token = first.exchange(&code).unwrap().unwrap();
-        let cookie = format!("nomad_reader={token}");
-        assert_ne!(fs::read_to_string(&path).unwrap(), token);
+        let old_token = "a".repeat(64);
+        // The previous release stored a single hex digest without a trailing newline.
+        let old_digest = format!("{:x}", Sha256::digest(old_token.as_bytes()));
+        fs::write(&path, &old_digest).unwrap();
+        let first = format!("nomad_reader={old_token}");
+        let mut pairing = Pairing::load(Some(path.clone())).unwrap();
+        assert!(pairing.allows(&first));
+        assert_eq!(pairing.toggle_replies(), Some(true));
+        let code = pairing.issue();
+        assert!(!pairing.replies_enabled());
+        let token = pairing.exchange(&code).unwrap().unwrap();
+        let second = format!("nomad_reader={token}");
+        assert!(pairing.exchange(&code).unwrap().is_none());
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains(&old_token) && !saved.contains(&token));
+        assert!(pairing.allows(&first) && pairing.allows(&second));
         let mut restarted = Pairing::load(Some(path.clone())).unwrap();
-        assert!(restarted.allows(&cookie));
+        assert!(restarted.allows(&first) && restarted.allows(&second));
+        assert!(!restarted.replies_enabled());
         restarted.revoke().unwrap();
-        assert!(!Pairing::load(Some(path)).unwrap().allows(&cookie));
+        for state in [restarted, Pairing::load(Some(path)).unwrap()] {
+            assert!(!state.allows(&first) && !state.allows(&second));
+            assert!(!state.replies_enabled());
+        }
     }
 }

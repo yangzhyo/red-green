@@ -1,4 +1,5 @@
-//! Server-rendered, read-only pages for the Paperwhite browser.
+//! Server-rendered pages for the Paperwhite browser.
+mod reply;
 
 use super::{
     model::Message,
@@ -252,12 +253,11 @@ fn listing(entries: Value) -> Result<String, u16> {
             .unwrap_or("未命名会话");
         write!(
             html,
-            r#"<p class="row"><a href="/kindle/read/{}">{}</a><br><small>{} · {} · {}</small></p>"#,
+            r#"<p class="row"><a href="/kindle/read/{}">{}</a><br><small>{} · {}</small></p>"#,
             utf8_percent_encode(key, NON_ALPHANUMERIC),
             escaped(title),
             escaped(entry["project"].as_str().unwrap_or("")),
-            escaped(entry["source"].as_str().unwrap_or("")),
-            escaped(key)
+            escaped(entry["source"].as_str().unwrap_or(""))
         )
         .unwrap();
     }
@@ -265,7 +265,7 @@ fn listing(entries: Value) -> Result<String, u16> {
     Ok(document("当前会话", &html, false))
 }
 
-fn thread(page: &Value, path: &str) -> String {
+fn thread(page: &Value, path: &str, reply: Option<&str>) -> String {
     let path = escaped(path);
     let mut html = String::new();
     if let Some(messages) = page["messages"].as_array() {
@@ -285,7 +285,15 @@ fn thread(page: &Value, path: &str) -> String {
     } else {
         html.push_str("<p>等待会话正文</p>");
     }
-    write!(html, r#"<nav aria-label="阅读导航"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    write!(html, r#"<nav id="reader-nav" aria-label="阅读导航"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    if let Some(url) = reply {
+        write!(
+            html,
+            r#"<a id="kindle-reply" href="{}">回复</a> "#,
+            escaped(url)
+        )
+        .unwrap();
+    }
     for (step, label) in [("prev", "上一屏"), ("next", "下一屏")] {
         let query = form_urlencoded::Serializer::new(String::new())
             .append_pair("id", page["id"].as_str().unwrap_or(""))
@@ -313,22 +321,33 @@ fn thread_response(
     query: &str,
     polling: Option<&str>,
     status_only: bool,
+    replies_enabled: bool,
+    had_reply: bool,
 ) -> Result<(u16, &'static str, String), u16> {
     let key = percent_encoding::percent_decode_str(encoded_key)
         .decode_utf8()
         .map_err(|_| 400u16)?;
+    let reply = (replies_enabled && key.starts_with("codex-"))
+        .then(|| format!("/kindle/reply/{encoded_key}"));
     let page = match polling {
         Some(old) => source.kindle_poll(&key, old, status_only)?,
         None => source.kindle_messages(&key, query)?,
     };
     let revision = page["revision"].as_str().ok_or(503u16)?;
     if let Some(old) = polling {
+        if old == revision && had_reply != reply.is_some() {
+            return Ok((
+                200,
+                "application/json",
+                json!({"permissionOnly":true,"reply":reply}).to_string(),
+            ));
+        }
         if old == revision {
             return Ok((204, "application/json", String::new()));
         }
-        let mut update = json!({"revision":revision, "turn":page["id"]});
+        let mut update = json!({"revision":revision, "turn":page["id"], "reply": reply});
         if !status_only {
-            update["html"] = thread(&page, path).into();
+            update["html"] = thread(&page, path, reply.as_deref()).into();
         }
         return Ok((200, "application/json", update.to_string()));
     }
@@ -337,7 +356,7 @@ fn thread_response(
         escaped(revision),
         page["tail"],
         escaped(page["id"].as_str().unwrap_or("")),
-        thread(&page, path)
+        thread(&page, path, reply.as_deref())
     );
     let title = page["title"].as_str().unwrap_or("当前会话");
     Ok((200, HTML, document(title, &content, true)))
@@ -345,6 +364,7 @@ fn thread_response(
 
 pub(super) fn handle(
     mut req: Request,
+    address: std::net::SocketAddr,
     path: &str,
     query: &str,
     pairing: &Mutex<Pairing>,
@@ -373,12 +393,25 @@ pub(super) fn handle(
             ),
         };
     }
+    if let Some(key) = path
+        .strip_prefix("/kindle/reply/")
+        .filter(|s| !s.is_empty() && !s.contains('/'))
+    {
+        return reply::handle(req, address, key, pairing, cookie, source);
+    }
     if req.method() != &Method::Get {
         return send(req, 405, HTML, String::new(), None, None);
     }
     let asset = match path {
         "/kindle/reader.css" => Some(("text/css", include_str!("../../../ui/kindle.css"))),
-        "/kindle/update.js" => Some(("text/javascript", include_str!("../../../ui/kindle.js"))),
+        "/kindle/update.js" => Some((
+            "text/javascript",
+            concat!(
+                include_str!("../../../ui/reading-gestures.js"),
+                "\n",
+                include_str!("../../../ui/kindle.js")
+            ),
+        )),
         _ => None,
     };
     if let Some((mime, data)) = asset {
@@ -401,7 +434,21 @@ pub(super) fn handle(
             .headers()
             .iter()
             .any(|h| h.field.equiv("X-Kindle-Status-Only") && h.value.as_str() == "1");
-        thread_response(source, key, path, query, polling.as_deref(), status_only)
+        let had_reply = req
+            .headers()
+            .iter()
+            .any(|h| h.field.equiv("X-Kindle-Reply") && h.value.as_str() == "1");
+        let replies_enabled = pairing.lock().unwrap().replies_enabled();
+        thread_response(
+            source,
+            key,
+            path,
+            query,
+            polling.as_deref(),
+            status_only,
+            replies_enabled,
+            had_reply,
+        )
     } else {
         Err(404)
     };

@@ -24,7 +24,7 @@ pub struct Message {
 impl Message {
     fn for_reader(&self) -> Value {
         json!({ "id": self.id, "role": self.role, "text": self.text, "order": self.order,
-            "html": super::markdown::render(&self.text) })
+            "startsTurn": self.starts_turn, "html": super::markdown::render(&self.text) })
     }
 }
 
@@ -195,7 +195,11 @@ impl Conversation {
             .and_then(|s| self.position::<i64>(s))
             .map(|order| self.messages.partition_point(|m| m.order < order));
         let end = before.unwrap_or(self.messages.len());
-        let start = end.saturating_sub(PAGE);
+        // Keep the first turn complete even when it crosses the transport page boundary.
+        let mut start = end.saturating_sub(PAGE);
+        while start > 0 && !self.messages[start].starts_turn {
+            start -= 1;
+        }
         let messages: Vec<_> = self.messages[start..end]
             .iter()
             .map(Message::for_reader)
@@ -230,6 +234,26 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nomad_pages_keep_long_turns_complete() {
+        let mut thread = Conversation::new("demo", "示例", "样本");
+        thread.put("first", "user", "第一轮".into());
+        thread.put("question", "user", "第二轮".into());
+        thread.put_item("extra", "user", "补充".into(), false);
+        for n in 0..30 {
+            thread.put(&n.to_string(), "assistant", format!("答复{n}"));
+        }
+        let latest = thread.page("");
+        let messages = latest["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 32);
+        assert_eq!(messages[0]["id"], "question");
+        assert_eq!(messages[0]["startsTurn"], true);
+        assert_eq!(messages[1]["startsTurn"], false);
+        let older = thread.page(&format!("before={}", latest["before"].as_str().unwrap()));
+        assert_eq!(older["messages"][0]["id"], "first");
+        assert!(older["before"].is_null());
+    }
+
     #[test]
     fn history_does_not_consume_live_updates() {
         let mut thread = Conversation::new("demo", "示例", "样本");
