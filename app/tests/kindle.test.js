@@ -66,3 +66,41 @@ test('Kindle 回翻到旧页或在末页向上滚动时提示新消息并保留�
     assert.equal(page.window.pageYOffset, tail ? 100 : 400);
   }
 });
+
+function touchPage(links = {prev: '/older', next: '/newer'}) {
+  const events = {};
+  const root = {className: '', addEventListener(type, callback) { events[type] = callback; }};
+  const reader = {querySelector(selector) {
+    const href = links[selector.includes('prev') ? 'prev' : 'next'];
+    return href ? {href} : null;
+  }};
+  const location = {href: '/current'};
+  runInNewContext(script, {document: {documentElement: root, getElementById() { return reader; }},
+    window: {ontouchstart: null}, location});
+  const touch = (type, x, y, count = 1, target = root) => {
+    const point = {clientX: x, clientY: y};
+    events[type]({target, touches: Array(count).fill(point), changedTouches: [point], preventDefault() {}});
+  };
+  return {root, location, touch};
+}
+
+test('Kindle 左滑向后读、右滑回看，缺少相邻页时停留', () => {
+  for (const [x, links, url] of [[20, {next:'/newer'}, '/newer'], [180, {prev:'/older'}, '/older'], [20, {}, '/current']]) {
+    const p = touchPage(links);
+    assert.match(p.root.className, /swipe-reader/);
+    p.touch('touchstart', 100, 100); p.touch('touchmove', x, 104); p.touch('touchend', x, 104, 0);
+    assert.equal(p.location.href, url);
+  }
+});
+
+test('Kindle 点按、纵向滚动、链接、多指和取消手势都不翻页', () => {
+  for (const kind of ['tap','vertical','link','multi','cancel']) {
+    const p = touchPage();
+    p.touch('touchstart', 100, 100, 1, kind === 'link' ? {nodeName: 'A', parentNode: p.root} : p.root);
+    if (kind === 'multi') p.touch('touchstart', 105, 105, 2);
+    if (kind === 'cancel') p.touch('touchcancel', 30, 100, 0);
+    if (kind === 'vertical') p.touch('touchmove', 105, 160);
+    p.touch('touchend', kind === 'tap' ? 99 : 25, kind === 'vertical' ? 160 : 100, 0);
+    assert.equal(p.location.href, '/current', kind);
+  }
+});

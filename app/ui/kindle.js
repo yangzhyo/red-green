@@ -1,7 +1,51 @@
 // Loaded only on Kindle thread documents. All navigation also works as HTML links.
 (function () {
   var reader = document.getElementById('reader');
-  if (!window.XMLHttpRequest || !window.JSON || !reader) return;
+  if (!reader) return;
+  enableSwipePaging();
+  if (!window.XMLHttpRequest || !window.JSON) return;
+
+  function enableSwipePaging() {
+    var root = document.documentElement;
+    if (!('ontouchstart' in window) || !root.addEventListener || !reader.querySelector) return;
+    var start = null;
+
+    root.addEventListener('touchstart', function (event) {
+      start = null;
+      if (event.touches.length !== 1) return;
+      for (var node = event.target; node && node !== root; node = node.parentNode) {
+        if (/^(A|INPUT|BUTTON|SELECT|TEXTAREA)$/i.test(node.nodeName)) return;
+      }
+      start = event.touches[0];
+    }, false);
+
+    root.addEventListener('touchmove', function (event) {
+      if (!start) return;
+      if (event.touches.length !== 1) { start = null; return; }
+      var dx = Math.abs(event.touches[0].clientX - start.clientX);
+      var dy = Math.abs(event.touches[0].clientY - start.clientY);
+      if (dy > 12 && dy >= dx) start = null;
+      else if (dx > 12 && dx > 1.5 * dy) event.preventDefault();
+    }, {passive: false});
+
+    root.addEventListener('touchcancel', function () { start = null; }, false);
+    root.addEventListener('touchend', function (event) {
+      var origin = start;
+      start = null;
+      if (!origin || event.touches.length || !event.changedTouches.length) return;
+      var end = event.changedTouches[0];
+      var dx = end.clientX - origin.clientX;
+      var dy = end.clientY - origin.clientY;
+      if (Math.abs(dx) < 48 || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
+      var link = reader.querySelector(dx < 0 ? 'nav a[rel="next"]' : 'nav a[rel="prev"]');
+      if (link) {
+        event.preventDefault();
+        location.href = link.href;
+      }
+    }, false);
+    root.className += ' swipe-reader';
+  }
+
   var notice = document.getElementById('notice');
   var revision = reader.getAttribute('data-revision');
   var following = reader.getAttribute('data-tail') === 'true';
