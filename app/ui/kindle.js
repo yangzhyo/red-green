@@ -7,14 +7,25 @@
 
   function enableSwipePaging() {
     var root = document.documentElement;
-    if (!('ontouchstart' in window) || !root.addEventListener || !reader.querySelector) return;
+    if (!root.addEventListener || !reader.querySelector) return;
     var start = null;
+    var touchKnown = 'ontouchstart' in window || (window.navigator && window.navigator.maxTouchPoints > 0);
+    var storageKey = 'kindle-reader-touch';
+    if (!touchKnown) {
+      try { touchKnown = window.sessionStorage.getItem(storageKey) === '1'; } catch (ignore) {}
+    }
 
     root.addEventListener('touchstart', function (event) {
       start = null;
       if (event.touches.length !== 1) return;
       for (var node = event.target; node && node !== root; node = node.parentNode) {
         if (/^(A|INPUT|BUTTON|SELECT|TEXTAREA)$/i.test(node.nodeName)) return;
+      }
+      // Paperwhite delivers touch events even when it omits the window touch flag.
+      if (!touchKnown) {
+        touchKnown = true;
+        root.className += ' swipe-reader';
+        try { window.sessionStorage.setItem(storageKey, '1'); } catch (ignore) {}
       }
       start = event.touches[0];
     }, false);
@@ -43,7 +54,7 @@
         location.href = link.href;
       }
     }, false);
-    root.className += ' swipe-reader';
+    if (touchKnown) root.className += ' swipe-reader';
   }
 
   var notice = document.getElementById('notice');

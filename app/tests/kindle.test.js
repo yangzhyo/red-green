@@ -67,7 +67,7 @@ test('Kindle 回翻到旧页或在末页向上滚动时提示新消息并保留�
   }
 });
 
-function touchPage(links = {prev: '/older', next: '/newer'}) {
+function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchstart: null}) {
   const events = {};
   const root = {className: '', addEventListener(type, callback) { events[type] = callback; }};
   const reader = {querySelector(selector) {
@@ -76,13 +76,33 @@ function touchPage(links = {prev: '/older', next: '/newer'}) {
   }};
   const location = {href: '/current'};
   runInNewContext(script, {document: {documentElement: root, getElementById() { return reader; }},
-    window: {ontouchstart: null}, location});
+    window, location});
   const touch = (type, x, y, count = 1, target = root) => {
     const point = {clientX: x, clientY: y};
-    events[type]({target, touches: Array(count).fill(point), changedTouches: [point], preventDefault() {}});
+    events[type]?.({target, touches: Array(count).fill(point), changedTouches: [point], preventDefault() {}});
   };
   return {root, location, touch};
 }
+
+test('Paperwhite 未声明触摸标记时仍能滑动翻页，换页后继续收起按钮', () => {
+  const values = new Map();
+  const window = {PointerEvent() {}, sessionStorage: {
+    getItem(key) { return values.get(key); },
+    setItem(key, value) { values.set(key, value); },
+  }};
+  const p = touchPage(undefined, window);
+  assert.doesNotMatch(p.root.className, /swipe-reader/);
+  p.touch('touchstart', 90, 100);
+  p.touch('touchmove', 170, 102);
+  p.touch('touchend', 170, 102, 0);
+  assert.equal(p.location.href, '/older');
+  assert.match(touchPage(undefined, window).root.className, /swipe-reader/);
+});
+
+test('浏览器报告有触点时直接收起按钮', () => {
+  const p = touchPage(undefined, {navigator: {maxTouchPoints: 1}});
+  assert.match(p.root.className, /swipe-reader/);
+});
 
 test('Kindle 左滑向后读、右滑回看，缺少相邻页时停留', () => {
   for (const [x, links, url] of [[20, {next:'/newer'}, '/newer'], [180, {prev:'/older'}, '/older'], [20, {}, '/current']]) {
