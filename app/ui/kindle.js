@@ -9,7 +9,7 @@
     var root = document.documentElement;
     if (!root.addEventListener || !reader.querySelector) return;
     var start = null;
-    var touchKnown = 'ontouchstart' in window || (window.navigator && window.navigator.maxTouchPoints > 0);
+    var touchKnown = 'ontouchstart' in window;
     var storageKey = 'kindle-reader-touch';
     if (!touchKnown) {
       try { touchKnown = window.sessionStorage.getItem(storageKey) === '1'; } catch (ignore) {}

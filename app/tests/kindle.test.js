@@ -99,9 +99,9 @@ test('Paperwhite 未声明触摸标记时仍能滑动翻页，换页后继续收
   assert.match(touchPage(undefined, window).root.className, /swipe-reader/);
 });
 
-test('浏览器报告有触点时直接收起按钮', () => {
-  const p = touchPage(undefined, {navigator: {maxTouchPoints: 1}});
-  assert.match(p.root.className, /swipe-reader/);
+test('仅报告触点数量且只发送指针事件的浏览器保留翻页链接', () => {
+  const p = touchPage(undefined, {PointerEvent() {}, navigator: {maxTouchPoints: 1}});
+  assert.doesNotMatch(p.root.className, /swipe-reader/);
 });
 
 test('Kindle 左滑向后读、右滑回看，缺少相邻页时停留', () => {
