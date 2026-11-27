@@ -31,7 +31,12 @@ fn send_from(
     } else {
         format!("X-Kindle-Since: {since}\r\n")
     };
-    write!(tcp, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{origin_header}Cookie: {cookie}\r\n{extra}Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",reader.address(),body.len()).unwrap();
+    let content_type = if path == "/pair" {
+        "application/json"
+    } else {
+        "application/x-www-form-urlencoded"
+    };
+    write!(tcp, "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n{origin_header}Cookie: {cookie}\r\n{extra}Content-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",reader.address(),body.len()).unwrap();
     let mut response = String::new();
     tcp.read_to_string(&mut response).unwrap();
     response
@@ -86,6 +91,14 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     let device = cookie(&result);
     let get = |path: &str| send(&reader, path, device, "", "");
     assert!(get("/kindle").contains("等待可读会话"));
+    // Pair a second browser through the Nomad JSON endpoint while the Kindle stays signed in.
+    let json = |code: &str| serde_json::json!({"code": code}).to_string();
+    assert!(send(&reader, "/pair", "", "", &json(&code)).starts_with("HTTP/1.1 403"));
+    let paired = send(&reader, "/pair", "", "", &json(&reader.new_code()));
+    assert!(paired.starts_with("HTTP/1.1 200"));
+    let nomad = cookie(&paired);
+    assert_ne!(nomad, device);
+    assert!(send(&reader, "/sessions", nomad, "", "").starts_with("HTTP/1.1 200"));
     let mut convo = Conversation::new("s", "项目", "样本");
     convo.put(
         "q",
@@ -160,6 +173,7 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
         .unwrap()
         .contains("最后一行<strong>更新</strong>&lt;追加&gt;"));
     reader.revoke().unwrap();
+    assert!(send(&reader, "/sessions", nomad, "", "").starts_with("HTTP/1.1 401"));
     assert!(get(path).contains("六位配对码") && !get(path).contains("最后一行"));
     assert!(send(&reader, path, device, rev, "").starts_with("HTTP/1.1 401"));
 }
