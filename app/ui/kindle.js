@@ -35,6 +35,14 @@
     if (notice.textContent !== text) notice.textContent = text;
   }
 
+  function syncState(state, label) {
+    var badge = document.getElementById('session-state');
+    if (badge && label && badge.getAttribute('data-state') !== state) {
+      badge.setAttribute('data-state', state);
+      badge.textContent = label;
+    }
+  }
+
   function syncReply(url) {
     var link = document.getElementById('kindle-reply');
     if (link && !url) link.parentNode.removeChild(link);
@@ -60,12 +68,13 @@
       finished = true;
       clearTimeout(timeout);
       if (xhr.status === 401 || xhr.status === 409) { location.replace('/kindle'); return; }
-      if (xhr.status === 410) { show('会话已结束'); return; }
+      if (xhr.status === 410) { syncState('ended', '已结束'); syncReply(null); show('会话已结束'); return; }
       try {
         if (xhr.status === 200) {
           var page = JSON.parse(xhr.responseText);
           syncReply(page.reply);
-          if (page.permissionOnly) {
+          syncState(page.state, page.stateLabel);
+          if (!page.revision) {
             show('');
           } else {
             if (wantBody && atBottom()) {
@@ -96,6 +105,8 @@
     try {
       xhr.open('GET', path, true);
       xhr.setRequestHeader('X-Kindle-Since', wantBody ? revision : observedRevision);
+      var badge = document.getElementById('session-state');
+      if (badge) xhr.setRequestHeader('X-Kindle-State', badge.getAttribute('data-state'));
       if (document.getElementById('kindle-reply')) xhr.setRequestHeader('X-Kindle-Reply', '1');
       if (!wantBody) xhr.setRequestHeader('X-Kindle-Status-Only', '1');
       xhr.onreadystatechange = function () { if (xhr.readyState === 4) finish(); };

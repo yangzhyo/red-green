@@ -9,6 +9,8 @@ function openPage(tail, search = '?latest=1', navHeight = 0) {
   let scheduled, request, destination;
   const latest = {textContent: '查看最新'};
   const notice = {textContent: ''};
+  const badge = {state: 'running', textContent: '运行中',
+    getAttribute() { return this.state; }, setAttribute(_, value) { this.state = value; }};
   const reader = {
     innerHTML: '已读正文',
     getBoundingClientRect() { return {bottom: 900 - window.pageYOffset}; },
@@ -17,12 +19,13 @@ function openPage(tail, search = '?latest=1', navHeight = 0) {
   const document = {
     body: {get scrollHeight() { return notice.textContent ? 950 : 900; }},
     documentElement: {scrollHeight: 900},
-    getElementById(id) { return {reader, notice, latest, 'reader-nav': {offsetHeight: navHeight}}[id]; },
+    getElementById(id) { return {reader, notice, latest, 'session-state': badge, 'reader-nav': {offsetHeight: navHeight}}[id]; },
   };
   class XHR {
     open(method, path) { assert.equal(method, 'GET'); assert.equal(path, '/kindle/read/demo'); }
     setRequestHeader(name, value) {
-      if (name === 'X-Kindle-Status-Only') this.statusOnly = value;
+      if (name === 'X-Kindle-State') this.state = value;
+      else if (name === 'X-Kindle-Status-Only') this.statusOnly = value;
       else { assert.equal(name, 'X-Kindle-Since'); this.revision = value; }
     }
     send() { request = this; }
@@ -35,11 +38,11 @@ function openPage(tail, search = '?latest=1', navHeight = 0) {
     window, document, XMLHttpRequest: XHR, location: {pathname: '/kindle/read/demo', search, replace(path) { destination = path; }},
     clearTimeout() {}, setTimeout(fn, delay) { if (delay === 3000) scheduled = fn; },
   });
-  return {reader, latest, notice, window, destination: () => destination,
+  return {reader, latest, notice, badge, window, requestedState: () => request.state, destination: () => destination,
     statusOnly: () => request.statusOnly,
-    respond(status, revision, html, turn = '版本一') {
+    respond(status, revision, html, turn = '版本一', metadata = {}) {
       scheduled();
-      Object.assign(request, {status, responseText: JSON.stringify({revision, html, turn}), readyState: 4});
+      Object.assign(request, {status, responseText: JSON.stringify({revision, html, turn, ...metadata}), readyState: 4});
       request.onreadystatechange();
       return request.revision;
     },
@@ -58,6 +61,24 @@ test('Kindle 只在末尾替换正文，断网后接续更新，撤销后回到�
   assert.equal(page.notice.textContent, '');
   page.respond(401);
   assert.equal(page.destination(), '/kindle');
+});
+
+test('只变更会话状态时在原位更新，末尾和回看旧轮都不重绘正文', () => {
+  for (const tail of [true, false]) {
+    const page = openPage(tail, '');
+    const offset = page.window.pageYOffset = tail ? 400 : 125;
+    page.respond(200, undefined, undefined, undefined, {state: 'awaiting', stateLabel: '待确认'});
+    assert.equal(page.requestedState(), 'running');
+    assert.equal(page.badge.textContent, '待确认');
+    page.respond(204);
+    assert.equal(page.requestedState(), 'awaiting');
+    assert.equal(page.reader.innerHTML, '已读正文');
+    assert.equal(page.latest.textContent, '查看最新');
+    assert.equal(page.window.pageYOffset, offset);
+    page.respond(410);
+    assert.equal(page.badge.textContent, '已结束');
+    assert.equal(page.window.pageYOffset, offset);
+  }
 });
 
 test('Kindle 回翻到旧页或在末页向上滚动时提示新消息并保留位置', () => {

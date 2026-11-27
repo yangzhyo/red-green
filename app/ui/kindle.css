@@ -21,6 +21,10 @@ p { margin: .5em 0; }
 nav { text-align: right; white-space: nowrap; overflow-x: auto; font-size: 90%; }
 nav a { text-decoration: underline; margin-left: .3em; white-space: nowrap; }
 #reader-nav {
+  display: -webkit-flex;
+  display: flex;
+  -webkit-align-items: center;
+  align-items: center;
   position: fixed;
   right: 0;
   bottom: 0;
@@ -30,10 +34,15 @@ nav a { text-decoration: underline; margin-left: .3em; white-space: nowrap; }
   border-top: 1px solid black;
   background: white;
 }
+#reader-nav > * { -webkit-flex: none; flex: none; }
+#session-state { float: left; margin-right: auto; padding-right: .35em; font-size: 90%; }
 #notice { margin: 0; padding-bottom: 2.6em; }
 nav a[aria-disabled] { color: #666; }
 textarea { display: block; width: 100%; box-sizing: border-box; font: inherit; color: black; background: white; }
-@media (max-width: 360px) {
-  #reader nav { font-size: 84%; }
+@media (max-width: 420px) {
+  #reader nav { font-size: 84%; padding: 0 .25em; }
   #reader nav a { margin-left: .1em; }
+}
+@media (max-width: 340px) {
+  #reader nav { font-size: 80%; }
 }

@@ -189,6 +189,18 @@ const JSON: &str = "application/json";
 const HTML: &str = "text/html; charset=utf-8";
 const READER_HTML: &str = include_str!("../../../ui/reader.html");
 
+pub(super) fn session_state_label(state: &str) -> Option<&'static str> {
+    match state {
+        "running" => Some("运行中"),
+        "awaiting" => Some("待确认"),
+        "your_turn" => Some("轮到你"),
+        "completed" => Some("已完成"),
+        "aborted" => Some("异常中止"),
+        "idle" => Some("空闲"),
+        _ => None,
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 struct DocumentEntry {
     key: String,
@@ -223,16 +235,8 @@ impl DocumentEntry {
     }
 
     fn page_title(&self, history: bool) -> String {
-        let label = match self.state.as_deref() {
-            Some("running") => "运行中",
-            Some("awaiting") => "待确认",
-            Some("your_turn") => "轮到你",
-            Some("completed") => "已完成",
-            Some("aborted") => "异常中止",
-            Some("idle") => "空闲",
-            _ if history => "只读",
-            _ => "",
-        };
+        let label = session_state_label(self.state.as_deref().unwrap_or(""))
+            .unwrap_or(if history { "只读" } else { "" });
         let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         let project = normalize(&self.project);
         let name = normalize(self.title.as_deref().unwrap_or(""));
