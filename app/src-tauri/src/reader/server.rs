@@ -398,7 +398,7 @@ fn handle(
         .unwrap_or("")
         .to_owned();
     if path == "/kindle" || path.starts_with("/kindle/") {
-        return kindle::handle(request, path, query, pairing, &cookie, source);
+        return kindle::handle(request, address, path, query, pairing, &cookie, source);
     }
     if request.method() == &Method::Get {
         if let Some(key) = route_key(path, "/read/current/", "") {
@@ -541,33 +541,52 @@ fn write_action(
         return Err(403);
     }
 
-    let (scope, ticket, text) = match action {
+    match action {
         Action::Reply(_) => {
             let data: Submission = read_json(request, 64 * 1024)?;
-            if data.text.trim().is_empty() || data.text.chars().count() > 8192 {
-                return Err(422);
-            }
-            (key.to_owned(), data.ticket, Some(data.text))
+            submit_reply(source, pairing, cookie, key, &data.ticket, &data.text)?;
+            Ok(json!({}))
         }
         Action::Resume(_) => {
             let data: Resume = read_json(request, 256)?;
-            (format!("resume/{key}"), data.ticket, None)
+            let scope = format!("resume/{key}");
+            let admit = action_guard(pairing, cookie, &scope, &data.ticket)?;
+            source.resume(key, admit)
         }
-    };
-    pairing.lock().unwrap().check_ticket(&scope, &ticket)?;
-    let admit = || {
+    }
+}
+
+pub(super) fn submit_reply(
+    source: &mut impl Source,
+    pairing: &Mutex<Pairing>,
+    cookie: &str,
+    key: &str,
+    ticket: &str,
+    text: &str,
+) -> Result<(), u16> {
+    if !key.starts_with("codex-") {
+        return Err(405);
+    }
+    if text.trim().is_empty() || text.chars().count() > 8192 {
+        return Err(422);
+    }
+    source.send_reply(key, text, action_guard(pairing, cookie, key, ticket)?)
+}
+
+fn action_guard<'a>(
+    pairing: &'a Mutex<Pairing>,
+    cookie: &'a str,
+    scope: &'a str,
+    ticket: &'a str,
+) -> Result<impl FnOnce() -> Result<(), u16> + 'a, u16> {
+    pairing.lock().unwrap().check_ticket(scope, ticket)?;
+    Ok(move || {
         let mut device = pairing.lock().unwrap();
         if !device.allows(cookie) {
             return Err(401);
         }
-        device.take_ticket(&scope, &ticket)
-    };
-    if let Some(text) = text {
-        source.send_reply(key, &text, admit)?;
-        Ok(json!({}))
-    } else {
-        source.resume(key, admit)
-    }
+        device.take_ticket(scope, ticket)
+    })
 }
 
 fn read_json<T: DeserializeOwned>(request: &mut Request, limit: usize) -> Result<T, u16> {

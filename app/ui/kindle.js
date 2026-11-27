@@ -78,6 +78,20 @@
     if (notice.textContent !== text) notice.textContent = text;
   }
 
+  function syncReply(url) {
+    var link = document.getElementById('kindle-reply');
+    if (link && !url) link.parentNode.removeChild(link);
+    if (!link && url) {
+      var nav = reader.querySelector('nav');
+      if (!nav) return;
+      link = document.createElement('a');
+      link.id = 'kindle-reply';
+      link.href = url;
+      link.textContent = '回复';
+      nav.appendChild(link);
+    }
+  }
+
   function poll() {
     if (document.hidden) { setTimeout(poll, 3000); return; }
     var wantBody = latestRound && atBottom();
@@ -93,25 +107,30 @@
       try {
         if (xhr.status === 200) {
           var page = JSON.parse(xhr.responseText);
-          if (wantBody && atBottom()) {
-            reader.innerHTML = page.html;
-            currentTurn = page.turn;
-            revision = page.revision;
+          syncReply(page.reply);
+          if (page.permissionOnly) {
             show('');
-            window.scrollTo(0, document.body.scrollHeight);
           } else {
-            latestRound = currentTurn === page.turn;
-            if (currentTurn && page.turn && currentTurn !== page.turn) {
-              var next = reader.querySelector('nav a[rel="next"][aria-disabled]');
-              if (next) {
-                next.href = next.getAttribute('data-href');
-                next.removeAttribute('aria-disabled');
+            if (wantBody && atBottom()) {
+              reader.innerHTML = page.html;
+              currentTurn = page.turn;
+              revision = page.revision;
+              show('');
+              window.scrollTo(0, document.body.scrollHeight);
+            } else {
+              latestRound = currentTurn === page.turn;
+              if (currentTurn && page.turn && currentTurn !== page.turn) {
+                var next = reader.querySelector('nav a[rel="next"][aria-disabled]');
+                if (next) {
+                  next.href = next.getAttribute('data-href');
+                  next.removeAttribute('aria-disabled');
+                }
               }
+              document.getElementById('latest').textContent = '有新消息';
+              show('');
             }
-            document.getElementById('latest').textContent = '有新消息';
-            show('');
+            observedRevision = page.revision;
           }
-          observedRevision = page.revision;
         } else if (xhr.status === 204) { show(''); }
         else { show('连接中断，正在重试'); }
       } catch (error) { show('未能更新，可点「查看最新」重试'); }
@@ -120,6 +139,7 @@
     try {
       xhr.open('GET', path, true);
       xhr.setRequestHeader('X-Kindle-Since', wantBody ? revision : observedRevision);
+      if (document.getElementById('kindle-reply')) xhr.setRequestHeader('X-Kindle-Reply', '1');
       if (!wantBody) xhr.setRequestHeader('X-Kindle-Status-Only', '1');
       xhr.onreadystatechange = function () { if (xhr.readyState === 4) finish(); };
       xhr.send(null);

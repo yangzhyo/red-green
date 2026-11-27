@@ -126,6 +126,10 @@ impl Pairing {
         Some(true)
     }
 
+    pub fn replies_enabled(&self) -> bool {
+        self.reply_tickets.is_some()
+    }
+
     pub fn reply_ticket(&mut self, key: &str) -> Option<&str> {
         let tickets = self.reply_tickets.as_mut()?;
         // A paired reader can visit thousands of old threads. Keep only recent tickets.
