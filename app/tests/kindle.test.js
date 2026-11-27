@@ -83,7 +83,7 @@ test('阅读长轮时仅查询更新状态，滚至末尾再取整轮正文', ()
   assert.equal(p.reader.innerHTML, '完整的新正文');
 });
 
-function touchPage(height = 1500) {
+function touchPage(height = 1500, links = {prev: '/older', next: '/newer'}) {
   const window = {
     innerHeight: 500, pageYOffset: 0,
     getComputedStyle() { return {lineHeight: '26px'}; },
@@ -91,7 +91,11 @@ function touchPage(height = 1500) {
   };
   const events = {};
   const root = {className: '', clientWidth: 400, addEventListener(type, callback) { events[type] = callback; }};
-  const reader = {querySelector() { return {href: '/another-turn'}; }};
+  const reader = {querySelector(selector) {
+    const href = links[selector === 'nav a[rel="prev"][href]' ? 'prev' :
+      selector === 'nav a[rel="next"][href]' ? 'next' : ''];
+    return href ? {href} : null;
+  }};
   const location = {href: '/current'};
   runInNewContext(script, {document: {documentElement: root, getElementById() { return reader; }},
     window, location});
@@ -120,8 +124,21 @@ test('Kindle 正文点右下移、点左上移，重叠一行且页首尾都停�
   }
 });
 
+test('Kindle 正文左滑下一轮、右滑上一轮，到首尾保留当前轮和滚动位置', () => {
+  for (const [end, links, expected] of [[100, {next: '/newer'}, '/newer'], [300, {prev: '/older'}, '/older'],
+    [100, {prev: '/older'}, '/current'], [300, {next: '/newer'}, '/current']]) {
+    const p = touchPage(1500, links);
+    p.window.pageYOffset = 250;
+    p.touch('touchstart', 200, 100);
+    p.touch('touchmove', (200 + end) / 2, 104);
+    p.touch('touchend', end, 108, 0);
+    assert.equal(p.location.href, expected);
+    assert.equal(p.window.pageYOffset, 250);
+  }
+});
+
 test('Kindle 拖动、长按、链接、多指和取消触摸都不翻页', () => {
-  for (const kind of ['horizontal', 'vertical', 'drag-back', 'long', 'link', 'nav', 'multi', 'cancel']) {
+  for (const kind of ['short', 'vertical', 'diagonal', 'scroll-then-sideways', 'drag-back', 'long', 'link', 'nav', 'multi', 'cancel']) {
     const p = touchPage();
     p.window.pageYOffset = 250;
     const target = kind === 'link' || kind === 'nav'
@@ -130,7 +147,9 @@ test('Kindle 拖动、长按、链接、多指和取消触摸都不翻页', () =
     if (kind === 'multi') p.touch('touchstart', 105, 105, 2);
     if (kind === 'cancel') p.touch('touchcancel', 100, 100, 0);
     if (kind === 'drag-back') p.touch('touchmove', 200, 110);
-    p.touch('touchend', kind === 'horizontal' ? 160 : 100, kind === 'vertical' ? 160 : 100, 0, target,
+    if (kind === 'scroll-then-sideways') p.touch('touchmove', 102, 140);
+    const endX = kind === 'short' ? 130 : ['link','nav','multi','cancel','long','diagonal','scroll-then-sideways'].includes(kind) ? 200 : 100;
+    p.touch('touchend', endX, kind === 'vertical' || kind === 'diagonal' ? 185 : 100, 0, target,
       kind === 'long' ? 1100 : 200);
     assert.equal(p.window.pageYOffset, 250, kind);
     assert.equal(p.location.href, '/current', kind);

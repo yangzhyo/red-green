@@ -2,10 +2,10 @@
 (function () {
   var reader = document.getElementById('reader');
   if (!reader) return;
-  enableTapScroll();
+  enableReadingGestures();
   if (!window.XMLHttpRequest || !window.JSON) return;
 
-  function enableTapScroll() {
+  function enableReadingGestures() {
     var root = document.documentElement;
     if (!root.addEventListener || !window.scrollBy) return;
     var start = null;
@@ -15,23 +15,43 @@
       for (var node = event.target; node && node !== root; node = node.parentNode) {
         if (/^(NAV|A|INPUT|BUTTON|SELECT|TEXTAREA)$/i.test(node.nodeName)) return;
       }
-      start = {x: event.touches[0].clientX, y: event.touches[0].clientY, time: event.timeStamp};
+      start = {x: event.touches[0].clientX, y: event.touches[0].clientY, time: event.timeStamp, dragged: false};
     }, false);
 
-    function moved(origin, point) {
-      return Math.abs(point.clientX - origin.x) > 12 || Math.abs(point.clientY - origin.y) > 12;
+    function horizontal(dx, dy) {
+      return Math.abs(dx) > 1.5 * Math.abs(dy);
     }
 
     root.addEventListener('touchmove', function (event) {
-      if (start && (event.touches.length !== 1 || moved(start, event.touches[0]))) start = null;
-    }, false);
+      if (!start) return;
+      if (event.touches.length !== 1) { start = null; return; }
+      var dx = event.touches[0].clientX - start.x;
+      var dy = event.touches[0].clientY - start.y;
+      if (Math.abs(dx) <= 12 && Math.abs(dy) <= 12) return;
+      if (!horizontal(dx, dy) || (!start.dragged && event.timeStamp - start.time >= 500)) {
+        start = null;
+        return;
+      }
+      start.dragged = true;
+      event.preventDefault();
+    }, {passive: false});
 
     root.addEventListener('touchcancel', function () { start = null; }, false);
     root.addEventListener('touchend', function (event) {
       var origin = start;
       start = null;
       if (!origin || event.touches.length || event.changedTouches.length !== 1) return;
-      if (event.timeStamp - origin.time >= 500 || moved(origin, event.changedTouches[0])) return;
+      if (!origin.dragged && event.timeStamp - origin.time >= 500) return;
+      var dx = event.changedTouches[0].clientX - origin.x;
+      var dy = event.changedTouches[0].clientY - origin.y;
+      if (origin.dragged || Math.abs(dx) > 12 || Math.abs(dy) > 12) {
+        if (Math.abs(dx) >= 48 && horizontal(dx, dy) && reader.querySelector) {
+          event.preventDefault();
+          var link = reader.querySelector(dx < 0 ? 'nav a[rel="next"][href]' : 'nav a[rel="prev"][href]');
+          if (link) location.href = link.href;
+        }
+        return;
+      }
       var width = root.clientWidth || window.innerWidth;
       var height = window.innerHeight || root.clientHeight;
       var style = window.getComputedStyle && window.getComputedStyle(reader);
