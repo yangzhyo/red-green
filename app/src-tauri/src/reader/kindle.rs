@@ -1,4 +1,6 @@
 //! Server-rendered, read-only pages for the Paperwhite browser.
+mod markdown;
+
 use super::{
     model::Message,
     pairing::Pairing,
@@ -11,9 +13,6 @@ use std::{fmt::Write, io::Read, sync::Mutex};
 use tiny_http::{Method, Request};
 
 const HTML: &str = "text/html; charset=utf-8";
-// Count Unicode characters, independently of window size or UTF-8 byte length.
-const PART_SIZE: usize = 280;
-
 #[derive(Default)]
 pub(super) struct Position {
     id: Option<String>,
@@ -56,10 +55,6 @@ impl Position {
     }
 }
 
-fn last_part(text: &str) -> usize {
-    text.chars().count().saturating_sub(1) / PART_SIZE
-}
-
 pub(super) fn page(
     rows: &[Message],
     pos: &Position,
@@ -77,7 +72,8 @@ pub(super) fn page(
         Some(id) => rows.iter().position(|m| &m.id == id).ok_or(409u16)?,
         None => last,
     };
-    let end = last_part(&rows[index].text);
+    let mut pages = markdown::Pages::new(&rows[index].text);
+    let end = pages.last_part();
     let mut part = if pos.id.is_some() {
         pos.part.min(end)
     } else {
@@ -87,21 +83,22 @@ pub(super) fn page(
         -1 if part > 0 => part -= 1,
         -1 if index > 0 => {
             index -= 1;
-            part = last_part(&rows[index].text);
+            pages = markdown::Pages::new(&rows[index].text);
+            part = pages.last_part();
         }
         1 if part < end => part += 1,
         1 if index < last => {
             index += 1;
+            pages = markdown::Pages::new(&rows[index].text);
             part = 0;
         }
         _ => (),
     }
     let m = &rows[index];
-    let mut chars = m.text.chars().skip(part * PART_SIZE);
-    let text: String = chars.by_ref().take(PART_SIZE).collect();
-    let next = index < last || chars.next().is_some();
+    let next = index < last || part < pages.last_part();
+    let html = pages.render(part);
     Ok(
-        json!({"id":m.id,"role":m.role,"text":text,"part":part,"prev":older || index>0 || part>0,
+        json!({"id":m.id,"role":m.role,"html":html,"part":part,"prev":older || index>0 || part>0,
         "next":next,"tail":!next,"revision":revision}),
     )
 }
@@ -212,8 +209,8 @@ fn thread(page: &Value, path: &str) -> String {
         };
         write!(
             html,
-            "<h1>{speaker}</h1><pre><span>{}</span></pre><nav>",
-            escaped(page["text"].as_str().unwrap_or(""))
+            r#"<h1>{speaker}</h1><div class="markdown">{}</div><nav>"#,
+            page["html"].as_str().unwrap_or("")
         )
         .unwrap();
         let part = page["part"].as_u64().unwrap_or(0);

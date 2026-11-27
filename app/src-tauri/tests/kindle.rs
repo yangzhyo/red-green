@@ -69,7 +69,11 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     let get = |path: &str| send(&reader, path, device, "", "");
     assert!(get("/kindle").contains("等待可读会话"));
     let mut convo = Conversation::new("s", "项目", "样本");
-    convo.put("q", "user", "最早的提问".into());
+    convo.put(
+        "q",
+        "user",
+        "## 最早的提问\n\n- **强调** 和 `行内代码`".into(),
+    );
     let long = format!("{}最后一行", "🦀".repeat(560));
     convo.put("a / & 字", "assistant", long.clone());
     lib.lock().unwrap().add(convo);
@@ -84,13 +88,18 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     let middle = follow(&latest, "prev");
     let first = follow(&middle, "prev");
     let question = follow(&first, "prev");
-    assert!(question.contains("最早的提问") && !question.contains("rel=\"prev\""));
+    assert!(question.contains("<h2>最早的提问</h2>") && !question.contains("rel=\"prev\""));
+    assert!(
+        question.contains("<ul>")
+            && question.contains("<strong>强调</strong>")
+            && question.contains("<code>行内代码</code>")
+    );
     assert_eq!(attr(&follow(&question, "next"), "data-tail=\""), "false");
     let part = |html: &str| {
-        html.split_once("<pre><span>")
+        html.split_once(r#"<div class="markdown"><p>"#)
             .unwrap()
             .1
-            .split_once("</span></pre>")
+            .split_once("</p>")
             .unwrap()
             .0
             .to_owned()
@@ -102,7 +111,7 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     lib.lock().unwrap().sessions.get_mut("s").unwrap().put(
         "a / & 字",
         "assistant",
-        long + "<追加>",
+        long + "**更新**<追加>",
     );
     let update = send(&reader, path, device, rev, "");
     let json: serde_json::Value =
@@ -110,7 +119,7 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
     assert!(json["html"]
         .as_str()
         .unwrap()
-        .contains("最后一行&lt;追加&gt;"));
+        .contains("最后一行<strong>更新</strong>&lt;追加&gt;"));
     reader.revoke().unwrap();
     assert!(get(path).contains("六位配对码") && !get(path).contains("最后一行"));
     assert!(send(&reader, path, device, rev, "").starts_with("HTTP/1.1 401"));

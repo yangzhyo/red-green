@@ -18,6 +18,7 @@ serialport = { version = "4.10.1", default-features = false }
 tiny_http = "0.12"
 percent-encoding = "2"
 form_urlencoded = "1"
+dom_query = { version = "0.27", default-features = false }
 rand = "0.9"
 sha2 = "0.10"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

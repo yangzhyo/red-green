@@ -6,3 +6,15 @@ a { display: inline-block; padding: .35em .1em; }
 nav a, button { padding: .4em .75em; border: 1px solid black; }
 .row { border-bottom: 1px solid black; margin: .25em 0; padding-bottom: .3em; word-wrap: break-word; }
 p { margin: .5em 0; }
+.markdown { word-wrap: break-word; }
+.markdown a { display: inline; padding: 0; }
+.markdown h1, .markdown h2, .markdown h3 { margin: .5em 0 .2em; line-height: 1.25; }
+.markdown h1 { font-size: 1.35em; }
+.markdown h2 { font-size: 1.2em; }
+.markdown h3 { font-size: 1.08em; }
+.markdown ul, .markdown ol { padding-left: 1.5em; }
+.markdown blockquote { margin: .5em 0; border-left: 2px solid; padding-left: .6em; }
+.markdown pre, .markdown code { font-family: monospace; }
+.markdown pre { padding: .35em; border: 1px solid; }
+.markdown table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.markdown th, .markdown td { padding: .15em .25em; border: 1px solid; vertical-align: top; }

@@ -574,5 +574,11 @@ fn kindle_finds_text_before_the_latest_tool_only_turns() {
     SNAPSHOT.with_borrow_mut(|sessions| {
         sessions.push(json!({"source":"codex","session_id":KEY,"project":"项目"}))
     });
-    assert_eq!(reader.kindle_messages(KEY, "").unwrap()["text"], "先前答复");
+    assert_eq!(
+        reader.kindle_messages(KEY, "").unwrap()["html"]
+            .as_str()
+            .unwrap()
+            .trim(),
+        "<p>先前答复</p>"
+    );
 }
