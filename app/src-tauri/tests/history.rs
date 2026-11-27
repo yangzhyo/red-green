@@ -161,6 +161,13 @@ fn current_directory_and_message_updates_follow_the_observed_codex_name() {
     assert_eq!(reader.sessions()[0]["title"], "会话标题");
     let first = reader.messages(KEY, "").unwrap();
     assert_eq!(first["title"], "会话标题");
+    let kindle = reader.kindle_messages(KEY, "").unwrap();
+    let revision = kindle["revision"].as_str().unwrap();
+    SNAPSHOT.with_borrow_mut(|rows| rows[0]["state"] = json!("awaiting"));
+    let updated = reader.kindle_poll(KEY, revision, true).unwrap();
+    assert_eq!(updated["state"], "awaiting");
+    assert_eq!(updated["revision"], revision);
+    assert!(updated.get("messages").is_none());
     thread["name"] = json!("新名称");
     poll(&thread);
     let since = format!("since={}", first["since"].as_str().unwrap());

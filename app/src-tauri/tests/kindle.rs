@@ -191,7 +191,9 @@ fn kindle_native_reply_form_sends_once_and_obeys_mac_permission() {
             Ok(json!({}))
         }
         fn kindle_messages(&mut self, _: &str, _: &str) -> Result<Value, u16> {
-            Ok(json!({"revision":"1","title":"测试对话","tail":true,"messages":[]}))
+            Ok(
+                json!({"revision":"1","title":"测试对话","state":"awaiting","tail":true,"messages":[]}),
+            )
         }
         fn send_reply(
             &mut self,
@@ -229,6 +231,26 @@ fn kindle_native_reply_form_sends_once_and_obeys_mac_permission() {
     assert!(get(path).starts_with("HTTP/1.1 403"));
     reader.toggle_replies();
     let thread = get("/kindle/read/codex-demo");
+    assert!(thread.contains(r#"data-state="awaiting">待确认</span>"#));
+    for extra in ["", "\r\nX-Kindle-Status-Only: 1"] {
+        let poll = |state| {
+            send(
+                &reader,
+                "/kindle/read/codex-demo",
+                device,
+                &format!("1\r\nX-Kindle-Reply: 1\r\nX-Kindle-State: {state}{extra}"),
+                "",
+            )
+        };
+        let changed = poll("running");
+        assert!(changed.starts_with("HTTP/1.1 200"));
+        let update: Value =
+            serde_json::from_str(changed.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(update["stateLabel"], "待确认");
+        assert_eq!(update["state"], "awaiting");
+        assert!(update.get("html").is_none() && update.get("revision").is_none());
+        assert!(poll("awaiting").starts_with("HTTP/1.1 204"));
+    }
     assert!(thread.contains(r#"href="/kindle/reply/codex-demo">回复</a>"#));
     assert!(thread.find("id=\"kindle-reply\"").unwrap() < thread.find("rel=\"prev\"").unwrap());
     assert!(!get("/kindle/read/claude-demo").contains("/kindle/reply/"));

@@ -4,7 +4,7 @@ mod reply;
 use super::{
     model::Message,
     pairing::Pairing,
-    server::{device_cookie, escaped, send},
+    server::{device_cookie, escaped, send, session_state_label},
     Source,
 };
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -265,7 +265,7 @@ fn listing(entries: Value) -> Result<String, u16> {
     Ok(document("当前会话", &html, false))
 }
 
-fn thread(page: &Value, path: &str, reply: Option<&str>) -> String {
+fn thread(page: &Value, path: &str, reply: Option<&str>, state: &str, label: &str) -> String {
     let path = escaped(path);
     let mut html = String::new();
     if let Some(messages) = page["messages"].as_array() {
@@ -285,7 +285,7 @@ fn thread(page: &Value, path: &str, reply: Option<&str>) -> String {
     } else {
         html.push_str("<p>等待会话正文</p>");
     }
-    write!(html, r#"<nav id="reader-nav" aria-label="阅读导航"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    write!(html, r#"<nav id="reader-nav" aria-label="阅读导航"><span id="session-state" role="status" data-state="{state}">{label}</span><span class="actions"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
     if let Some(url) = reply {
         write!(
             html,
@@ -310,8 +310,32 @@ fn thread(page: &Value, path: &str, reply: Option<&str>) -> String {
             .unwrap();
         }
     }
-    html.push_str("</nav>");
+    html.push_str("</span></nav>");
     html
+}
+
+struct Poll<'a> {
+    since: &'a str,
+    state: Option<&'a str>,
+    status_only: bool,
+    had_reply: bool,
+}
+
+impl<'a> Poll<'a> {
+    fn from_request(req: &'a Request) -> Option<Self> {
+        let header = |name: &'static str| {
+            req.headers()
+                .iter()
+                .find(|h| h.field.equiv(name))
+                .map(|h| h.value.as_str())
+        };
+        Some(Self {
+            since: header("X-Kindle-Since")?,
+            state: header("X-Kindle-State"),
+            status_only: header("X-Kindle-Status-Only") == Some("1"),
+            had_reply: header("X-Kindle-Reply") == Some("1"),
+        })
+    }
 }
 
 fn thread_response(
@@ -319,10 +343,8 @@ fn thread_response(
     encoded_key: &str,
     path: &str,
     query: &str,
-    polling: Option<&str>,
-    status_only: bool,
+    polling: Option<&Poll>,
     replies_enabled: bool,
-    had_reply: bool,
 ) -> Result<(u16, &'static str, String), u16> {
     let key = percent_encoding::percent_decode_str(encoded_key)
         .decode_utf8()
@@ -330,24 +352,31 @@ fn thread_response(
     let reply = (replies_enabled && key.starts_with("codex-"))
         .then(|| format!("/kindle/reply/{encoded_key}"));
     let page = match polling {
-        Some(old) => source.kindle_poll(&key, old, status_only)?,
+        Some(poll) => source.kindle_poll(&key, poll.since, poll.status_only)?,
         None => source.kindle_messages(&key, query)?,
     };
     let revision = page["revision"].as_str().ok_or(503u16)?;
-    if let Some(old) = polling {
-        if old == revision && had_reply != reply.is_some() {
-            return Ok((
-                200,
-                "application/json",
-                json!({"permissionOnly":true,"reply":reply}).to_string(),
-            ));
-        }
-        if old == revision {
+    let raw = page["state"].as_str().unwrap_or("");
+    let (state, label) = match session_state_label(raw) {
+        Some(label) => (raw, label),
+        None => ("unknown", "状态未知"),
+    };
+    if let Some(poll) = polling {
+        let same_body = poll.since == revision;
+        let state_changed = poll.state.is_some_and(|previous| previous != state);
+        if same_body && !state_changed && poll.had_reply == reply.is_some() {
             return Ok((204, "application/json", String::new()));
         }
-        let mut update = json!({"revision":revision, "turn":page["id"], "reply": reply});
-        if !status_only {
-            update["html"] = thread(&page, path, reply.as_deref()).into();
+        let mut update = json!({"reply":reply, "state":state, "stateLabel":label});
+        if same_body {
+            // Older open tabs understand this flag for updates without a body revision.
+            update["permissionOnly"] = true.into();
+        } else {
+            update["revision"] = revision.into();
+            update["turn"] = page["id"].clone();
+            if !poll.status_only {
+                update["html"] = thread(&page, path, reply.as_deref(), state, label).into();
+            }
         }
         return Ok((200, "application/json", update.to_string()));
     }
@@ -356,7 +385,7 @@ fn thread_response(
         escaped(revision),
         page["tail"],
         escaped(page["id"].as_str().unwrap_or("")),
-        thread(&page, path, reply.as_deref())
+        thread(&page, path, reply.as_deref(), state, label)
     );
     let title = page["title"].as_str().unwrap_or("当前会话");
     Ok((200, HTML, document(title, &content, true)))
@@ -417,11 +446,7 @@ pub(super) fn handle(
     if let Some((mime, data)) = asset {
         return send(req, 200, mime, data.into(), None, None);
     }
-    let polling = req
-        .headers()
-        .iter()
-        .find(|h| h.field.equiv("X-Kindle-Since"))
-        .map(|h| h.value.as_str().to_owned());
+    let polling = Poll::from_request(&req);
     let result = if !pairing.lock().unwrap().allows(cookie) {
         Err(401)
     } else if path == "/kindle" {
@@ -430,25 +455,8 @@ pub(super) fn handle(
         .strip_prefix("/kindle/read/")
         .filter(|s| !s.is_empty() && !s.contains('/'))
     {
-        let status_only = req
-            .headers()
-            .iter()
-            .any(|h| h.field.equiv("X-Kindle-Status-Only") && h.value.as_str() == "1");
-        let had_reply = req
-            .headers()
-            .iter()
-            .any(|h| h.field.equiv("X-Kindle-Reply") && h.value.as_str() == "1");
         let replies_enabled = pairing.lock().unwrap().replies_enabled();
-        thread_response(
-            source,
-            key,
-            path,
-            query,
-            polling.as_deref(),
-            status_only,
-            replies_enabled,
-            had_reply,
-        )
+        thread_response(source, key, path, query, polling.as_ref(), replies_enabled)
     } else {
         Err(404)
     };
