@@ -216,6 +216,7 @@ fn kindle_native_reply_form_sends_once_and_obeys_mac_permission() {
     reader.toggle_replies();
     let thread = get("/kindle/read/codex-demo");
     assert!(thread.contains(r#"href="/kindle/reply/codex-demo">回复</a>"#));
+    assert!(thread.find("id=\"kindle-reply\"").unwrap() < thread.find("rel=\"prev\"").unwrap());
     assert!(!get("/kindle/read/claude-demo").contains("/kindle/reply/"));
     let form = get(path);
     assert!(form.contains("<textarea") && form.contains("测试对话"));

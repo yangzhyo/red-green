@@ -5,7 +5,7 @@ import {runInNewContext} from 'node:vm';
 
 const script = readFileSync(new URL('../ui/kindle.js', import.meta.url), 'utf8');
 
-function openPage(tail, search = '?latest=1') {
+function openPage(tail, search = '?latest=1', navHeight = 0) {
   let scheduled, request, destination;
   const latest = {textContent: '查看最新'};
   const notice = {textContent: ''};
@@ -17,7 +17,7 @@ function openPage(tail, search = '?latest=1') {
   const document = {
     body: {get scrollHeight() { return notice.textContent ? 950 : 900; }},
     documentElement: {scrollHeight: 900},
-    getElementById(id) { return {reader, notice, latest}[id]; },
+    getElementById(id) { return {reader, notice, latest, 'reader-nav': {offsetHeight: navHeight}}[id]; },
   };
   class XHR {
     open(method, path) { assert.equal(method, 'GET'); assert.equal(path, '/kindle/read/demo'); }
@@ -83,6 +83,17 @@ test('阅读长轮时仅查询更新状态，滚至末尾再取整轮正文', ()
   assert.equal(p.reader.innerHTML, '完整的新正文');
 });
 
+test('正文末行滚到固定栏上方时才跟随新内容', () => {
+  const p = openPage(true, '', 40);
+  p.window.pageYOffset = 420;
+  p.respond(200, '版本二');
+  assert.equal(p.statusOnly(), '1');
+  assert.equal(p.reader.innerHTML, '已读正文');
+  p.window.pageYOffset = 440;
+  p.respond(200, '版本二', '新增正文');
+  assert.equal(p.reader.innerHTML, '新增正文');
+});
+
 function touchPage(height = 1500, links = {prev: '/older', next: '/newer'}) {
   const window = {
     innerHeight: 500, pageYOffset: 0,
@@ -96,8 +107,9 @@ function touchPage(height = 1500, links = {prev: '/older', next: '/newer'}) {
       selector === 'nav a[rel="next"][href]' ? 'next' : ''];
     return href ? {href} : null;
   }};
+  const nav = {offsetHeight: 40};
   const location = {href: '/current'};
-  runInNewContext(script, {document: {documentElement: root, getElementById() { return reader; }},
+  runInNewContext(script, {document: {documentElement: root, getElementById(id) { return id === 'reader-nav' ? nav : reader; }},
     window, location});
   const touch = (type, x, y, count = 1, target = root, timeStamp = 100) => {
     const point = {clientX: x, clientY: y};
@@ -115,7 +127,7 @@ test('从列表打开长对话和手动换轮都从页首读起，查看最新�
 test('Kindle 正文点右下移、点左上移，重叠一行且页首尾都停在同一轮', () => {
   for (const height of [400, 1500]) {
     const p = touchPage(height);
-    for (const [x, expected] of [[199, 0], [200, 474], [300, 948], [300, 1000], [350, 1000], [30, 526], [30, 52], [30, 0]]) {
+    for (const [x, expected] of [[199, 0], [200, 434], [300, 868], [300, 1000], [350, 1000], [30, 566], [30, 132], [30, 0]]) {
       p.touch('touchstart', x, 100);
       p.touch('touchend', x, 104, 0);
       assert.equal(p.window.pageYOffset, height < 500 ? 0 : expected);

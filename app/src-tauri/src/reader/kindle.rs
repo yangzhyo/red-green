@@ -286,7 +286,15 @@ fn thread(page: &Value, path: &str, reply: Option<&str>) -> String {
     } else {
         html.push_str("<p>等待会话正文</p>");
     }
-    write!(html, r#"<nav aria-label="阅读导航"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    write!(html, r#"<nav id="reader-nav" aria-label="阅读导航"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    if let Some(url) = reply {
+        write!(
+            html,
+            r#"<a id="kindle-reply" href="{}">回复</a> "#,
+            escaped(url)
+        )
+        .unwrap();
+    }
     for (step, label) in [("prev", "上一屏"), ("next", "下一屏")] {
         let query = form_urlencoded::Serializer::new(String::new())
             .append_pair("id", page["id"].as_str().unwrap_or(""))
@@ -302,14 +310,6 @@ fn thread(page: &Value, path: &str, reply: Option<&str>) -> String {
             )
             .unwrap();
         }
-    }
-    if let Some(url) = reply {
-        write!(
-            html,
-            r#"<a id="kindle-reply" href="{}">回复</a>"#,
-            escaped(url)
-        )
-        .unwrap();
     }
     html.push_str("</nav>");
     html

@@ -5,6 +5,12 @@
   enableReadingGestures();
   if (!window.XMLHttpRequest || !window.JSON) return;
 
+  function readingHeight() {
+    var height = window.innerHeight || document.documentElement.clientHeight;
+    var nav = document.getElementById('reader-nav');
+    return height - (nav ? nav.offsetHeight : 0);
+  }
+
   function enableReadingGestures() {
     var root = document.documentElement;
     if (!root.addEventListener || !window.scrollBy) return;
@@ -53,10 +59,9 @@
         return;
       }
       var width = root.clientWidth || window.innerWidth;
-      var height = window.innerHeight || root.clientHeight;
       var style = window.getComputedStyle && window.getComputedStyle(reader);
       var lineHeight = parseFloat(style && style.lineHeight) || 27;
-      var distance = Math.max(1, height - lineHeight);
+      var distance = Math.max(1, readingHeight() - lineHeight);
       event.preventDefault();
       window.scrollBy(0, origin.x < width / 2 ? -distance : distance);
     }, false);
@@ -70,8 +75,7 @@
   var path = location.pathname;
 
   function atBottom() {
-    var height = window.innerHeight || document.documentElement.clientHeight;
-    return reader.getBoundingClientRect().bottom <= height + 4;
+    return reader.getBoundingClientRect().bottom <= readingHeight() + 4;
   }
 
   function show(text) {
@@ -88,7 +92,7 @@
       link.id = 'kindle-reply';
       link.href = url;
       link.textContent = '回复';
-      nav.appendChild(link);
+      nav.insertBefore(link, nav.querySelector('a[rel="prev"]'));
     }
   }
 
