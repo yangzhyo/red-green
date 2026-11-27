@@ -73,7 +73,7 @@ export async function runReaderBrowser({
       content = template.replace(/<title>.*?<\/title>/, () => '<title>' + escapeHtml(title) + '</title>'
         + '<script>parent.loadedTitles.push({path:location.pathname,title:document.title});window.fetch=parent.fetchReader;</script>')
         .replace(/<body[^>]*>/, () => '<body data-page="' + page + '"' + metadata + errorAttribute + '>');
-    } else if (['/reader.js', '/reader-model.js', '/reader.css', '/skins.js', '/sprites.js'].includes(path)) {
+    } else if (['/reader.js', '/reader-model.js', '/reading-gestures.js', '/reader.css', '/skins.js', '/sprites.js'].includes(path)) {
       type = path.endsWith('.css') ? 'text/css' : 'text/javascript';
       content = await readFile(new URL(path.slice(1), ui));
     } else {

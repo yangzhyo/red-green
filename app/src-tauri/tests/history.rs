@@ -557,3 +557,41 @@ fn history_keeps_routing_ready_pages_but_discards_account_changes() {
     assert_eq!(reader.resume(KEY, || panic!("其他账号的会话")), Err(404));
     assert_eq!(reader.history_messages("codex-invalid", ""), Err(404));
 }
+
+#[test]
+fn kindle_finds_text_before_the_latest_tool_only_turns() {
+    let server = Backend::new(|method, params, _| {
+        assert_eq!(method, "thread/turns/list");
+        let data = if params["cursor"].is_null() {
+            json!({"data":[{"id":"tools","items":[]}],"nextCursor":"older"})
+        } else if params["cursor"] == "older" {
+            json!({"data":[{"id":"answer","items":[{"id":"a","type":"agentMessage","text":"先前答复"}]}], "nextCursor":"first"})
+        } else {
+            assert_eq!(params["cursor"], "first");
+            json!({"data":[{"id":"first","items":[
+                {"id":"q1","type":"userMessage","content":[{"type":"text","text":"提问"}]},
+                {"id":"q2","type":"userMessage","content":[{"type":"text","text":"补充"}]},
+                {"id":"a","type":"agentMessage","text":"答复"}
+            ]}]})
+        };
+        (data, false)
+    });
+    let mut reader = server.reader();
+    SNAPSHOT.with_borrow_mut(|sessions| {
+        sessions.push(json!({"source":"codex","session_id":KEY,"project":"项目"}))
+    });
+    let latest = reader.kindle_messages(KEY, "").unwrap();
+    assert_eq!(latest["messages"][0]["text"], "先前答复");
+    let first = reader
+        .kindle_messages(KEY, "id=answer%2Fa&step=prev")
+        .unwrap();
+    assert_eq!(first["messages"].as_array().unwrap().len(), 3);
+    assert_eq!(first["messages"][0]["text"], "提问");
+    assert_eq!(first["messages"][2]["text"], "答复");
+    assert_eq!(
+        reader
+            .kindle_messages(KEY, "id=first%2Fq1&step=next")
+            .unwrap()["id"],
+        latest["id"]
+    );
+}

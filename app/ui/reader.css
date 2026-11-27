@@ -28,6 +28,8 @@ canvas { display: block; image-rendering: pixelated; }
   display: inline-flex; align-items: center; min-height: 2.75rem; min-width: 2.75rem;
   color: var(--ink); white-space: nowrap;
 }
+.kindle-entry { margin-left: auto; color: inherit; font-size: .875rem; }
+body[data-page="history"] .kindle-entry { display: none; }
 .masthead .nav-link { font-size: .875rem; text-decoration: underline; text-underline-offset: .18em; }
 .nav-link[aria-disabled="true"] { color: #737773; cursor: default; }
 .session-detail { font: .875rem/1.45 var(--mono); }

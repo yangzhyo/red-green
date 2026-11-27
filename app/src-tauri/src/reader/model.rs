@@ -17,13 +17,14 @@ pub struct Message {
     pub role: String,
     pub text: String,
     pub order: i64,
+    pub(super) starts_turn: bool,
     version: u64,
 }
 
 impl Message {
     fn for_reader(&self) -> Value {
         json!({ "id": self.id, "role": self.role, "text": self.text, "order": self.order,
-            "html": super::markdown::render(&self.text) })
+            "startsTurn": self.starts_turn, "html": super::markdown::render(&self.text) })
     }
 }
 
@@ -34,7 +35,41 @@ pub struct Conversation {
     generation: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum View<'a> {
+    Nomad(&'a str),
+    Kindle(&'a super::kindle::Position),
+}
+
+impl View<'_> {
+    pub fn needs_history(self, body: &Conversation) -> bool {
+        match self {
+            Self::Nomad(query) => body.needs_history(query),
+            Self::Kindle(position) => position.needs_older(&body.messages),
+        }
+    }
+
+    pub fn render(self, body: &Conversation, older: bool) -> Result<Value, u16> {
+        match self {
+            Self::Nomad(query) => Ok(body.history_page(query, older)),
+            Self::Kindle(pos) => body.kindle_page(pos, older),
+        }
+    }
+}
+
 impl Conversation {
+    pub(super) fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    pub(super) fn kindle_page(
+        &self,
+        pos: &super::kindle::Position,
+        older: bool,
+    ) -> Result<Value, u16> {
+        super::kindle::page(&self.messages, pos, older, &self.cursor(self.version))
+    }
+
     pub fn new(key: &str, project: &str, source: &str) -> Self {
         Self {
             listing: Listing {
@@ -49,8 +84,13 @@ impl Conversation {
     }
 
     pub fn put(&mut self, id: &str, role: &str, text: String) {
+        self.put_item(id, role, text, role == "user");
+    }
+
+    pub(super) fn put_item(&mut self, id: &str, role: &str, text: String, starts_turn: bool) {
         if let Some(message) = self.messages.iter_mut().find(|m| m.id == id) {
-            if message.text != text {
+            if message.text != text || message.starts_turn != starts_turn {
+                message.starts_turn = starts_turn;
                 self.version += 1;
                 message.text = text;
                 message.version = self.version;
@@ -61,6 +101,7 @@ impl Conversation {
         self.messages.push(Message {
             id: id.into(),
             role: role.into(),
+            starts_turn,
             text,
             order: self.messages.last().map_or(0, |m| m.order + 1),
             version: self.version,
@@ -85,12 +126,13 @@ impl Conversation {
             .is_some_and(|p| p == self.messages.first().map_or(0, |m| m.order))
     }
 
-    pub(super) fn prepend(&mut self, rows: Vec<(String, &'static str, String)>) {
+    pub(super) fn prepend(&mut self, rows: Vec<(String, &'static str, String, bool)>) {
         let start = self.messages.first().map_or(0, |m| m.order) - rows.len() as i64;
         let mut earlier: Vec<_> = rows
             .into_iter()
             .enumerate()
-            .map(|(i, (id, role, text))| Message {
+            .map(|(i, (id, role, text, starts_turn))| Message {
+                starts_turn,
                 id,
                 role: role.into(),
                 text,
@@ -102,16 +144,17 @@ impl Conversation {
         self.messages = earlier;
     }
 
-    pub(super) fn reconcile(&mut self, rows: Vec<(&str, &'static str, &str)>) {
+    pub(super) fn reconcile(&mut self, rows: Vec<(&str, &'static str, &str, bool)>) {
         if self.messages.len() > rows.len()
             || self.messages.iter().zip(&rows).any(|(m, r)| m.id != r.0)
         {
             self.generation = rand::random();
             self.messages.clear();
         }
-        for (i, (id, role, text)) in rows.into_iter().enumerate() {
+        for (i, (id, role, text, starts_turn)) in rows.into_iter().enumerate() {
             if let Some(msg) = self.messages.get_mut(i) {
-                if msg.text != text {
+                if msg.text != text || msg.starts_turn != starts_turn {
+                    msg.starts_turn = starts_turn;
                     self.version += 1;
                     msg.version = self.version;
                     msg.text = text.into();
@@ -119,6 +162,7 @@ impl Conversation {
             } else {
                 self.version += 1;
                 self.messages.push(Message {
+                    starts_turn,
                     id: id.into(),
                     role: role.into(),
                     text: text.into(),
@@ -151,7 +195,11 @@ impl Conversation {
             .and_then(|s| self.position::<i64>(s))
             .map(|order| self.messages.partition_point(|m| m.order < order));
         let end = before.unwrap_or(self.messages.len());
-        let start = end.saturating_sub(PAGE);
+        // Keep the first turn complete even when it crosses the transport page boundary.
+        let mut start = end.saturating_sub(PAGE);
+        while start > 0 && !self.messages[start].starts_turn {
+            start -= 1;
+        }
         let messages: Vec<_> = self.messages[start..end]
             .iter()
             .map(Message::for_reader)
@@ -186,6 +234,26 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nomad_pages_keep_long_turns_complete() {
+        let mut thread = Conversation::new("demo", "示例", "样本");
+        thread.put("first", "user", "第一轮".into());
+        thread.put("question", "user", "第二轮".into());
+        thread.put_item("extra", "user", "补充".into(), false);
+        for n in 0..30 {
+            thread.put(&n.to_string(), "assistant", format!("答复{n}"));
+        }
+        let latest = thread.page("");
+        let messages = latest["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 32);
+        assert_eq!(messages[0]["id"], "question");
+        assert_eq!(messages[0]["startsTurn"], true);
+        assert_eq!(messages[1]["startsTurn"], false);
+        let older = thread.page(&format!("before={}", latest["before"].as_str().unwrap()));
+        assert_eq!(older["messages"][0]["id"], "first");
+        assert!(older["before"].is_null());
+    }
+
     #[test]
     fn history_does_not_consume_live_updates() {
         let mut thread = Conversation::new("demo", "示例", "样本");

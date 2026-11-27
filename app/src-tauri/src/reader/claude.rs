@@ -75,6 +75,7 @@ impl SessionTitle {
 struct Record {
     parent: Option<String>,
     body: Option<(&'static str, String)>,
+    starts_turn: bool,
 }
 
 #[derive(Default)]
@@ -93,13 +94,38 @@ impl Transcript {
         };
         let body = visible_message(row, |_| true);
         let parent = row["parentUuid"].as_str().map(str::to_owned);
-        self.records.insert(id.into(), Record { parent, body });
+        let attachment_prompt = row["type"] == "user"
+            && row["message"]["role"] == "user"
+            && row["isMeta"] != true
+            && row["isCompactSummary"] != true
+            && row["message"]["content"].as_array().is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|b| matches!(b["type"].as_str(), Some("image" | "document")))
+                    && !blocks.iter().any(|b| b["type"] == "tool_result")
+            });
+        let starts_turn = matches!(body, Some(("user", _))) || attachment_prompt;
+        self.records.insert(
+            id.into(),
+            Record {
+                parent,
+                body,
+                starts_turn,
+            },
+        );
         if matches!(row["type"].as_str(), Some("user" | "assistant")) {
             self.leaf = Some(id.into());
         }
     }
     pub fn visible(&self) -> Vec<(&str, &'static str, &str)> {
-        let mut result = Vec::new();
+        self.visible_with_turns()
+            .into_iter()
+            .map(|(id, role, text, _)| (id, role, text))
+            .collect()
+    }
+
+    pub(super) fn visible_with_turns(&self) -> Vec<(&str, &'static str, &str, bool)> {
+        let mut branch = Vec::new();
         let mut seen = HashSet::new();
         let mut next = self.leaf.as_deref();
         while let Some(id) = next {
@@ -109,13 +135,21 @@ impl Transcript {
             let Some(record) = self.records.get(id) else {
                 break;
             };
-            if let Some((role, text)) = &record.body {
-                result.push((id, *role, text.as_str()));
-            }
+            branch.push((id, record));
             next = record.parent.as_deref();
         }
-        result.reverse();
-        result
+        let mut start = false;
+        branch
+            .into_iter()
+            .rev()
+            .filter_map(|(id, record)| {
+                start |= record.starts_turn;
+                record
+                    .body
+                    .as_ref()
+                    .map(|(role, text)| (id, *role, text.as_str(), std::mem::take(&mut start)))
+            })
+            .collect()
     }
 }
 
@@ -170,6 +204,27 @@ mod tests {
             read_entries("s", line.as_bytes(), |r| title.insert(r)).unwrap();
         }
         assert_eq!(title.get(), "<button> 和 <a> 的区别？");
+    }
+
+    #[test]
+    fn attachment_only_prompt_starts_a_new_readable_turn() {
+        let mut transcript = Transcript::default();
+        for row in [
+            json!({"type":"user","uuid":"q","message":{"role":"user","content":"第一问"}}),
+            json!({"type":"assistant","uuid":"a","parentUuid":"q","message":{"role":"assistant","content":"第一答"}}),
+            json!({"type":"user","uuid":"image","parentUuid":"a","message":{"role":"user","content":[{"type":"image"}]}}),
+            json!({"type":"assistant","uuid":"b","parentUuid":"image","message":{"role":"assistant","content":"图片说明"}}),
+        ] {
+            transcript.insert(&row);
+        }
+        assert_eq!(
+            transcript.visible_with_turns(),
+            vec![
+                ("q", "user", "第一问", true),
+                ("a", "assistant", "第一答", false),
+                ("b", "assistant", "图片说明", true)
+            ]
+        );
     }
 
     #[test]
