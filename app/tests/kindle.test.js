@@ -83,13 +83,15 @@ test('阅读长轮时仅查询更新状态，滚至末尾再取整轮正文', ()
   assert.equal(p.reader.innerHTML, '完整的新正文');
 });
 
-function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchstart: null}) {
+function touchPage(height = 1500) {
+  const window = {
+    innerHeight: 500, pageYOffset: 0,
+    getComputedStyle() { return {lineHeight: '26px'}; },
+    scrollBy(x, dy) { this.pageYOffset = Math.max(0, Math.min(height - this.innerHeight, this.pageYOffset + dy)); },
+  };
   const events = {};
   const root = {className: '', clientWidth: 400, addEventListener(type, callback) { events[type] = callback; }};
-  const reader = {querySelector(selector) {
-    const href = links[selector.includes('prev') ? 'prev' : 'next'];
-    return href ? {href} : null;
-  }};
+  const reader = {querySelector() { return {href: '/another-turn'}; }};
   const location = {href: '/current'};
   runInNewContext(script, {document: {documentElement: root, getElementById() { return reader; }},
     window, location});
@@ -97,16 +99,8 @@ function touchPage(links = {prev: '/older', next: '/newer'}, window = {ontouchst
     const point = {clientX: x, clientY: y};
     events[type]?.({target, timeStamp, touches: Array(count).fill(point), changedTouches: [point], preventDefault() {}});
   };
-  return {root, location, touch};
+  return {root, location, touch, window};
 }
-
-test('Paperwhite 未声明触摸标记也能翻页，轻触不会切换导航样式', () => {
-  const p = touchPage(undefined, {});
-  p.touch('touchstart', 90, 100);
-  p.touch('touchend', 92, 102, 0);
-  assert.equal(p.location.href, '/older');
-  assert.equal(p.root.className, '');
-});
 
 test('从列表打开长对话和手动换轮都从页首读起，查看最新跳到末尾', () => {
   assert.equal(openPage(true, '').window.pageYOffset, 0);
@@ -114,26 +108,31 @@ test('从列表打开长对话和手动换轮都从页首读起，查看最新�
   assert.equal(openPage(true, '?latest=1').window.pageYOffset, 400);
 });
 
-test('Kindle 左半屏点按回看，右半屏点按向后读，首尾没有相邻页就停留', () => {
-  for (const [x, links, url] of [[199, {prev:'/older'}, '/older'], [200, {next:'/newer'}, '/newer'],
-    [40, {next:'/newer'}, '/current'], [360, {prev:'/older'}, '/current']]) {
-    const p = touchPage(links);
-    p.touch('touchstart', x, 100);
-    p.touch('touchend', x, 104, 0);
-    assert.equal(p.location.href, url);
+test('Kindle 正文点右下移、点左上移，重叠一行且页首尾都停在同一轮', () => {
+  for (const height of [400, 1500]) {
+    const p = touchPage(height);
+    for (const [x, expected] of [[199, 0], [200, 474], [300, 948], [300, 1000], [350, 1000], [30, 526], [30, 52], [30, 0]]) {
+      p.touch('touchstart', x, 100);
+      p.touch('touchend', x, 104, 0);
+      assert.equal(p.window.pageYOffset, height < 500 ? 0 : expected);
+      assert.equal(p.location.href, '/current');
+    }
   }
 });
 
 test('Kindle 拖动、长按、链接、多指和取消触摸都不翻页', () => {
-  for (const kind of ['horizontal', 'vertical', 'drag-back', 'long', 'link', 'multi', 'cancel']) {
+  for (const kind of ['horizontal', 'vertical', 'drag-back', 'long', 'link', 'nav', 'multi', 'cancel']) {
     const p = touchPage();
-    const target = kind === 'link' ? {nodeName: 'SPAN', parentNode: {nodeName: 'A', parentNode: p.root}} : p.root;
+    p.window.pageYOffset = 250;
+    const target = kind === 'link' || kind === 'nav'
+      ? {nodeName: 'SPAN', parentNode: {nodeName: kind === 'link' ? 'A' : 'NAV', parentNode: p.root}} : p.root;
     p.touch('touchstart', 100, 100, 1, target);
     if (kind === 'multi') p.touch('touchstart', 105, 105, 2);
     if (kind === 'cancel') p.touch('touchcancel', 100, 100, 0);
     if (kind === 'drag-back') p.touch('touchmove', 200, 110);
     p.touch('touchend', kind === 'horizontal' ? 160 : 100, kind === 'vertical' ? 160 : 100, 0, target,
       kind === 'long' ? 1100 : 200);
+    assert.equal(p.window.pageYOffset, 250, kind);
     assert.equal(p.location.href, '/current', kind);
   }
 });

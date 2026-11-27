@@ -2,12 +2,12 @@
 (function () {
   var reader = document.getElementById('reader');
   if (!reader) return;
-  enableTapPaging();
+  enableTapScroll();
   if (!window.XMLHttpRequest || !window.JSON) return;
 
-  function enableTapPaging() {
+  function enableTapScroll() {
     var root = document.documentElement;
-    if (!root.addEventListener || !reader.querySelector) return;
+    if (!root.addEventListener || !window.scrollBy) return;
     var start = null;
     root.addEventListener('touchstart', function (event) {
       start = null;
@@ -33,11 +33,12 @@
       if (!origin || event.touches.length || event.changedTouches.length !== 1) return;
       if (event.timeStamp - origin.time >= 500 || moved(origin, event.changedTouches[0])) return;
       var width = root.clientWidth || window.innerWidth;
-      var link = reader.querySelector(origin.x < width / 2 ? 'nav a[rel="prev"][href]' : 'nav a[rel="next"][href]');
-      if (link) {
-        event.preventDefault();
-        location.href = link.href;
-      }
+      var height = window.innerHeight || root.clientHeight;
+      var style = window.getComputedStyle && window.getComputedStyle(reader);
+      var lineHeight = parseFloat(style && style.lineHeight) || 27;
+      var distance = Math.max(1, height - lineHeight);
+      event.preventDefault();
+      window.scrollBy(0, origin.x < width / 2 ? -distance : distance);
     }, false);
   }
 
