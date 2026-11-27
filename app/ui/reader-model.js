@@ -17,12 +17,20 @@ export class ReaderState {
     this.manualList = true;
     this.open(null);
   }
+  turns() {
+    const turns = [];
+    for (const message of [...this.messages.values()].sort((a, b) => a.order - b.order)) {
+      if (!turns.length || message.startsTurn) turns.push([]);
+      turns[turns.length - 1].push(message);
+    }
+    return turns;
+  }
   changes(generation, messages) {
     if (generation !== this.generation) return [];
     const changed = [];
     for (const message of messages) {
       const previous = this.messages.get(message.id);
-      if (!previous || previous.text !== message.text || previous.role !== message.role || previous.order !== message.order) {
+      if (!previous || previous.text !== message.text || previous.role !== message.role || previous.order !== message.order || previous.startsTurn !== message.startsTurn) {
         this.messages.set(message.id, message);
         changed.push(message);
       }

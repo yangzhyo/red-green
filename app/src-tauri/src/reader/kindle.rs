@@ -404,7 +404,14 @@ pub(super) fn handle(
     }
     let asset = match path {
         "/kindle/reader.css" => Some(("text/css", include_str!("../../../ui/kindle.css"))),
-        "/kindle/update.js" => Some(("text/javascript", include_str!("../../../ui/kindle.js"))),
+        "/kindle/update.js" => Some((
+            "text/javascript",
+            concat!(
+                include_str!("../../../ui/reading-gestures.js"),
+                "\n",
+                include_str!("../../../ui/kindle.js")
+            ),
+        )),
         _ => None,
     };
     if let Some((mime, data)) = asset {

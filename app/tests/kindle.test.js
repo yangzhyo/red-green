@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 
-const script = readFileSync(new URL('../ui/kindle.js', import.meta.url), 'utf8');
+const script = ['reading-gestures.js', 'kindle.js'].map(file => readFileSync(new URL('../ui/' + file, import.meta.url), 'utf8')).join('\n');
 
 function openPage(tail, search = '?latest=1', navHeight = 0) {
   let scheduled, request, destination;

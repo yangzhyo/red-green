@@ -17,7 +17,9 @@ let following = true;
 let busy = false;
 let queued = false;
 let timer;
-let wantEarlier = false;
+let wantEarlier = null;
+let turns = [];
+let turnIndex = -1;
 let stopped = false;
 let interrupted = false;
 const homeNotice = takeTabValue('notice') || '';
@@ -135,16 +137,42 @@ function status(text) {
 
 function updateNavigation() {
   if (footer.hidden || view.clientHeight === 0) return;
-  const end = view.scrollHeight - view.clientHeight;
-  const atEnd = end - view.scrollTop < 2;
-  const step = view.clientHeight * 0.9;
-  const pages = 1 + Math.ceil(Math.max(0, end - 1) / step);
-  const page = atEnd ? pages : Math.min(pages, 1 + Math.floor((view.scrollTop + 1) / step));
-  const position = nodes.size ? (before ? '本段 ' : '') + page + ' / ' + pages : '';
+  const position = turns.length ? (before ? '本段 ' : '') + (turnIndex + 1) + ' / ' + turns.length : '';
   if (el('position').textContent !== position) el('position').textContent = position;
-  const atStart = view.scrollTop <= 1 && (!before || stopped);
+  const atStart = turnIndex <= 0 && (!before || stopped);
+  const atEnd = turnIndex + 1 >= turns.length;
   if (el('prev').disabled !== atStart) el('prev').disabled = atStart;
   if (el('next').disabled !== atEnd) el('next').disabled = atEnd;
+}
+
+function atLatestEnd() {
+  return turnIndex === turns.length - 1 && view.scrollHeight - view.scrollTop - view.clientHeight < 3;
+}
+
+function showTurn(index, changes = []) {
+  const turn = turns[index] || [];
+  const visible = new Set(turn.map(message => message.id));
+  for (const [id, article] of nodes) {
+    if (!visible.has(id)) {
+      article.remove();
+      nodes.delete(id);
+    }
+  }
+  const changed = new Set(changes.map(message => message.id));
+  for (const message of turn) {
+    if (!nodes.has(message.id) || changed.has(message.id)) render(message);
+  }
+  turnIndex = index;
+  updateNavigation();
+}
+
+function goToTurn(index) {
+  if (index < 0 || index >= turns.length) return;
+  wantEarlier = null;
+  showTurn(index);
+  view.scrollTop = 0;
+  following = atLatestEnd();
+  if (following) el('latest').hidden = true;
 }
 
 async function request(path, options) {
@@ -165,7 +193,9 @@ function display(entry, {fromHistory = false, readOnly = fromHistory && !!entry}
   sessionRows.clear();
   nodes.clear();
   before = since = null;
-  wantEarlier = false;
+  wantEarlier = null;
+  turns = [];
+  turnIndex = -1;
   following = true;
   stopped = false;
   interrupted = false;
@@ -451,8 +481,8 @@ async function tick() {
     if (generation === state.generation) showList(entries);
     return;
   }
-  const earlier = wantEarlier && before;
-  wantEarlier = false;
+  const earlier = before && wantEarlier;
+  wantEarlier = null;
   const query = earlier ? '?before=' + encodeURIComponent(before) : since ? '?since=' + encodeURIComponent(since) : '';
   const key = encodeURIComponent(state.key);
   const endpoint = (readingHistory ? '/history/' : '/sessions/') + key + '/messages';
@@ -507,7 +537,7 @@ async function showMessages(page, earlier, endpoint, generation) {
     composer.hidden = true;
   }
   updateReply();
-  const saved = !following && (page.reset || page.messages.length) ? anchor() : null;
+  let saved = !following && (page.reset || page.messages.length) ? anchor() : null;
   if (page.reset) {
     // Rebuild the visible history before replacing the DOM when the source resets its cursor.
     const cursors = new Set();
@@ -518,6 +548,7 @@ async function showMessages(page, earlier, endpoint, generation) {
       if (generation !== state.generation) return;
       page.before = older.before;
       page.messages = older.messages.concat(page.messages);
+      saved = following ? null : anchor();
     }
     state.messages.clear();
     nodes.clear();
@@ -530,15 +561,23 @@ async function showMessages(page, earlier, endpoint, generation) {
   else if (readingHistory && resumeNotice) status(resumeNotice);
   else if (!state.messages.size) status(readingHistory ? '这段历史会话暂无正文' : '等待第一条消息');
   else status(readingHistory && !resumeTicket ? needsReplyPermission : '');
-  if (changes.length) {
-    changes.forEach(render);
-    if (following) view.scrollTop = view.scrollHeight;
-    else {
-      restore(saved);
-      if (!earlier) el('latest').hidden = false;
-    }
+  if (changes.length || page.reset) {
+    const oldId = turns[turnIndex]?.[0].id;
+    const wasFollowing = following;
+    turns = state.turns();
+    const anchorId = saved?.id ?? oldId;
+    const previous = turns.findIndex(turn => turn.some(message => message.id === anchorId));
+    const tail = turns.length - 1;
+    let index = wasFollowing || previous < 0 ? tail : previous;
+    if (!wasFollowing && earlier && earlier === oldId && previous > 0) index = previous - 1;
+    showTurn(index, changes);
+    if (oldId !== turns[index]?.[0].id) view.scrollTop = 0;
+    else if (wasFollowing) view.scrollTop = view.scrollHeight;
+    else restore(saved);
+    following = atLatestEnd();
+    if (following) el('latest').hidden = true;
+    else if (!earlier && oldId != null && !wasFollowing) el('latest').hidden = false;
   }
-  if (earlier && saved) view.scrollTop -= view.clientHeight * 0.9;
   interrupted = false;
 }
 
@@ -780,17 +819,34 @@ el('pair').onsubmit = async event => {
   }
 };
 el('prev').onclick = () => {
-  following = false;
-  if (view.scrollTop <= 1 && before) { wantEarlier = true; poll(); }
-  else view.scrollTop -= view.clientHeight * 0.9;
+  if (turnIndex > 0) goToTurn(turnIndex - 1);
+  else if (before && !stopped) {
+    following = false;
+    wantEarlier = turns[turnIndex]?.[0].id;
+    poll();
+  }
 };
-el('next').onclick = () => { view.scrollTop += view.clientHeight * 0.9; };
-el('latest').onclick = () => { following = true; el('latest').hidden = true; view.scrollTop = view.scrollHeight; };
+el('next').onclick = () => goToTurn(turnIndex + 1);
+el('latest').onclick = () => {
+  goToTurn(turns.length - 1);
+  view.scrollTop = view.scrollHeight;
+  following = true;
+  el('latest').hidden = true;
+};
 view.onscroll = () => {
-  following = view.scrollHeight - view.scrollTop - view.clientHeight < 3;
+  if (!currentEntry) return;
+  following = atLatestEnd();
   if (following) el('latest').hidden = true;
-  updateNavigation();
 };
+
+if (threadDocument) {
+  window.enableReadingGestures(view, x => {
+    const bounds = view.getBoundingClientRect();
+    const line = parseFloat(getComputedStyle(view.querySelector('.markdown') || view).lineHeight);
+    const distance = Math.max(1, view.clientHeight - line);
+    view.scrollTop += x < bounds.left + bounds.width / 2 ? -distance : distance;
+  }, next => el(next ? 'next' : 'prev').click());
+}
 window.addEventListener('resize', () => {
   if (!composer.hidden && following) view.scrollTop = view.scrollHeight;
   updateNavigation();

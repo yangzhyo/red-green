@@ -10,7 +10,7 @@ const rows = Array.from({length: 24}, (_, i) => ({
 function setup({current, rows, paired}, sleep) {
   const mac = {generation: 'one', granted: true, paired, live: false, writes: [], reads: [], state: 'idle', fail: 0, sessions: [current]};
   const response = data => ({ok: true, json: async () => structuredClone(data)});
-  const body = (id, text) => ({id, order: Number(id), role: 'assistant', text, html: '<p><strong>' + text + '</strong></p>'});
+  const body = (id, text) => ({id, order: Number(id), startsTurn: true, role: 'assistant', text, html: '<p><strong>' + text + '</strong></p>'});
   mac.fetch = async (url, opts) => {
     if (url === '/pair' && opts.method === 'POST') {
       mac.writes.push({url, payload: JSON.parse(opts.body)});

@@ -2,69 +2,22 @@
 (function () {
   var reader = document.getElementById('reader');
   if (!reader) return;
-  enableReadingGestures();
+  if (window.scrollBy) window.enableReadingGestures(document.documentElement, function (x) {
+    var width = document.documentElement.clientWidth || window.innerWidth;
+    var style = window.getComputedStyle && window.getComputedStyle(reader);
+    var lineHeight = parseFloat(style && style.lineHeight) || 27;
+    var distance = Math.max(1, readingHeight() - lineHeight);
+    window.scrollBy(0, x < width / 2 ? -distance : distance);
+  }, function (next) {
+    var link = reader.querySelector(next ? 'nav a[rel="next"][href]' : 'nav a[rel="prev"][href]');
+    if (link) location.href = link.href;
+  });
   if (!window.XMLHttpRequest || !window.JSON) return;
 
   function readingHeight() {
     var height = window.innerHeight || document.documentElement.clientHeight;
     var nav = document.getElementById('reader-nav');
     return height - (nav ? nav.offsetHeight : 0);
-  }
-
-  function enableReadingGestures() {
-    var root = document.documentElement;
-    if (!root.addEventListener || !window.scrollBy) return;
-    var start = null;
-    root.addEventListener('touchstart', function (event) {
-      start = null;
-      if (event.touches.length !== 1) return;
-      for (var node = event.target; node && node !== root; node = node.parentNode) {
-        if (/^(NAV|A|INPUT|BUTTON|SELECT|TEXTAREA)$/i.test(node.nodeName)) return;
-      }
-      start = {x: event.touches[0].clientX, y: event.touches[0].clientY, time: event.timeStamp, dragged: false};
-    }, false);
-
-    function horizontal(dx, dy) {
-      return Math.abs(dx) > 1.5 * Math.abs(dy);
-    }
-
-    root.addEventListener('touchmove', function (event) {
-      if (!start) return;
-      if (event.touches.length !== 1) { start = null; return; }
-      var dx = event.touches[0].clientX - start.x;
-      var dy = event.touches[0].clientY - start.y;
-      if (Math.abs(dx) <= 12 && Math.abs(dy) <= 12) return;
-      if (!horizontal(dx, dy) || (!start.dragged && event.timeStamp - start.time >= 500)) {
-        start = null;
-        return;
-      }
-      start.dragged = true;
-      event.preventDefault();
-    }, {passive: false});
-
-    root.addEventListener('touchcancel', function () { start = null; }, false);
-    root.addEventListener('touchend', function (event) {
-      var origin = start;
-      start = null;
-      if (!origin || event.touches.length || event.changedTouches.length !== 1) return;
-      if (!origin.dragged && event.timeStamp - origin.time >= 500) return;
-      var dx = event.changedTouches[0].clientX - origin.x;
-      var dy = event.changedTouches[0].clientY - origin.y;
-      if (origin.dragged || Math.abs(dx) > 12 || Math.abs(dy) > 12) {
-        if (Math.abs(dx) >= 48 && horizontal(dx, dy) && reader.querySelector) {
-          event.preventDefault();
-          var link = reader.querySelector(dx < 0 ? 'nav a[rel="next"][href]' : 'nav a[rel="prev"][href]');
-          if (link) location.href = link.href;
-        }
-        return;
-      }
-      var width = root.clientWidth || window.innerWidth;
-      var style = window.getComputedStyle && window.getComputedStyle(reader);
-      var lineHeight = parseFloat(style && style.lineHeight) || 27;
-      var distance = Math.max(1, readingHeight() - lineHeight);
-      event.preventDefault();
-      window.scrollBy(0, origin.x < width / 2 ? -distance : distance);
-    }, false);
   }
 
   var notice = document.getElementById('notice');
