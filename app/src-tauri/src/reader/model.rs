@@ -34,7 +34,37 @@ pub struct Conversation {
     generation: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum View<'a> {
+    Nomad(&'a str),
+    Kindle(&'a super::kindle::Position),
+}
+
+impl View<'_> {
+    pub fn needs_history(self, body: &Conversation) -> bool {
+        match self {
+            Self::Nomad(query) => body.needs_history(query),
+            Self::Kindle(position) => position.needs_older(&body.messages),
+        }
+    }
+
+    pub fn render(self, body: &Conversation, older: bool) -> Result<Value, u16> {
+        match self {
+            Self::Nomad(query) => Ok(body.history_page(query, older)),
+            Self::Kindle(pos) => body.kindle_page(pos, older),
+        }
+    }
+}
+
 impl Conversation {
+    pub(super) fn kindle_page(
+        &self,
+        pos: &super::kindle::Position,
+        older: bool,
+    ) -> Result<Value, u16> {
+        super::kindle::page(&self.messages, pos, older, &self.cursor(self.version))
+    }
+
     pub fn new(key: &str, project: &str, source: &str) -> Self {
         Self {
             listing: Listing {

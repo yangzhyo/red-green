@@ -1,0 +1,8 @@
+body { margin: .5em .65em; background: white; color: black; font: 112.5%/1.5 sans-serif; }
+h1 { margin: .25em 0; font-size: 1.15em; }
+pre { margin: .45em 0; font: inherit; white-space: pre-wrap; word-wrap: break-word; }
+a, button, input { color: black; font: inherit; }
+a { display: inline-block; padding: .35em .1em; }
+nav a, button { padding: .4em .75em; border: 1px solid black; }
+.row { border-bottom: 1px solid black; margin: .25em 0; padding-bottom: .3em; word-wrap: break-word; }
+p { margin: .5em 0; }

@@ -235,3 +235,14 @@ fn revoking_pairing_during_a_metadata_read_discards_the_result() {
     assert!(body.contains(r#"data-reader-error="401""#));
     assert!(!body.contains("data-entry=") && !body.contains("草案"));
 }
+
+#[test]
+fn kindle_entry_works_from_static_html_before_scripts_start() {
+    let reader = Reader::start("127.0.0.1:0".parse().unwrap(), Documents).unwrap();
+    let get = |path| request(reader.address(), path, "", "text/html", "");
+    assert!(html(&get("/")).contains(r#"href="/kindle""#));
+    let response = get("/kindle");
+    let body = html(&response);
+    assert!(body.contains(r#"action="/kindle/pair""#) && body.contains(r#"name="code""#));
+    assert!(!body.contains("草案"));
+}

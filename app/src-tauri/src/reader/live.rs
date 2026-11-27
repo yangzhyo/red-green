@@ -1,7 +1,9 @@
 use super::{
     claude::{read_entries, SessionTitle, Transcript},
     codex::visible_items,
-    history, Conversation, Source,
+    history, kindle,
+    model::View,
+    Conversation, Source,
 };
 use crate::codex::{model::thread_title, rpc::Rpc};
 use serde_json::{json, Value};
@@ -162,12 +164,12 @@ impl CodexHistory {
         &mut self,
         socket: &Path,
         id: &str,
-        query: &str,
+        view: View,
         body: &mut Conversation,
     ) -> Result<Value, u16> {
         let mut cursor = None;
         let mut seen = HashSet::new();
-        if body.needs_history(query) && self.older.is_some() {
+        if view.needs_history(body) && self.older.is_some() {
             cursor = self.older.clone();
             while let Some(token) = cursor.as_deref() {
                 if !seen.insert(token.to_owned()) {
@@ -227,7 +229,7 @@ impl CodexHistory {
                 body.put(&id, role, text);
             }
         }
-        Ok(body.history_page(query, self.older.is_some()))
+        view.render(body, self.older.is_some())
     }
 }
 
@@ -369,9 +371,10 @@ impl Source for LiveSource {
         };
         let rpc = stored.history.rpc.as_mut().ok_or(UNAVAILABLE)?;
         let thread = history::find(rpc, id, fresh)?;
-        let mut page = stored
-            .history
-            .refresh(&self.socket, id, query, &mut stored.body)?;
+        let mut page =
+            stored
+                .history
+                .refresh(&self.socket, id, View::Nomad(query), &mut stored.body)?;
         let terminal = self.ready_terminal(key);
         page["live"] = terminal.is_some().into();
         page["title"] = thread_title(&thread).into();
@@ -494,6 +497,16 @@ impl Source for LiveSource {
             .collect::<Vec<_>>())
     }
     fn messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
+        self.current_messages(key, View::Nomad(query))
+    }
+
+    fn kindle_messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
+        self.current_messages(key, View::Kindle(&kindle::Position::parse(query)?))
+    }
+}
+
+impl LiveSource {
+    fn current_messages(&mut self, key: &str, view: View) -> Result<Value, u16> {
         let Some(entry) = self.directory().into_iter().find(|row| row.key == key) else {
             if key
                 .strip_prefix("claude-")
@@ -555,13 +568,13 @@ impl Source for LiveSource {
                 if !matches!(change, FileChange::Unchanged) {
                     selection.body.reconcile(file.data.visible());
                 }
-                Ok(selection.body.page(query))
+                view.render(&selection.body, false)
             }
             History::Codex(history) => {
                 let result = history.refresh(
                     &self.socket,
                     key.strip_prefix("codex-").ok_or(UNAVAILABLE)?,
-                    query,
+                    view,
                     &mut selection.body,
                 );
                 if matches!(result, Err(409 | 410)) {

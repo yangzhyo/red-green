@@ -11,6 +11,7 @@ use std::{
 #[derive(Default)]
 pub(super) struct Pairing {
     reply_tickets: Option<std::collections::VecDeque<(String, String)>>,
+    forms: std::collections::VecDeque<(String, Instant)>,
     challenge: Option<(String, Instant, u8)>,
     fingerprint: Option<String>,
     store: Option<PathBuf>,
@@ -31,6 +32,7 @@ impl Pairing {
     }
 
     pub fn revoke(&mut self) -> io::Result<()> {
+        self.forms.clear();
         self.challenge = None;
         self.fingerprint = None;
         self.reply_tickets = None;
@@ -67,6 +69,26 @@ impl Pairing {
         self.fingerprint = Some(digest);
         Ok(())
     }
+    pub fn new_form(&mut self) -> String {
+        let nonce = format!("{:032x}", rand::random::<u128>());
+        if self.forms.len() >= 32 {
+            self.forms.pop_front();
+        }
+        self.forms
+            .push_back((nonce.clone(), Instant::now() + Duration::from_secs(600)));
+        nonce
+    }
+
+    pub fn consume_form(&mut self, nonce: &str) -> bool {
+        self.forms
+            .retain(|(_, deadline)| *deadline > Instant::now());
+        let Some(index) = self.forms.iter().position(|(value, _)| value == nonce) else {
+            return false;
+        };
+        self.forms.remove(index);
+        true
+    }
+
     pub fn issue(&mut self) -> String {
         self.reply_tickets = None;
         let code = format!("{:06}", rand::rng().random_range(0..1_000_000));

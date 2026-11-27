@@ -1,4 +1,4 @@
-use super::{pairing::Pairing, Library};
+use super::{kindle, pairing::Pairing, Library};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -20,6 +20,9 @@ pub trait Source: Send + 'static {
             .and_then(|rows| rows.iter_mut().find(|entry| entry["key"] == key))
             .map(Value::take)
             .ok_or(404)
+    }
+    fn kindle_messages(&mut self, _key: &str, _query: &str) -> Result<Value, u16> {
+        Err(501)
     }
     fn history_entry(&mut self, _key: &str) -> Result<Value, u16> {
         Err(404)
@@ -54,6 +57,14 @@ pub trait Source: Send + 'static {
 impl Source for Arc<Mutex<Library>> {
     fn sessions(&mut self) -> serde_json::Value {
         self.lock().unwrap().list()
+    }
+    fn kindle_messages(&mut self, key: &str, query: &str) -> Result<Value, u16> {
+        let pos = kindle::Position::parse(query)?;
+        let lib = self.lock().unwrap();
+        lib.sessions
+            .get(key)
+            .ok_or(404u16)?
+            .kindle_page(&pos, false)
     }
     fn messages(&mut self, key: &str, query: &str) -> Result<serde_json::Value, u16> {
         self.lock().unwrap().messages(key, query).ok_or(404)
@@ -131,6 +142,21 @@ fn header(name: &str, value: &str) -> Header {
     Header::from_bytes(name, value).expect("valid response header")
 }
 fn reply(request: Request, status: u16, mime: &str, body: String, cookie: Option<String>) {
+    send(request, status, mime, body, cookie, None);
+}
+
+pub(super) fn device_cookie(token: &str) -> String {
+    format!("nomad_reader={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000")
+}
+
+pub(super) fn send(
+    request: Request,
+    status: u16,
+    mime: &str,
+    body: String,
+    cookie: Option<String>,
+    location: Option<&str>,
+) {
     let mut response = Response::from_string(body)
         .with_status_code(StatusCode(status))
         .with_header(header("Content-Type", mime))
@@ -142,6 +168,9 @@ fn reply(request: Request, status: u16, mime: &str, body: String, cookie: Option
         ));
     if let Some(value) = cookie {
         response.add_header(header("Set-Cookie", &value));
+    }
+    if let Some(path) = location {
+        response.add_header(header("Location", path));
     }
     let _ = request.respond(response);
 }
@@ -214,7 +243,7 @@ impl DocumentEntry {
     }
 }
 
-fn escaped(text: &str) -> String {
+pub(super) fn escaped(text: &str) -> String {
     let mut html = String::new();
     pulldown_cmark_escape::escape_html(&mut html, text).expect("writing to a string");
     html
@@ -343,15 +372,9 @@ fn handle(
             Ok(None)
         };
         return match token {
-            Ok(Some(Some(token))) => reply(
-                request,
-                200,
-                JSON,
-                "{}".into(),
-                Some(format!(
-                    "nomad_reader={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000"
-                )),
-            ),
+            Ok(Some(Some(token))) => {
+                reply(request, 200, JSON, "{}".into(), Some(device_cookie(&token)))
+            }
             Err(_) => reply(request, 503, JSON, "{}".into(), None),
             _ => reply(request, 403, JSON, "{}".into(), None),
         };
@@ -363,6 +386,9 @@ fn handle(
         .map(|h| h.value.as_str())
         .unwrap_or("")
         .to_owned();
+    if path == "/kindle" || path.starts_with("/kindle/") {
+        return kindle::handle(request, path, query, pairing, &cookie, source);
+    }
     if request.method() == &Method::Get {
         if let Some(key) = route_key(path, "/read/current/", "") {
             return thread_document(request, pairing, &cookie, source, key, false);

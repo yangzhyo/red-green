@@ -17,6 +17,7 @@ toml_edit = "0.25"
 serialport = { version = "4.10.1", default-features = false }
 tiny_http = "0.12"
 percent-encoding = "2"
+form_urlencoded = "1"
 rand = "0.9"
 sha2 = "0.10"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

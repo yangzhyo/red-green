@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 mod history;
+mod kindle;
 mod markdown;
 mod model;
 mod pairing;
