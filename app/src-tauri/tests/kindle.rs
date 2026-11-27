@@ -172,6 +172,9 @@ fn paperwhite_html_form_paging_updates_and_revocation() {
         .as_str()
         .unwrap()
         .contains("最后一行<strong>更新</strong>&lt;追加&gt;"));
+    // An already open tab inserts the reply link directly before nav's previous-page link.
+    let refreshed = dom_query::Document::fragment(json["html"].as_str().unwrap());
+    assert_eq!(refreshed.select("#reader-nav > a[rel=prev]").length(), 1);
     reader.revoke().unwrap();
     assert!(send(&reader, "/sessions", nomad, "", "").starts_with("HTTP/1.1 401"));
     assert!(get(path).contains("六位配对码") && !get(path).contains("最后一行"));

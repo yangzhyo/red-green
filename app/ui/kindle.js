@@ -53,8 +53,7 @@
       link.id = 'kindle-reply';
       link.href = url;
       link.textContent = '回复';
-      var previous = nav.querySelector('a[rel="prev"]');
-      previous.parentNode.insertBefore(link, previous);
+      nav.insertBefore(link, nav.querySelector('a[rel="prev"]'));
     }
   }
 

@@ -285,7 +285,7 @@ fn thread(page: &Value, path: &str, reply: Option<&str>, state: &str, label: &st
     } else {
         html.push_str("<p>等待会话正文</p>");
     }
-    write!(html, r#"<nav id="reader-nav" aria-label="阅读导航"><span id="session-state" role="status" data-state="{state}">{label}</span><span class="actions"><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
+    write!(html, r#"<nav id="reader-nav" aria-label="阅读导航"><span id="session-state" role="status" data-state="{state}">{label}</span><a id="latest" href="{path}?latest=1">查看最新</a> <a href="/kindle">返回列表</a> "#).unwrap();
     if let Some(url) = reply {
         write!(
             html,
@@ -310,7 +310,7 @@ fn thread(page: &Value, path: &str, reply: Option<&str>, state: &str, label: &st
             .unwrap();
         }
     }
-    html.push_str("</span></nav>");
+    html.push_str("</nav>");
     html
 }
 
