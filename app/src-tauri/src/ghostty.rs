@@ -227,9 +227,10 @@ pub fn resolve_id(tty: &str) -> Option<String> {
     reg.id_by_tty.get(tty).cloned()
 }
 
-/// 通过 Ghostty 1.3+ AppleScript 原生括号粘贴并发送回车，不抢焦点、不改剪贴板。
+/// 通过 Ghostty 1.3+ AppleScript 原生括号粘贴并发送回车，不抢焦点、不改剪贴板，且绝不唤醒已关闭的 Ghostty。
 pub fn send_input(surface_id: &str, text: &str) -> Result<(), String> {
     const SCRIPT: &str = r#"on run argv
+    if not (application "Ghostty" is running) then error "Ghostty not running"
     set surfaceId to item 1 of argv
     set msg to item 2 of argv
     tell application "Ghostty"
@@ -240,7 +241,7 @@ pub fn send_input(surface_id: &str, text: &str) -> Result<(), String> {
     end tell
 end run"#;
     let out = std::process::Command::new("/usr/bin/osascript")
-        .args(["-e", SCRIPT, surface_id, text])
+        .args(["-e", SCRIPT, "--", surface_id, text])
         .output()
         .map_err(|e| e.to_string())?;
     if out.status.success() {

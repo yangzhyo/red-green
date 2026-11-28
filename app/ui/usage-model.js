@@ -100,10 +100,13 @@ globalThis.USAGE = (() => {
         if (!paused) since = now;
       },
       tick(now) {
-        if (paused || groups.length < 2 || now - since < intervalMs) return false;
-        const idx = groups.findIndex((g) => g.id === view?.id);
-        view = groups[(idx + 1) % groups.length];
-        since = now;
+        if (paused || groups.length < 2) return false;
+        if (now < since) {
+          since = now;
+          return false;
+        }
+        if (now - since < intervalMs) return false;
+        this.next(now);
         return true;
       },
     };

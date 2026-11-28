@@ -217,4 +217,9 @@ test("多额度组自动轮播按 8 秒切换，悬停停在当前组，手动�
   assert.equal(r.tick(77_999), false);
   assert.equal(r.tick(78_000), true);
   assert.equal(r.current().id, g3.id);
+
+  // 时钟回拨时不卡死，重锚后仍正常轮播
+  assert.equal(r.tick(50_000), false);
+  assert.equal(r.tick(58_000), true);
+  assert.equal(r.current().id, g1.id);
 });

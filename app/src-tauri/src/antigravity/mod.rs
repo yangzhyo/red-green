@@ -6,7 +6,22 @@ use std::process::Command;
 #[derive(Debug, PartialEq, Eq)]
 struct LiveProc {
     tty: Option<String>,
+    stat: String,
     comm: String,
+}
+
+impl LiveProc {
+    /// macOS `ps stat` 含 `+` 表示位于控制终端前台进程组，且不以 `T`（Ctrl-Z 挂起）开头。
+    fn is_foreground_running(&self) -> bool {
+        self.stat.contains('+') && !self.stat.starts_with('T')
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForegroundStatus {
+    Ready,
+    Backgrounded,
+    Gone,
 }
 
 fn is_agy_comm(comm: &str) -> bool {
@@ -34,7 +49,11 @@ fn parse_ps_output(out: &str) -> HashMap<u32, LiveProc> {
         else {
             continue;
         };
-        let comm_raw = after_tty.trim();
+        let Some((stat_raw, after_stat)) = after_tty.trim_start().split_once(char::is_whitespace)
+        else {
+            continue;
+        };
+        let comm_raw = after_stat.trim();
         if comm_raw.is_empty() {
             continue;
         }
@@ -43,6 +62,7 @@ fn parse_ps_output(out: &str) -> HashMap<u32, LiveProc> {
             pid,
             LiveProc {
                 tty,
+                stat: stat_raw.to_owned(),
                 comm: comm_raw.to_owned(),
             },
         );
@@ -62,7 +82,7 @@ fn query_live_processes(pids: &HashSet<u32>) -> HashMap<u32, LiveProc> {
         .collect::<Vec<_>>()
         .join(",");
     let Ok(out) = Command::new("ps")
-        .args(["-o", "pid=,tty=,comm=", "-p", &arg])
+        .args(["-o", "pid=,tty=,stat=,comm=", "-p", &arg])
         .output()
     else {
         return HashMap::new();
@@ -120,18 +140,27 @@ pub fn filter_alive(sessions: Vec<Value>) -> Vec<Value> {
     filter_with_map(sessions, &procs)
 }
 
-/// 校验指定 PID 是否仍是对应 tty 上存活的 Antigravity CLI 进程。
-pub fn is_live_process(pid: u32, expected_tty: &str) -> bool {
+/// 校验指定 PID 是否仍是对应 tty 上处于前台交互态（非 Ctrl-Z 挂起/后台）的 Antigravity CLI 进程。
+/// 用于电纸书远程回复前兜底，避免 agy 被挂起后把按键误输入到宿主 shell。
+pub fn foreground_status(pid: u32, expected_tty: &str) -> ForegroundStatus {
     if std::env::var_os("RED_GREEN_DISABLE_ANTIGRAVITY_PID_CHECK").is_some() {
-        return true;
+        return ForegroundStatus::Ready;
     }
     if pid == 0 || !expected_tty.starts_with("/dev/tty") {
-        return false;
+        return ForegroundStatus::Gone;
     }
     let procs = query_live_processes(&HashSet::from([pid]));
-    procs
-        .get(&pid)
-        .is_some_and(|p| is_agy_comm(&p.comm) && p.tty.as_deref() == Some(expected_tty))
+    let Some(proc) = procs.get(&pid) else {
+        return ForegroundStatus::Gone;
+    };
+    if !is_agy_comm(&proc.comm) || proc.tty.as_deref() != Some(expected_tty) {
+        return ForegroundStatus::Gone;
+    }
+    if proc.is_foreground_running() {
+        ForegroundStatus::Ready
+    } else {
+        ForegroundStatus::Backgrounded
+    }
 }
 
 /// 校验并归一化电纸书远程回复文本：统一换行，拒绝空串、超长或任何可能突破括号粘贴的控制字符。
@@ -156,19 +185,23 @@ mod tests {
 
     #[test]
     fn parses_macos_ps_rows_including_multiple_spaces_and_paths_with_spaces() {
-        let raw = "  2886   ttys000   /Users/y9g/.local/bin/agy\n  9999   ??   /Applications/My App/foo\n";
+        let raw = "  2886   ttys000   S+   /Users/y9g/.local/bin/agy\n  3000   ttys001   T    /Users/y9g/.local/bin/agy\n  9999   ??        Ss   /Applications/My App/foo\n";
         let parsed = parse_ps_output(raw);
         assert_eq!(
             parsed.get(&2886),
             Some(&LiveProc {
                 tty: Some("/dev/ttys000".into()),
+                stat: "S+".into(),
                 comm: "/Users/y9g/.local/bin/agy".into(),
             })
         );
+        assert!(parsed.get(&2886).unwrap().is_foreground_running());
+        assert!(!parsed.get(&3000).unwrap().is_foreground_running());
         assert_eq!(
             parsed.get(&9999),
             Some(&LiveProc {
                 tty: None,
+                stat: "Ss".into(),
                 comm: "/Applications/My App/foo".into(),
             })
         );
@@ -181,6 +214,7 @@ mod tests {
                 100,
                 LiveProc {
                     tty: Some("/dev/ttys001".into()),
+                    stat: "S+".into(),
                     comm: "agy".into(),
                 },
             ),
@@ -188,6 +222,7 @@ mod tests {
                 200,
                 LiveProc {
                     tty: Some("/dev/ttys002".into()),
+                    stat: "S+".into(),
                     comm: "/bin/zsh".into(),
                 },
             ),
@@ -195,6 +230,7 @@ mod tests {
                 300,
                 LiveProc {
                     tty: Some("/dev/ttys009".into()),
+                    stat: "S+".into(),
                     comm: "/Users/y9g/.local/bin/agy".into(),
                 },
             ),

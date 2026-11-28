@@ -33,6 +33,7 @@ pub enum AntigravityReplyTarget {
 type TerminalLauncher = fn(&Path, &str, &Path) -> Result<ResumeTerminal, u16>;
 type AntigravityReplyPrepare = fn(&str) -> Result<AntigravityReplyTarget, u16>;
 type AntigravityReplyDispatch = fn(&AntigravityReplyTarget, &str) -> Result<(), u16>;
+type AntigravityForegroundCheck = fn(u32, &str) -> crate::antigravity::ForegroundStatus;
 pub struct LiveSource {
     snapshot: fn() -> Vec<Value>,
     status_dir: PathBuf,
@@ -48,6 +49,7 @@ pub struct LiveSource {
     launching: HashMap<String, ResumeTerminal>,
     antigravity_prepare: AntigravityReplyPrepare,
     antigravity_dispatch: AntigravityReplyDispatch,
+    antigravity_foreground: AntigravityForegroundCheck,
 }
 
 struct StoredConversation {
@@ -277,6 +279,7 @@ impl LiveSource {
             launching: HashMap::new(),
             antigravity_prepare: |_| Err(424),
             antigravity_dispatch: |_, _| Err(424),
+            antigravity_foreground: crate::antigravity::foreground_status,
         }
     }
 
@@ -299,6 +302,14 @@ impl LiveSource {
     ) -> Self {
         self.antigravity_prepare = prepare;
         self.antigravity_dispatch = dispatch;
+        self
+    }
+
+    pub fn with_antigravity_foreground_check(
+        mut self,
+        check: AntigravityForegroundCheck,
+    ) -> Self {
+        self.antigravity_foreground = check;
         self
     }
 
@@ -603,6 +614,45 @@ impl Source for LiveSource {
 }
 
 impl LiveSource {
+    fn verify_antigravity_live_state(
+        &mut self,
+        key: &str,
+        cid: &str,
+        pid: u32,
+        tty: &str,
+    ) -> Result<(), u16> {
+        use crate::antigravity::ForegroundStatus;
+        match (self.antigravity_foreground)(pid, tty) {
+            ForegroundStatus::Ready => (),
+            ForegroundStatus::Backgrounded => return Err(409),
+            ForegroundStatus::Gone => {
+                self.selected.remove(key);
+                return Err(410);
+            }
+        }
+        let file = self.status_dir.join(format!("antigravity-pid-{pid}.json"));
+        let Ok(raw) = fs::read_to_string(&file) else {
+            self.selected.remove(key);
+            return Err(410);
+        };
+        let Ok(fresh) = serde_json::from_str::<Value>(&raw) else {
+            self.selected.remove(key);
+            return Err(410);
+        };
+        if fresh["source"].as_str() != Some("antigravity")
+            || fresh["conversation_id"].as_str() != Some(cid)
+            || fresh["tty"].as_str() != Some(tty)
+        {
+            self.selected.remove(key);
+            return Err(410);
+        }
+        match fresh["state"].as_str() {
+            Some("idle" | "your_turn" | "completed" | "aborted") => Ok(()),
+            Some("running" | "awaiting") => Err(409),
+            _ => Err(UNAVAILABLE),
+        }
+    }
+
     fn send_antigravity_reply(
         &mut self,
         key: &str,
@@ -646,29 +696,16 @@ impl LiveSource {
             .as_str()
             .filter(|t| t.starts_with("/dev/tty"))
             .ok_or(424u16)?;
-        if let Some(pid) = session["pid"]
+        let pid = session["pid"]
             .as_u64()
             .and_then(|v| u32::try_from(v).ok())
             .filter(|&p| p > 0)
-        {
-            if !crate::antigravity::is_live_process(pid, tty) {
-                self.selected.remove(key);
-                return Err(410);
-            }
-            let file = self.status_dir.join(format!("antigravity-pid-{pid}.json"));
-            if let Ok(raw) = fs::read_to_string(&file) {
-                if let Ok(fresh) = serde_json::from_str::<Value>(&raw) {
-                    if fresh["conversation_id"].as_str() != Some(cid) {
-                        self.selected.remove(key);
-                        return Err(410);
-                    }
-                    if matches!(fresh["state"].as_str(), Some("running" | "awaiting")) {
-                        return Err(409);
-                    }
-                }
-            }
-        }
+            .ok_or(424u16)?;
+
+        self.verify_antigravity_live_state(key, cid, pid, tty)?;
         let target = (self.antigravity_prepare)(tty)?;
+        // prepare（如 Ghostty OSC 7 探测）可能耗时数百毫秒，消费凭据前必须二次核验进程与会话状态。
+        self.verify_antigravity_live_state(key, cid, pid, tty)?;
         admit()?;
         // 凭据已消费后不再重放；投递异常返回 502 由阅读端提示核对正文。
         (self.antigravity_dispatch)(&target, &sanitized).map_err(|_| 502u16)
@@ -860,12 +897,27 @@ mod tests {
         *TEST_SNAPSHOT.lock().unwrap() = vec![json!({
             "session_id": "pid-123",
             "source": "antigravity",
+            "pid": 123,
             "conversation_id": "cid-1",
             "title": "自定义标题",
             "project": "red-green",
             "tty": "/dev/ttys012",
             "state": "completed",
         })];
+        let status_file = dir.join("antigravity-pid-123.json");
+        fs::write(
+            &status_file,
+            json!({
+                "session_id": "pid-123",
+                "source": "antigravity",
+                "pid": 123,
+                "conversation_id": "cid-1",
+                "tty": "/dev/ttys012",
+                "state": "completed",
+            })
+            .to_string(),
+        )
+        .unwrap();
 
         let delta = source
             .messages(
@@ -877,16 +929,26 @@ mod tests {
         assert_eq!(delta["state"], "completed");
         assert_eq!(delta["title"], "自定义标题");
 
-        // 未绑定终端投递回调时返回 424；绑定后校验状态、控制符并按顺序消费凭据
+        static FG: Mutex<crate::antigravity::ForegroundStatus> =
+            Mutex::new(crate::antigravity::ForegroundStatus::Ready);
+        *FG.lock().unwrap() = crate::antigravity::ForegroundStatus::Ready;
+        let mut source = source.with_antigravity_foreground_check(|_, _| *FG.lock().unwrap());
+
+        // 未绑定终端投递回调时返回 424（不消费凭据）
         assert_eq!(
             source.send_reply("antigravity-cid-1", "hi", || panic!("424 前不应消费凭据")),
             Err(424)
         );
         static SENT: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+        static FAIL_DISPATCH: Mutex<bool> = Mutex::new(false);
         SENT.lock().unwrap().clear();
+        *FAIL_DISPATCH.lock().unwrap() = false;
         let mut source = source.with_antigravity_reply(
             |tty| Ok(AntigravityReplyTarget::Custom(tty.to_owned())),
             |target, text| {
+                if *FAIL_DISPATCH.lock().unwrap() {
+                    return Err(502);
+                }
                 let AntigravityReplyTarget::Custom(tty) = target else {
                     return Err(424);
                 };
@@ -898,6 +960,15 @@ mod tests {
             source.send_reply("antigravity-cid-1", "坏\x1b[201~字符", || panic!("422 前不应消费")),
             Err(422)
         );
+        // Ctrl-Z 挂起/后台时返回 409，不向宿主 shell 粘贴
+        *FG.lock().unwrap() = crate::antigravity::ForegroundStatus::Backgrounded;
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "挂起态", || panic!("409 前不应消费")),
+            Err(409)
+        );
+        *FG.lock().unwrap() = crate::antigravity::ForegroundStatus::Ready;
+
+        // 正常投递
         assert_eq!(
             source.send_reply("antigravity-cid-1", "第一行\r\n第二行", || Ok(())),
             Ok(())
@@ -907,18 +978,55 @@ mod tests {
             vec![("/dev/ttys012".into(), "第一行\n第二行".into())]
         );
 
-        // awaiting / running 时拒绝 409
-        *TEST_SNAPSHOT.lock().unwrap() = vec![json!({
-            "session_id": "pid-123",
-            "source": "antigravity",
-            "conversation_id": "cid-1",
-            "project": "red-green",
-            "tty": "/dev/ttys012",
-            "state": "awaiting",
-        })];
+        // 投递失败时返回 502（凭据已由 admit 消费）
+        *FAIL_DISPATCH.lock().unwrap() = true;
+        let mut admitted = false;
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "可能失败", || {
+                admitted = true;
+                Ok(())
+            }),
+            Err(502)
+        );
+        assert!(admitted);
+        *FAIL_DISPATCH.lock().unwrap() = false;
+
+        // 磁盘状态文件在发送前翻转为 awaiting 时，即使快照未刷新也拒绝 409
+        fs::write(
+            &status_file,
+            json!({
+                "session_id": "pid-123",
+                "source": "antigravity",
+                "pid": 123,
+                "conversation_id": "cid-1",
+                "tty": "/dev/ttys012",
+                "state": "awaiting",
+            })
+            .to_string(),
+        )
+        .unwrap();
         assert_eq!(
             source.send_reply("antigravity-cid-1", "等待审批", || panic!("409 前不应消费")),
             Err(409)
+        );
+
+        // 状态文件切会话（/clear）时返回 410
+        fs::write(
+            &status_file,
+            json!({
+                "session_id": "pid-123",
+                "source": "antigravity",
+                "pid": 123,
+                "conversation_id": "",
+                "tty": "/dev/ttys012",
+                "state": "idle",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "已清空", || panic!("410 前不应消费")),
+            Err(410)
         );
 
         // 会话退出后返回 410

@@ -249,18 +249,36 @@ fn dbg_log(msg: &str) {
 }
 
 // tmux 常见安装路径逐个尝试：将来以 .app 方式从 launchd 启动时没有 brew PATH
-fn tmux(args: &[&str]) -> Option<String> {
+fn find_tmux_bin() -> Option<&'static str> {
     for bin in ["tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
-        match Command::new(bin).args(args).output() {
-            Ok(out) if out.status.success() => {
-                return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
-            }
-            // 失败不记日志：心跳每 1.5s 走这里，无 tmux 的环境会刷爆日志文件
-            Ok(_) => return None, // tmux 存在但命令失败（如无 server）
-            Err(_) => continue,
+        if Command::new(bin)
+            .arg("-V")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return Some(bin);
         }
     }
     None
+}
+
+fn tmux(args: &[&str]) -> Option<String> {
+    let bin = find_tmux_bin()?;
+    match Command::new(bin).args(args).output() {
+        Ok(out) if out.status.success() => {
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        }
+        // 失败不记日志：心跳每 1.5s 走这里，无 tmux 的环境会刷爆日志文件
+        _ => None,
+    }
+}
+
+fn tmux_pane_id(pane_tty: &str) -> Option<String> {
+    let panes = tmux(&["list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"])?;
+    panes.lines().find_map(|l| {
+        let (ptty, id) = l.split_once(' ')?;
+        (ptty == pane_tty && id.starts_with('%')).then(|| id.to_owned())
+    })
 }
 
 // tmux 客户端清单：(client_tty, client_session) 对
@@ -439,19 +457,6 @@ fn focus_terminal(tty: String) {
     dbg_log(&format!("focus_terminal tty={tty} tab_tty={tab_tty} {msg}"));
 }
 
-fn find_tmux_bin() -> Option<&'static str> {
-    for bin in ["tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
-        if Command::new(bin)
-            .arg("-V")
-            .output()
-            .is_ok_and(|o| o.status.success())
-        {
-            return Some(bin);
-        }
-    }
-    None
-}
-
 fn apple_terminal_has_tty(tty: &str) -> bool {
     const SCRIPT: &str = r#"on run argv
     if not (application "Terminal" is running) then return false
@@ -466,7 +471,7 @@ fn apple_terminal_has_tty(tty: &str) -> bool {
     return false
 end run"#;
     Command::new("/usr/bin/osascript")
-        .args(["-e", SCRIPT, tty])
+        .args(["-e", SCRIPT, "--", tty])
         .output()
         .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
 }
@@ -478,8 +483,9 @@ pub(crate) fn prepare_antigravity_reply(
     if !tty.starts_with("/dev/tty") {
         return Err(424);
     }
-    if let Some((pane, _)) = tmux_locate(tty) {
-        return Ok(AntigravityReplyTarget::Tmux(pane));
+    // 使用不可变 #{pane_id}（%N）而非 session:window.pane，避免窗格编号重排或会话前缀误匹配。
+    if let Some(pane_id) = tmux_pane_id(tty) {
+        return Ok(AntigravityReplyTarget::Tmux(pane_id));
     }
     match tty_host(tty) {
         Some(Host::Ghostty) => ghostty::resolve_id(tty)
@@ -518,12 +524,13 @@ pub(crate) fn dispatch_antigravity_reply(
                 .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|e| e.to_string())?;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(text.as_bytes())
-                    .map_err(|e| e.to_string())?;
-            }
+            let write_res = if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(text.as_bytes())
+            } else {
+                Ok(())
+            };
             let load = child.wait_with_output().map_err(|e| e.to_string())?;
+            write_res.map_err(|e| e.to_string())?;
             if !load.status.success() {
                 return Err(String::from_utf8_lossy(&load.stderr).trim().to_owned());
             }
@@ -547,7 +554,10 @@ pub(crate) fn dispatch_antigravity_reply(
         })(),
         AntigravityReplyTarget::Ghostty(id) => ghostty::send_input(id, text),
         AntigravityReplyTarget::AppleTerminal(tty) => {
+            // 先校验 Terminal 正在运行，避免终端刚退出时被 AppleScript 重新拉起。
+            // Apple Terminal 仅提供自带尾回车的 do script；实测 agy 1.5.19 可直接接收单次写入的括号粘贴 + CR。
             const SCRIPT: &str = r#"on run argv
+    if not (application "Terminal" is running) then error "Terminal not running"
     set targetTty to item 1 of argv
     set payload to item 2 of argv
     tell application "Terminal"
@@ -564,7 +574,7 @@ pub(crate) fn dispatch_antigravity_reply(
 end run"#;
             let payload = format!("\x1b[200~{text}\x1b[201~");
             Command::new("/usr/bin/osascript")
-                .args(["-e", SCRIPT, tty, &payload])
+                .args(["-e", SCRIPT, "--", tty, &payload])
                 .output()
                 .map_err(|e| e.to_string())
                 .and_then(|o| {

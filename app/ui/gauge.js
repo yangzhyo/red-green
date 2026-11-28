@@ -39,8 +39,7 @@ const RINGS = {
 };
 
 const rotator = USAGE.createRotator(USAGE.ROTATE_MS);
-let groups = [];
-let view = null;
+const monoNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 let expanded = false;
 
 // 短窗口显示时分，长窗口显示星期与时分。
@@ -59,7 +58,7 @@ function level(pct) {
 }
 
 function pctOf(key) {
-  const w = view?.windows[key];
+  const w = rotator.current()?.windows[key];
   return typeof w?.used_percentage === "number" ? Math.round(w.used_percentage) : null;
 }
 
@@ -86,6 +85,7 @@ function renderRing() {
 }
 
 function renderCard() {
+  const view = rotator.current();
   for (const row of document.querySelectorAll("#card .row")) {
     const key = Number(row.dataset.window);
     const w = view?.windows[key];
@@ -106,6 +106,8 @@ document.getElementById("num").style.color = C.white;
 const SOURCE_LABEL = { codex: "Codex", antigravity: "Antigravity", claude: "Claude" };
 
 function render() {
+  const view = rotator.current();
+  const groups = rotator.groups();
   const source = document.getElementById("source");
   const label = SOURCE_LABEL[view?.source] ?? "Claude";
   source.textContent = label + (groups.length > 1 ? " ▸" : "");
@@ -126,13 +128,12 @@ listen("gauge-hover", (e) => {
   const next = !!p && (expanded || hit);
   if (next === expanded) return;
   expanded = next;
-  rotator.setPaused(expanded, Date.now());
+  rotator.setPaused(expanded, monoNow());
   render();
 });
 
 listen("usage-update", (e) => {
-  view = rotator.update(e.payload ?? [], Date.now());
-  groups = rotator.groups();
+  rotator.update(e.payload ?? [], monoNow());
   render();
 }).then(() => {
   // 首帧握手：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪，就绪后请 manager 补发
@@ -140,8 +141,7 @@ listen("usage-update", (e) => {
 });
 
 function maybeRotate() {
-  if (!rotator.tick(Date.now())) return;
-  view = rotator.current();
+  if (!rotator.tick(monoNow())) return;
   render();
 }
 // 可见窗用定时器维持 8 秒轮播，并复用 Rust 1.5s front-tick 兜底非焦点窗口定时节流。
@@ -150,8 +150,8 @@ listen("front-tick", maybeRotate);
 
 // 整窗可拖；原地点击在来源/额度组之间轮换并重置自动轮播计时。
 function nextGroup() {
-  if (groups.length < 2) return;
-  view = rotator.next(Date.now());
+  if (rotator.groups().length < 2) return;
+  rotator.next(monoNow());
   render();
 }
 installDrag(nextGroup);
