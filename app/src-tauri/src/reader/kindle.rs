@@ -349,7 +349,7 @@ fn thread_response(
     let key = percent_encoding::percent_decode_str(encoded_key)
         .decode_utf8()
         .map_err(|_| 400u16)?;
-    let reply = (replies_enabled && key.starts_with("codex-"))
+    let reply = (replies_enabled && super::server::supports_reply(&key))
         .then(|| format!("/kindle/reply/{encoded_key}"));
     let page = match polling {
         Some(poll) => source.kindle_poll(&key, poll.since, poll.status_only)?,

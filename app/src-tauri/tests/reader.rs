@@ -375,3 +375,295 @@ fn an_unmaterialized_codex_session_waits_outside_the_readable_directory() {
     );
     assert_eq!(reader.sessions(), serde_json::json!([]));
 }
+
+#[test]
+fn antigravity_and_claude_coexist_on_nomad_and_kindle_endpoints() {
+    use red_green::reader::live::LiveSource;
+    use serde_json::json;
+
+    static SNAP: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+    fn snap() -> Vec<serde_json::Value> {
+        SNAP.lock().unwrap().clone()
+    }
+    let response_body = |raw: &str| raw.split_once("\r\n\r\n").unwrap().1.to_owned();
+
+    let dir = std::env::temp_dir().join(format!("rg-agy-http-{}", rand::random::<u64>()));
+    let reader_dir = dir.join(".reader");
+    std::fs::create_dir_all(&reader_dir).unwrap();
+
+    let claude_path = dir.join("claude.jsonl");
+    std::fs::write(
+        &claude_path,
+        format!(
+            "{}\n{}\n",
+            json!({"type":"user","sessionId":"c1","uuid":"u1","message":{"role":"user","content":"Claude 提问"}}),
+            json!({"type":"assistant","sessionId":"c1","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":"Claude 回复"}})
+        ),
+    )
+    .unwrap();
+    std::fs::write(reader_dir.join("c1"), format!("{}\n", claude_path.display())).unwrap();
+
+    let agy_path = dir.join("transcript_full.jsonl");
+    std::fs::write(
+        &agy_path,
+        format!(
+            "{}\n{}\n",
+            json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\nAGY 提问\n</USER_REQUEST>"}),
+            json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","content":"AGY 回复"})
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        reader_dir.join("antigravity-cid-42"),
+        format!("{}\n", agy_path.display()),
+    )
+    .unwrap();
+
+    let status_file = dir.join("antigravity-pid-99.json");
+    let write_agy_file = |state: &str, cid: &str| {
+        std::fs::write(
+            &status_file,
+            json!({"session_id":"pid-99","source":"antigravity","pid":99,"conversation_id":cid,"title":"AGY 调研","project":"red-green","tty":"/dev/ttys042","state":state}).to_string(),
+        )
+        .unwrap();
+    };
+    write_agy_file("awaiting", "cid-42");
+
+    *SNAP.lock().unwrap() = vec![
+        json!({"session_id":"c1","project":"alpha","state":"idle"}),
+        json!({"session_id":"pid-99","source":"antigravity","pid":99,"conversation_id":"cid-42","title":"AGY 调研","project":"red-green","tty":"/dev/ttys042","state":"awaiting"}),
+    ];
+
+    static SENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static MODE: Mutex<&str> = Mutex::new("ok");
+    SENT.lock().unwrap().clear();
+    *MODE.lock().unwrap() = "ok";
+    let source = LiveSource::new(snap, dir.clone(), dir.join("unused.sock"))
+        .with_antigravity_foreground_check(|_, _| red_green::antigravity::ForegroundStatus::Ready)
+        .with_antigravity_reply(
+            |tty| {
+                if *MODE.lock().unwrap() == "unsupported" {
+                    return Err(424);
+                }
+                Ok(red_green::reader::live::AntigravityReplyTarget::Custom(
+                    tty.to_owned(),
+                ))
+            },
+            |_, text| {
+                if *MODE.lock().unwrap() == "dispatch-err" {
+                    return Err(502);
+                }
+                SENT.lock().unwrap().push(text.to_owned());
+                Ok(())
+            },
+        );
+    let reader = Reader::start("127.0.0.1:0".parse().unwrap(), source).unwrap();
+    let code = reader.new_code();
+    let paired = request(&reader, "POST", "/pair", &json!({"code": code}).to_string(), "");
+    let cookie = paired
+        .lines()
+        .find_map(|l| l.strip_prefix("Set-Cookie: "))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+
+    let sessions: serde_json::Value =
+        serde_json::from_str(&response_body(&request(&reader, "GET", "/sessions", "", cookie)))
+            .unwrap();
+    let list = sessions.as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list
+        .iter()
+        .any(|e| e["key"] == "claude-c1" && e["source"] == "Claude Code"));
+    assert!(list.iter().any(|e| {
+        e["key"] == "antigravity-cid-42"
+            && e["source"] == "Antigravity CLI"
+            && e["state"] == "awaiting"
+            && e["title"] == "AGY 调研"
+    }));
+
+    let nomad_doc = request(&reader, "GET", "/read/current/antigravity-cid-42", "", cookie);
+    assert!(nomad_doc.contains("<title>Antigravity CLI · 待确认 · red-green · AGY 调研</title>"));
+
+    let nomad_msgs: serde_json::Value = serde_json::from_str(&response_body(&request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie,
+    )))
+    .unwrap();
+    assert_eq!(nomad_msgs["messages"][0]["text"], "AGY 提问");
+    assert_eq!(nomad_msgs["messages"][1]["text"], "AGY 回复");
+    assert!(nomad_msgs.get("replyTicket").is_none());
+
+    let kindle_list = request(&reader, "GET", "/kindle", "", cookie);
+    assert!(
+        kindle_list.contains("AGY 调研")
+            && kindle_list.contains("Antigravity CLI")
+            && kindle_list.contains("Claude Code")
+    );
+
+    let kindle_page = request(&reader, "GET", "/kindle/read/antigravity-cid-42", "", cookie);
+    assert!(
+        kindle_page.contains("AGY 提问")
+            && kindle_page.contains("AGY 回复")
+            && kindle_page.contains("待确认")
+    );
+    assert!(!kindle_page.contains("kindle-reply"));
+
+    // 开启回复权限：awaiting 状态拒绝 409；切为 your_turn 后 Nomad 与 Kindle 均可回复，历史继续对话仍为 405
+    assert_eq!(reader.toggle_replies(), Some(true));
+    let nomad_with_ticket: serde_json::Value = serde_json::from_str(&response_body(&request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie,
+    )))
+    .unwrap();
+    let ticket = nomad_with_ticket["replyTicket"].as_str().unwrap().to_owned();
+    let post_json = |path: &str, body: &str| {
+        let mut s = std::net::TcpStream::connect(reader.address()).unwrap();
+        let origin = format!("http://{}", reader.address());
+        let raw = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nOrigin: {origin}\r\nCookie: {cookie}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        std::io::Write::write_all(&mut s, raw.as_bytes()).unwrap();
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut s, &mut out).unwrap();
+        out
+    };
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket, "text": "继续吧"}).to_string()
+    )
+    .starts_with("HTTP/1.1 409"));
+    assert!(post_json(
+        "/history/antigravity-cid-42/resume",
+        &json!({"ticket": ticket}).to_string()
+    )
+    .starts_with("HTTP/1.1 405"));
+
+    write_agy_file("your_turn", "cid-42");
+    *SNAP.lock().unwrap() = vec![
+        json!({"session_id":"c1","project":"alpha","state":"idle"}),
+        json!({"session_id":"pid-99","source":"antigravity","pid":99,"conversation_id":"cid-42","title":"AGY 调研","project":"red-green","tty":"/dev/ttys042","state":"your_turn"}),
+    ];
+    // 非法控制字符拒绝 422 且不消费凭据
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket, "text": "坏\x1b字符"}).to_string()
+    )
+    .starts_with("HTTP/1.1 422"));
+    // 不支持的终端返回 424 且不消费凭据
+    *MODE.lock().unwrap() = "unsupported";
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket, "text": "重试前"}).to_string()
+    )
+    .starts_with("HTTP/1.1 424"));
+    *MODE.lock().unwrap() = "ok";
+
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket, "text": "Nomad 回复\n第二行"}).to_string()
+    )
+    .starts_with("HTTP/1.1 200"));
+    // 一次性凭据不可重放
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket, "text": "重复发送"}).to_string()
+    )
+    .starts_with("HTTP/1.1 412"));
+
+    // 投递失败返回 502 后凭据已被消费，重放同一凭据返回 412
+    let ticket2 = serde_json::from_str::<serde_json::Value>(&response_body(&request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie,
+    )))
+    .unwrap()["replyTicket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    *MODE.lock().unwrap() = "dispatch-err";
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket2, "text": "触发502"}).to_string()
+    )
+    .starts_with("HTTP/1.1 502"));
+    *MODE.lock().unwrap() = "ok";
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket2, "text": "不许重放"}).to_string()
+    )
+    .starts_with("HTTP/1.1 412"));
+
+    // Kindle 显示回复入口并通过原生表单发送
+    let kindle_live = request(&reader, "GET", "/kindle/read/antigravity-cid-42", "", cookie);
+    assert!(kindle_live.contains(r#"href="/kindle/reply/antigravity-cid-42">回复</a>"#));
+    let form = request(&reader, "GET", "/kindle/reply/antigravity-cid-42", "", cookie);
+    let k_ticket = form
+        .split(r#"name="ticket" value=""#)
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_owned();
+    let form_body = format!("ticket={k_ticket}&text=Kindle+%E5%9B%9E%E5%A4%8D");
+    let mut s = std::net::TcpStream::connect(reader.address()).unwrap();
+    let origin = format!("http://{}", reader.address());
+    let raw = format!(
+        "POST /kindle/reply/antigravity-cid-42 HTTP/1.1\r\nHost: localhost\r\nOrigin: {origin}\r\nCookie: {cookie}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{form_body}",
+        form_body.len()
+    );
+    std::io::Write::write_all(&mut s, raw.as_bytes()).unwrap();
+    let mut kindle_post = String::new();
+    std::io::Read::read_to_string(&mut s, &mut kindle_post).unwrap();
+    assert!(
+        kindle_post.starts_with("HTTP/1.1 303")
+            && kindle_post.contains("Location: /kindle/read/antigravity-cid-42?latest=1")
+    );
+    assert_eq!(*SENT.lock().unwrap(), ["Nomad 回复\n第二行", "Kindle 回复"]);
+
+    // 磁盘状态文件切会话后回复返回 410
+    let ticket3 = serde_json::from_str::<serde_json::Value>(&response_body(&request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie,
+    )))
+    .unwrap()["replyTicket"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    write_agy_file("idle", "cid-other");
+    assert!(post_json(
+        "/sessions/antigravity-cid-42/messages",
+        &json!({"ticket": ticket3, "text": "旧会话"}).to_string()
+    )
+    .starts_with("HTTP/1.1 410"));
+
+    // 退出后返回 410，且另一来源仍不受影响
+    *SNAP.lock().unwrap() = vec![json!({"session_id":"c1","project":"alpha","state":"idle"})];
+    assert!(request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie
+    )
+    .starts_with("HTTP/1.1 410"));
+    assert!(request(&reader, "GET", "/sessions/claude-c1/messages", "", cookie)
+        .starts_with("HTTP/1.1 200"));
+
+    drop(reader);
+    let _ = std::fs::remove_dir_all(dir);
+}

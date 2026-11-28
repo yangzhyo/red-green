@@ -56,7 +56,8 @@ static bool text(const cJSON *obj, const char *key, size_t max, bool empty) {
   return true;
 }
 static bool is_source(const char *s) {
-  return !strcmp(s, "codex") || !strcmp(s, "claude");
+  return !strcmp(s, "codex") || !strcmp(s, "claude") ||
+         !strcmp(s, "antigravity");
 }
 static bool is_skin(const char *s) {
   return !strcmp(s, "robot") || !strcmp(s, "crab") || !strcmp(s, "cat");

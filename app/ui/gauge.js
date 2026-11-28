@@ -38,8 +38,8 @@ const RINGS = {
   1: { ch: "I", cells: clockwise(cells((d) => d >= 2.5 && d < 3.5)) },
 };
 
-let groups = [];
-let view = null;
+const rotator = USAGE.createRotator(USAGE.ROTATE_MS);
+const monoNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 let expanded = false;
 
 // 短窗口显示时分，长窗口显示星期与时分。
@@ -47,7 +47,7 @@ function fmtReset(ts, minutes) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  return minutes <= 1440 ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
+  return typeof minutes === "number" && minutes <= 1440 ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
 }
 
 // 颜色随用量升温：60% 起琥珀，85% 起红
@@ -58,7 +58,7 @@ function level(pct) {
 }
 
 function pctOf(key) {
-  const w = view?.windows[key];
+  const w = rotator.current()?.windows[key];
   return typeof w?.used_percentage === "number" ? Math.round(w.used_percentage) : null;
 }
 
@@ -85,6 +85,7 @@ function renderRing() {
 }
 
 function renderCard() {
+  const view = rotator.current();
   for (const row of document.querySelectorAll("#card .row")) {
     const key = Number(row.dataset.window);
     const w = view?.windows[key];
@@ -102,9 +103,13 @@ function renderCard() {
 const stage = document.getElementById("stage");
 document.getElementById("num").style.color = C.white;
 
+const SOURCE_LABEL = { codex: "Codex", antigravity: "Antigravity", claude: "Claude" };
+
 function render() {
+  const view = rotator.current();
+  const groups = rotator.groups();
   const source = document.getElementById("source");
-  const label = view?.source === "codex" ? "Codex" : "Claude";
+  const label = SOURCE_LABEL[view?.source] ?? "Claude";
   source.textContent = label + (groups.length > 1 ? " ▸" : "");
   const bucket = view?.label && view.label.toLowerCase() !== label.toLowerCase() ? view.label : "";
   document.getElementById("bucket").textContent = bucket;
@@ -116,29 +121,37 @@ function render() {
 }
 
 // 悬停由 Rust 轮询光标推来（非焦点窗口收不到 mousemove）：进入要真的落在圆表 / 卡片上，
-// 展开后只要还在窗口内就保持，避免圆表与卡片形状不同导致的反复开合
+// 展开后只要还在窗口内就保持，避免圆表与卡片形状不同导致的反复开合；悬停时停在当前额度组。
 listen("gauge-hover", (e) => {
   const p = e.payload;
   const hit = p ? stage.contains(document.elementFromPoint(p.x, p.y)) : false;
   const next = !!p && (expanded || hit);
   if (next === expanded) return;
   expanded = next;
+  rotator.setPaused(expanded, monoNow());
   render();
 });
 
 listen("usage-update", (e) => {
-  groups = e.payload ?? [];
-  view = USAGE.select(groups, view?.id);
+  rotator.update(e.payload ?? [], monoNow());
   render();
 }).then(() => {
   // 首帧握手：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪，就绪后请 manager 补发
   emit("gauge-ready");
 });
 
-// 整窗可拖；原地点击在来源/额度组之间轮换，选择在后续快照中保持。
+function maybeRotate() {
+  if (!rotator.tick(monoNow())) return;
+  render();
+}
+// 可见窗用定时器维持 8 秒轮播，并复用 Rust 1.5s front-tick 兜底非焦点窗口定时节流。
+setInterval(maybeRotate, 1000);
+listen("front-tick", maybeRotate);
+
+// 整窗可拖；原地点击在来源/额度组之间轮换并重置自动轮播计时。
 function nextGroup() {
-  if (groups.length < 2) return;
-  view = groups[(groups.findIndex((g) => g.id === view?.id) + 1) % groups.length];
+  if (rotator.groups().length < 2) return;
+  rotator.next(monoNow());
   render();
 }
 installDrag(nextGroup);

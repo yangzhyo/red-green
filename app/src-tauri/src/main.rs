@@ -33,6 +33,7 @@ fn status_dir() -> PathBuf {
 // 账号级用量文件：由 status line 脚本写入，与会话文件同目录、共用一个 watcher，
 // 靠文件名区分（见 docs/protocol.md「用量文件」）
 const USAGE_FILE: &str = "usage.json";
+const ANTIGRAVITY_USAGE_FILE: &str = "antigravity-usage.json";
 
 fn read_snapshot() -> Vec<Value> {
     let mut sessions = Vec::new();
@@ -44,7 +45,7 @@ fn read_snapshot() -> Vec<Value> {
             }
             if matches!(
                 path.file_name().and_then(|n| n.to_str()),
-                Some(USAGE_FILE | "codex-usage.json")
+                Some(USAGE_FILE | "codex-usage.json" | ANTIGRAVITY_USAGE_FILE)
             ) {
                 continue;
             }
@@ -55,6 +56,7 @@ fn read_snapshot() -> Vec<Value> {
             }
         }
     }
+    sessions = red_green::antigravity::filter_alive(sessions);
     sessions.extend(
         CODEX
             .lock()
@@ -94,7 +96,11 @@ fn read_usage() -> Value {
             .usage
             .clone()
     };
-    serde_json::json!({"claude":claude,"codex":codex})
+    let antigravity = std::fs::read_to_string(status_dir().join(ANTIGRAVITY_USAGE_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    serde_json::json!({"claude":claude,"codex":codex,"antigravity":antigravity})
 }
 
 #[tauri::command]
@@ -243,18 +249,36 @@ fn dbg_log(msg: &str) {
 }
 
 // tmux 常见安装路径逐个尝试：将来以 .app 方式从 launchd 启动时没有 brew PATH
-fn tmux(args: &[&str]) -> Option<String> {
+fn find_tmux_bin() -> Option<&'static str> {
     for bin in ["tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
-        match Command::new(bin).args(args).output() {
-            Ok(out) if out.status.success() => {
-                return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
-            }
-            // 失败不记日志：心跳每 1.5s 走这里，无 tmux 的环境会刷爆日志文件
-            Ok(_) => return None, // tmux 存在但命令失败（如无 server）
-            Err(_) => continue,
+        if Command::new(bin)
+            .arg("-V")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return Some(bin);
         }
     }
     None
+}
+
+fn tmux(args: &[&str]) -> Option<String> {
+    let bin = find_tmux_bin()?;
+    match Command::new(bin).args(args).output() {
+        Ok(out) if out.status.success() => {
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        }
+        // 失败不记日志：心跳每 1.5s 走这里，无 tmux 的环境会刷爆日志文件
+        _ => None,
+    }
+}
+
+fn tmux_pane_id(pane_tty: &str) -> Option<String> {
+    let panes = tmux(&["list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"])?;
+    panes.lines().find_map(|l| {
+        let (ptty, id) = l.split_once(' ')?;
+        (ptty == pane_tty && id.starts_with('%')).then(|| id.to_owned())
+    })
 }
 
 // tmux 客户端清单：(client_tty, client_session) 对
@@ -431,6 +455,148 @@ fn focus_terminal(tty: String) {
     // 现场日志：点击定位涉及 tmux 解析 + 终端识别 + TCC 权限 + AppleScript 几层，
     // 出问题时凭这行就能定位是哪层
     dbg_log(&format!("focus_terminal tty={tty} tab_tty={tab_tty} {msg}"));
+}
+
+fn apple_terminal_has_tty(tty: &str) -> bool {
+    const SCRIPT: &str = r#"on run argv
+    if not (application "Terminal" is running) then return false
+    set targetTty to item 1 of argv
+    tell application "Terminal"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if tty of t is targetTty then return true
+            end repeat
+        end repeat
+    end tell
+    return false
+end run"#;
+    Command::new("/usr/bin/osascript")
+        .args(["-e", SCRIPT, "--", tty])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+}
+
+pub(crate) fn prepare_antigravity_reply(
+    tty: &str,
+) -> Result<red_green::reader::live::AntigravityReplyTarget, u16> {
+    use red_green::reader::live::AntigravityReplyTarget;
+    if !tty.starts_with("/dev/tty") {
+        return Err(424);
+    }
+    // 使用不可变 #{pane_id}（%N）而非 session:window.pane，避免窗格编号重排或会话前缀误匹配。
+    if let Some(pane_id) = tmux_pane_id(tty) {
+        return Ok(AntigravityReplyTarget::Tmux(pane_id));
+    }
+    match tty_host(tty) {
+        Some(Host::Ghostty) => ghostty::resolve_id(tty)
+            .map(AntigravityReplyTarget::Ghostty)
+            .ok_or(424),
+        Some(Host::AppleTerminal) => {
+            if apple_terminal_has_tty(tty) {
+                Ok(AntigravityReplyTarget::AppleTerminal(tty.to_owned()))
+            } else {
+                Err(424)
+            }
+        }
+        None => Err(424),
+    }
+}
+
+pub(crate) fn dispatch_antigravity_reply(
+    target: &red_green::reader::live::AntigravityReplyTarget,
+    text: &str,
+) -> Result<(), u16> {
+    use red_green::reader::live::AntigravityReplyTarget;
+    let res: Result<(), String> = match target {
+        AntigravityReplyTarget::Tmux(pane) => (|| {
+            use std::io::Write;
+            use std::process::Stdio;
+            let bin = find_tmux_bin().ok_or_else(|| "tmux not found".to_string())?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            let buf = format!("rg-reply-{}-{stamp:x}", std::process::id());
+            let mut child = Command::new(bin)
+                .args(["load-buffer", "-b", &buf, "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            let write_res = if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(text.as_bytes())
+            } else {
+                Ok(())
+            };
+            let load = child.wait_with_output().map_err(|e| e.to_string())?;
+            write_res.map_err(|e| e.to_string())?;
+            if !load.status.success() {
+                return Err(String::from_utf8_lossy(&load.stderr).trim().to_owned());
+            }
+            let paste = Command::new(bin)
+                .args(["paste-buffer", "-p", "-d", "-b", &buf, "-t", pane])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !paste.status.success() {
+                let _ = Command::new(bin).args(["delete-buffer", "-b", &buf]).output();
+                return Err(String::from_utf8_lossy(&paste.stderr).trim().to_owned());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let enter = Command::new(bin)
+                .args(["send-keys", "-t", pane, "Enter"])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !enter.status.success() {
+                return Err(String::from_utf8_lossy(&enter.stderr).trim().to_owned());
+            }
+            Ok(())
+        })(),
+        AntigravityReplyTarget::Ghostty(id) => ghostty::send_input(id, text),
+        AntigravityReplyTarget::AppleTerminal(tty) => {
+            // 先校验 Terminal 正在运行，避免终端刚退出时被 AppleScript 重新拉起。
+            // Apple Terminal 仅提供自带尾回车的 do script；实测 agy 1.5.19 可直接接收单次写入的括号粘贴 + CR。
+            const SCRIPT: &str = r#"on run argv
+    if not (application "Terminal" is running) then error "Terminal not running"
+    set targetTty to item 1 of argv
+    set payload to item 2 of argv
+    tell application "Terminal"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if tty of t is targetTty then
+                    do script payload in t
+                    return "ok"
+                end if
+            end repeat
+        end repeat
+    end tell
+    error "tab not found"
+end run"#;
+            let payload = format!("\x1b[200~{text}\x1b[201~");
+            Command::new("/usr/bin/osascript")
+                .args(["-e", SCRIPT, "--", tty, &payload])
+                .output()
+                .map_err(|e| e.to_string())
+                .and_then(|o| {
+                    if o.status.success() {
+                        Ok(())
+                    } else {
+                        Err(String::from_utf8_lossy(&o.stderr).trim().to_owned())
+                    }
+                })
+        }
+        AntigravityReplyTarget::Custom(_) => Err("unsupported custom target".into()),
+    };
+    match res {
+        Ok(()) => {
+            dbg_log(&format!("antigravity_reply target={target:?} ok"));
+            Ok(())
+        }
+        Err(err) => {
+            dbg_log(&format!("antigravity_reply target={target:?} err={err}"));
+            Err(502)
+        }
+    }
 }
 
 fn session_ttys() -> Vec<String> {
@@ -684,11 +850,26 @@ fn main() {
             });
 
             // 已阅心跳必须在 Rust 侧：manager 是隐藏窗口，
-            // WebKit 会挂起不可见 webview 的 JS 定时器（事件不受影响）
+            // WebKit 会挂起不可见 webview 的 JS 定时器（事件不受影响）。
+            // 同时复查 Antigravity CLI 进程存活：无 SessionEnd 钩子时，进程退出需在 1.5s 内同步托盘与宠物。
             let heartbeat = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                let _ = heartbeat.emit("front-tick", frontmost_tty_impl());
+            std::thread::spawn(move || {
+                let mut prev_agy: Vec<String> = Vec::new();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let snapshot = read_snapshot();
+                    let next_agy: Vec<String> = snapshot
+                        .iter()
+                        .filter(|s| s["source"] == "antigravity")
+                        .filter_map(|s| s["session_id"].as_str().map(str::to_owned))
+                        .collect();
+                    if next_agy != prev_agy {
+                        prev_agy = next_agy;
+                        let _ = heartbeat.emit("sessions-changed", snapshot);
+                        let _ = heartbeat.emit("usage-changed", read_usage());
+                    }
+                    let _ = heartbeat.emit("front-tick", frontmost_tty_impl());
+                }
             });
             Ok(())
         })

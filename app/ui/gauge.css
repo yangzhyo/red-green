@@ -30,7 +30,8 @@ body {
 }
 
 #source, #bucket {
-  max-width: 108px;
+  max-width: 112px;
+  padding: 2px 8px;
 }
 #source { cursor: pointer; }
 #bucket:empty { display: none; }
@@ -66,12 +67,14 @@ body {
   font-size: 8px; /* 三位数（100%）收一号 */
 }
 
-/* ---- 展开的两行明细：与名牌同款胶囊，填充色（--fill）由 gauge.js 按灯色内联 ---- */
+/* ---- 展开的两行明细：与名牌同款胶囊，填充色（--fill）由 gauge.js 按灯色内联；与 60px 圆表同高避免悬停时下方来源名上移 ---- */
 #card {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 3px;
   width: 108px;
+  min-height: 60px;
 }
 
 /* 行的 display:flex 会压过 UA 的 [hidden]，显式补回（缺席的窗口不画行） */

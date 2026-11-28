@@ -3,7 +3,8 @@ import test from "node:test";
 import vm from "node:vm";
 import assert from "node:assert/strict";
 
-for (const source of ["codex", "claude"]) {
+const EXPECTED_SOURCE = { codex: "Codex CLI", claude: "Claude Code", antigravity: "Antigravity CLI" };
+for (const source of ["codex", "claude", "antigravity"]) {
   test(`${source} 首见静默、前台已阅与退出清理`, async () => {
     const handlers = new Map();
     const calls = [];
@@ -64,8 +65,10 @@ for (const source of ["codex", "claude"]) {
     vm.runInContext(fs.readFileSync(new URL("../ui/pet.js", import.meta.url), "utf8"), renderer);
     onUpdate({ payload: model() });
     assert.equal(elements.get("tag").textContent, "delta");
+    assert.equal(elements.get("tag").title, `${EXPECTED_SOURCE[source]} · delta`);
     assert.equal(drawn, 1);
-    onUpdate({ payload: { ...model(), session_id: `${source === "codex" ? "claude" : "codex"}-test`, project: "other" } });
+    const otherSource = source === "codex" ? "claude" : "codex";
+    onUpdate({ payload: { ...model(), session_id: `${otherSource}-test`, project: "other" } });
     assert.equal(elements.get("tag").textContent, "delta");
     await update("awaiting", "3");
     assert.equal(callCount(), 1);

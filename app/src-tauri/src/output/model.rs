@@ -30,7 +30,7 @@ impl OutputSnapshot {
         let mut sessions = vec![];
         for p in ordered {
             let source = p.model["source"].as_str().unwrap_or("claude");
-            if !["claude", "codex"].contains(&source) {
+            if !["claude", "codex", "antigravity"].contains(&source) {
                 return Err("未知会话来源".into());
             }
             let project = bounded(&p.model, "project", 192)?;
@@ -76,7 +76,7 @@ impl OutputSnapshot {
         let mut usage = vec![];
         for g in &self.device_usage {
             let source = bounded(g, "source", 16)?;
-            if !["claude", "codex"].contains(&source.as_str()) {
+            if !["claude", "codex", "antigravity"].contains(&source.as_str()) {
                 return Err("未知用量来源".into());
             }
             let windows = g["windows"].as_array().ok_or("缺少用量窗口")?;
@@ -154,6 +154,29 @@ mod tests {
         assert_eq!(w["sessions"][0]["name"], "工具箱 #1");
         assert_eq!(w["sessions"][1]["name"], "工具箱 #2");
     }
+    #[test]
+    fn antigravity_sessions_and_usage_encode_without_private_fields() {
+        let s = OutputSnapshot {
+            pets: vec![Pet {
+                sid: "antigravity-pid-42".into(),
+                slot: 0,
+                model: json!({"source":"antigravity","project":"red-green","skin":"robot","state":"running","tty":"/dev/ttys003","cwd":"/private/repo"}),
+            }],
+            device_usage: vec![json!({
+                "id": "antigravity:u:gemini",
+                "source": "antigravity",
+                "label": "Gemini",
+                "updated_label": "数值更新于 11/28 14:30",
+                "windows": [{"used_percentage": 15.0, "duration_label": "5h", "reset_label": "11/28 16:28", "status": "known"}]
+            })],
+            ..Default::default()
+        };
+        let wire = s.wire("g", 1).unwrap();
+        assert_eq!(wire["sessions"][0]["source"], "antigravity");
+        assert_eq!(wire["usage"][0]["source"], "antigravity");
+        assert!(!wire.to_string().contains("/private/repo"));
+    }
+
     #[test]
     fn invalid_skin_or_oversize_payload_cannot_take_over() {
         let mut s = snapshot();

@@ -317,6 +317,10 @@ fn thread_document(
     reply(request, 200, HTML, html, None);
 }
 
+pub(super) fn supports_reply(key: &str) -> bool {
+    key.starts_with("codex-") || key.starts_with("antigravity-")
+}
+
 fn handle(
     mut request: Request,
     address: SocketAddr,
@@ -471,7 +475,7 @@ fn handle(
             return reply(request, 401, JSON, "{}".into(), None);
         }
         if let Ok(page) = &mut data {
-            if let Some(key) = live_key.filter(|k| k.starts_with("codex-")) {
+            if let Some(key) = live_key.filter(|k| supports_reply(k)) {
                 if let Some(ticket) = device.reply_ticket(key) {
                     page["replyTicket"] = ticket.into();
                 }
@@ -534,11 +538,19 @@ fn write_action(
     }
 
     let key = match action {
-        Action::Reply(key) | Action::Resume(key) => key,
+        Action::Reply(key) => {
+            if !supports_reply(key) {
+                return Err(405);
+            }
+            key
+        }
+        Action::Resume(key) => {
+            if !key.starts_with("codex-") {
+                return Err(405);
+            }
+            key
+        }
     };
-    if !key.starts_with("codex-") {
-        return Err(405);
-    }
     let has_header = |name: &'static str, value: &str| {
         request
             .headers()
@@ -572,7 +584,7 @@ pub(super) fn submit_reply(
     ticket: &str,
     text: &str,
 ) -> Result<(), u16> {
-    if !key.starts_with("codex-") {
+    if !supports_reply(key) {
         return Err(405);
     }
     if text.trim().is_empty() || text.chars().count() > 8192 {

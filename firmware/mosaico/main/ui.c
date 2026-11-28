@@ -266,6 +266,13 @@ static int usage_pages(const cJSON *u) {
   int n = cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(u, "windows"));
   return n > 2 ? (n + 1) / 2 : 1;
 }
+static const char *source_label(const char *s) {
+  if (!strcmp(s, "codex"))
+    return "Codex";
+  if (!strcmp(s, "antigravity"))
+    return "Antigravity";
+  return "Claude";
+}
 static void draw_usage(uint64_t now) {
   const cJSON *groups = cJSON_GetObjectItemCaseSensitive(model, "usage"), *g;
   int count = 0, current = -1;
@@ -319,7 +326,7 @@ static void draw_usage(uint64_t now) {
   snprintf(usage_id, sizeof(usage_id), "%s", rg_string(g, "id"));
   char title[384];
   snprintf(title, sizeof(title), "%s · %s%s%s",
-           !strcmp(rg_string(g, "source"), "codex") ? "Codex" : "Claude",
+           source_label(rg_string(g, "source")),
            rg_string(g, "label"), *rg_string(g, "updated_label") ? " · " : "",
            rg_string(g, "updated_label"));
   set_text(usage_title, title);
@@ -417,7 +424,7 @@ static void draw_frame(uint64_t now, bool force) {
     snprintf(text, sizeof(text), "所有会话正常");
   set_text(footer, text);
   snprintf(text, sizeof(text), "%s  %zu/%zu",
-           !strcmp(rg_string(p, "source"), "codex") ? "Codex" : "Claude",
+           source_label(rg_string(p, "source")),
            hero_index + 1, schedule.count);
   set_text(footer_meta, text);
   draw_usage(now);

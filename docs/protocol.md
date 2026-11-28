@@ -1,6 +1,6 @@
 # 状态文件协议
 
-Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 的状态观察和阅读设备的回复使用文末的 App Server 协议。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
+Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 的状态观察和阅读设备的回复使用文末的 App Server 协议；Antigravity CLI 由 `statusLine` 与极简 `hooks.json` 写同目录的独立状态与用量文件，app 只读并复核进程存活。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
 
 ## 文件
 
@@ -140,15 +140,42 @@ Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，ap
 
 问句规则与 Claude 的末行启发式一致；用户中断不是外部失败。归一化对象沿用会话结构，加 `source:"codex"`，`session_id:"codex-<UUID>"`，`event:"app-server"`。`since` 是回合 ID、状态、完成时间构成的稳定事件标识，不是采样时间。项目名首次观察时按 git 根目录锚定。复用已阅、前台静默与点击聚焦。
 
-`get_usage` / `usage-changed` 返回 `{claude:<原 usage.json 或 null>,codex:<快照或 null>}`。Codex 快照：
+`get_usage` / `usage-changed` 返回 `{claude:<原 usage.json 或 null>,codex:<快照或 null>,antigravity:<antigravity-usage.json 或 null>}`。Codex 快照：
 
 ```json
 {"updated_at":1792100000,"groups":[{"id":"codex:account:codex","source":"codex","account_id":"account","label":"Codex","windows":[{"key":"primary","used_percentage":23,"duration_minutes":300,"resets_at":1792103600}]}]}
 ```
 
-`account/rateLimits/read` 首次有会话时请求，随后每 60 秒刷新。优先使用 rateLimitsByLimitId，回退单一 rateLimits；不按会话累加。账号变化通知清缓存。未知、非法、过期或超过 120 秒的快照不显示成零；失败时旧快照仅在有效期内继续显示。用量表仅列有存活宠物的来源，点击切换额度组并保持选择，未知显示 `?` / `未知`。Claude 的既有过期规则不变。
+`account/rateLimits/read` 首次有会话时请求，随后每 60 秒刷新。优先使用 rateLimitsByLimitId，回退单一 rateLimits；不按会话累加。账号变化通知清缓存。未知、非法、过期或超过 120 秒的快照不显示成零；失败时旧快照仅在有效期内继续显示。用量表仅列有存活宠物的来源，多额度组时每 8 秒自动轮播（悬停时停在当前组），点击也可手动切换并重新计时，未知显示 `?` / `未知`。Claude 的既有过期规则不变。
 
-隔离验证可设置 `RED_GREEN_STATUS_DIR` 改用临时状态目录；配合 `RED_GREEN_DISABLE_CODEX=1` 停止原生观察器，并从该目录的 `codex-usage.json` 注入用量快照。此文件和 `usage.json` 均不当作会话。常规运行不读取 Codex 用量文件。
+隔离验证可设置 `RED_GREEN_STATUS_DIR` 改用临时状态目录；配合 `RED_GREEN_DISABLE_CODEX=1` 停止原生观察器，并从该目录的 `codex-usage.json` 注入用量快照。此文件、`usage.json` 与 `antigravity-usage.json` 均不当作会话。常规运行不读取 Codex 用量文件。
+
+## Antigravity CLI 接入
+
+安装脚本（`scripts/install-antigravity.sh`）将 `hooks/antigravity.sh` 链接为 `~/.gemini/antigravity-cli/red-green-status.sh`，并幂等写入：
+
+- `~/.gemini/antigravity-cli/settings.json`：优先配置 `statusLine`（`stack_with_default: true`，脚本零输出以保留内置底栏）；已有自定义 `statusLine` 时回退到零输出 `title` 槽位；两槽均被占用时不覆盖，提示在自定义脚本中转发 stdin。
+- `~/.gemini/config/hooks.json`：写入独立 `"red-green"` 条目，仅订阅 `Stop` 与 `matcher: "ask_question"` 的 `PreToolUse` / `PostToolUse`。脚本严格按 `/.gemini/antigravity-cli/` 路径过滤，忽略 Antigravity App、IDE 及无交互终端的 `agy -p` 运行。
+
+基线为 Antigravity CLI 1.5.18。交互式 `agy` 会话以进程身份写入 `~/.claude/session-status/antigravity-pid-<pid>.json`（`source: "antigravity"`、`session_id: "pid-<pid>"`，附 `pid`、`conversation_id`、`title`、`tty`、`project` 等字段）；项目名首次写入即按 Git 根目录锚定。app 侧保持只读，在读取快照与 1.5 秒心跳中通过一次批量 `ps` 校验 `pid` 仍为对应 `tty` 上存活的 `agy` 进程；进程退出后宠物在 1.5 秒内离场。隔离验证注入的不带 `pid` 假文件或设置 `RED_GREEN_DISABLE_ANTIGRAVITY_PID_CHECK=1` 时跳过进程复核。
+
+| 来源事件 / 字段 | 宠物状态 | 备注 |
+| --- | --- | --- |
+| `statusLine`: `authenticating` / `initializing` / 初始 `idle` | `idle` | 启动入场；未提问前 `conversation_id` 为空 |
+| `statusLine`: `working` / `thinking` / `tool_use` | `running` | 若处于 `PreToolUse:ask_question`，`tool_use` 不覆盖 `awaiting` |
+| `statusLine`: `tool_confirmation_pending: true` 或 `agent_state: "reviewing"` | `awaiting` | 权限确认与产物评审 |
+| 钩子 `PreToolUse` / `PostToolUse`（`ask_question`） | `awaiting` → `running` | 补齐 `ask_question` 弹窗不置 `tool_confirmation_pending` 的缺口 |
+| 钩子 `Stop`（`NO_TOOL_CALL` 等正常结束） | `your_turn` / `completed` | 读取当前回合末条可见助手答复，复用末行问句启发式 |
+| 钩子 `Stop`（`USER_CANCELED`） | `idle` | 用户取消不是外部异常中止 |
+| 钩子 `Stop`（`ERROR` / 超限 / 非空 `error`）或 `statusLine: error` | `aborted` | |
+
+`statusLine` 与 `Stop` 钩子并发写同一文件时经系统临时目录下的每 PID 锁目录串行化并原子重命名（不落入被监听的状态目录，避免未变化重绘触发 watcher）；`Stop` 先到后 `statusLine: idle` 保留终态与 `since`，`statusLine: idle` 先到时按对话记录末条非工具答复兜底判定且后续同态 `Stop` 沿用同一 `since`。`/clear` 产生显式空 `conversation_id` 时重置为 `idle` 并将旧会话阅读映射标为 `ended`。
+
+账号用量由 `statusLine` 中的 `quota` 与经单向哈希脱敏后的账号标识（不落盘明文邮箱，也不经 Mosaico 串口外发）归一化写入 `~/.claude/session-status/antigravity-usage.json`（格式同 Codex 额度组，按 `Gemini`、`Claude / GPT` 等模型组拆分，值未变不重写；切换账号、登出或会话进行中缺席 `quota` 时立即刷新为空分组以展示未知，同账号新窗口启动初期尚未拉回 `quota` 时不覆盖缓存以免闪烁）。`remaining_fraction = 1` 且 `reset_time = 1970-01-01T00:00:00Z` 视为未消耗的真实 `0%`（`resets_at: null`）；缺失、非法或真实 `resets_at` 已过期时在用量表显示 `?` / `未知`，绝不显示成零。
+
+电纸书阅读路径写入 `.reader/antigravity-<conversation_id>`（不进入宠物快照），并自动修正 `agy` 1.5.18 `statusLine` 误指向 `/.gemini/antigravity/` 的路径，优先读取 `~/.gemini/antigravity-cli/brain/<conversation_id>/.system_generated/logs/transcript_full.jsonl`。服务端仅投影 `USER_INPUT`（`USER_EXPLICIT`，剥离 `<USER_REQUEST>` 与系统元数据块）和 `PLANNER_RESPONSE`（`MODEL` 非空 `content`，忽略 `thinking`、`tool_calls` 与 `GENERIC` 工具输出）。会话名优先使用 `conversation_title`，缺席时取首条可见提问。进程退出或同终端切换会话后返回 `410`。开启设备回复权限后，Nomad 与 Kindle 可向当前存活且非 `running`/`awaiting` 的 Antigravity CLI 会话发送一次性凭据回复：服务端核对 `agy` 进程与 `conversation_id` 仍匹配、拒绝含终端控制字符的文本后，经 tmux `paste-buffer -p`、Ghostty 1.3+ `input text` 或 Apple Terminal 括号粘贴不抢焦点送入原终端并回车；Mac 终端继续处理权限确认与 `ask_question`。不开放 Antigravity 历史会话与继续对话。
+
+已知盲区：`statusLine` 有 300ms 节流，短于节流窗口的瞬时状态可能合并；未启用 `hooks.json` 时 `ask_question` 不进入 `awaiting` 且取消与结束仅凭对话记录推断。决策与实测依据见 [ADR 0007](adr/0007-antigravity-cli-integration.md) 与 [设计](superpowers/specs/2026-11-28-antigravity-cli-design.md)。
 
 ## 阅读设备配对
 
@@ -173,11 +200,11 @@ Mac 将设备凭据的 SHA-256 摘要逐行保存在原有配对文件中，旧�
 
 在 Mac 为配对设备开启回复后，点「继续对话」会携带该线程的一次性恢复凭据。服务优先复用原线程已绑定的终端。如果上次打开的标签仍在等待绑定，重复请求会继续等待。需要新开终端时，服务在原工作目录启动 `codex resume` 并连接原本机服务。
 
-终端就绪后，设备可以发送回复。发送文字须携带当前 Codex 会话的一次性发送凭据。阅读服务核对会话仍已加载且空闲，再以原线程 ID 调用 `turn/start`。Mac 终端继续处理审批，两端同时发送时 Codex 可能合并到一个回合。
+终端就绪后，设备可以发送回复。发送文字须携带当前 Codex 或 Antigravity 会话的一次性发送凭据。Codex 核对会话仍已加载且空闲后以原线程 ID 调用 `turn/start`；Antigravity 核对 `agy` 进程仍存活于原 `tty`、同一 `conversation_id` 且非运行中/待确认后，经括号粘贴送入原终端并回车。Mac 终端继续处理审批，两端同时发送时可能合入同一回合。
 
 
 ## Kindle 会话共享
 
 `GET /kindle` 返回配对表单或当前会话列表。`GET /kindle/read/{key}` 返回一轮完整对话的 HTML，首次打开定位到最新一轮开头。正文里的链接可切换相邻轮次。启用脚本时，阅读页用 `X-Kindle-Since` 轮询同一地址。请求头 `X-Kindle-State` 携带页面已显示的会话状态。正文、状态及回复权限均无变化时返回 204。仅状态或权限变化时返回带有最新状态和回复入口的 JSON，客户端就地更新底栏。回看时可只请求更新状态，保留阅读位置。
 
-允许回复后，当前 Codex 会话提供 `/kindle/reply/{key}`。GET 返回输入表单，POST 携带该会话的一次性发送凭据。提交成功后返回 303，浏览器回到最新正文。配对、手动翻轮和提交回复均可在关闭脚本时使用。
+允许回复后，当前 Codex 与 Antigravity 会话提供 `/kindle/reply/{key}`。GET 返回输入表单，POST 携带该会话的一次性发送凭据。提交成功后返回 303，浏览器回到最新正文。配对、手动翻轮和提交回复均可在关闭脚本时使用。

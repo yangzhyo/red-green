@@ -214,6 +214,43 @@ pub fn focus(tty: &str) -> String {
     }
 }
 
+/// 定位 tty 对应的 Ghostty terminal id（复用缓存并校验仍存活，未命中时按 OSC 7 探测一次）。
+pub fn resolve_id(tty: &str) -> Option<String> {
+    let mut reg = registry();
+    let before = surfaces().ok()?;
+    reg.id_by_tty
+        .retain(|_, id| before.iter().any(|s| s.id == *id));
+    if let Some(id) = reg.id_by_tty.get(tty).cloned() {
+        return Some(id);
+    }
+    probe(&mut reg, &[tty.to_string()], &before);
+    reg.id_by_tty.get(tty).cloned()
+}
+
+/// 通过 Ghostty 1.3+ AppleScript 原生括号粘贴并发送回车，不抢焦点、不改剪贴板，且绝不唤醒已关闭的 Ghostty。
+pub fn send_input(surface_id: &str, text: &str) -> Result<(), String> {
+    const SCRIPT: &str = r#"on run argv
+    if not (application "Ghostty" is running) then error "Ghostty not running"
+    set surfaceId to item 1 of argv
+    set msg to item 2 of argv
+    tell application "Ghostty"
+        set targetTerm to terminal id surfaceId
+        input text msg to targetTerm
+        delay 0.1
+        send key "enter" to targetTerm
+    end tell
+end run"#;
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", SCRIPT, "--", surface_id, text])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
+    }
+}
+
 // 已阅检测与前台静默的心跳：前台 Ghostty terminal -> 标签页 tty。
 // 前台是没登记的 terminal（普通 shell 标签页、新开的会话、刚 attach 的 tmux 客户端、复用了旧 tty 的新标签页）
 // 时发现一轮：situation() 描述会话与 tmux 客户端的现状，连同前台 terminal 都没变就不重探；

@@ -78,8 +78,13 @@ function render(m) {
   const tag = document.getElementById("tag");
   const project = m.project || "?";
   tag.textContent = project;
+  const SOURCE_NAME = {
+    codex: "Codex CLI",
+    antigravity: "Antigravity CLI",
+    claude: "Claude Code",
+  };
   // 名字截断后窗口内唯一能看全名的地方是这里：全名与近况合并进 tooltip
-  const source = m.source === "codex" ? "Codex CLI" : "Claude Code";
+  const source = SOURCE_NAME[m.source] ?? "Claude Code";
   tag.title = `${source} · ${project}${m.detail ? ` — ${m.detail}` : ""}`;
 }
 
