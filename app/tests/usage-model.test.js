@@ -175,3 +175,46 @@ test("设备投影保留 Antigravity 过期状态与数值更新时间", () => {
   assert.equal(g.windows[1].status, "known");
   assert.equal(g.windows[1].used_percentage, 22);
 });
+
+test("多额度组自动轮播按 8 秒切换，悬停停在当前组，手动切换重置计时且快照刷新不打断周期", () => {
+  const r = USAGE.createRotator(8000);
+  const g1 = { id: "codex:a:codex", source: "codex" };
+  const g2 = { id: "antigravity:u:gemini", source: "antigravity" };
+  const g3 = { id: "claude", source: "claude" };
+
+  // 单组不轮播
+  r.update([g1], 1000);
+  assert.equal(r.current().id, g1.id);
+  assert.equal(r.tick(20_000), false);
+
+  // 多组启动后：快照频繁刷新不重置 8 秒周期
+  r.update([g1, g2, g3], 20_000);
+  assert.equal(r.current().id, g1.id);
+  assert.equal(r.tick(27_999), false);
+  r.update([g1, g2, g3], 27_999);
+  assert.equal(r.tick(28_000), true);
+  assert.equal(r.current().id, g2.id);
+
+  // 手动点击切到下一组并重置计时
+  r.next(30_000);
+  assert.equal(r.current().id, g3.id);
+  assert.equal(r.tick(37_999), false);
+  assert.equal(r.tick(38_000), true);
+  assert.equal(r.current().id, g1.id);
+
+  // 悬停期间不切换，离开悬停后重新计 8 秒
+  r.setPaused(true, 40_000);
+  assert.equal(r.tick(60_000), false);
+  assert.equal(r.current().id, g1.id);
+  r.setPaused(false, 60_000);
+  assert.equal(r.tick(67_999), false);
+  assert.equal(r.tick(68_000), true);
+  assert.equal(r.current().id, g2.id);
+
+  // 当前选中组消失时回退首组并重新计时
+  r.update([g1, g3], 70_000);
+  assert.equal(r.current().id, g1.id);
+  assert.equal(r.tick(77_999), false);
+  assert.equal(r.tick(78_000), true);
+  assert.equal(r.current().id, g3.id);
+});

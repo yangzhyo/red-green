@@ -76,9 +76,9 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 1. `~/.gemini/antigravity-cli/settings.json`：优先写入零输出 `statusLine`（`stack_with_default: true`，保留内置底栏）；若你已有自定义 `statusLine`，自动改用零输出 `title` 槽位；若两者均已自定义，则保留原配置并提示在自定义脚本里把 stdin JSON 同步管道给 `~/.gemini/antigravity-cli/red-green-status.sh statusline`。
 2. `~/.gemini/config/hooks.json`：写入独立的 `"red-green"` 条目，仅订阅 `Stop` 与 `ask_question` 的 `PreToolUse` / `PostToolUse`，并按 `/.gemini/antigravity-cli/` 路径过滤，不影响 Antigravity App、Antigravity IDE 及其他工具调用。
 
-已验证 **Antigravity CLI (`agy`) 1.5.18**。终端聚焦、已阅与前台静默沿用 Apple Terminal、Ghostty 1.3+ 与 tmux 通路；宠物按项目分配皮肤，会话退出或关窗后 1.5 秒内自动离场。账号用量随 `statusLine` 自动采集，按模型组（如 `Gemini`、`Claude / GPT`）展示五小时与七天窗口，同账号多会话不重复计入；未使用过的窗口显示真实 `0%`，缺失、非法或已过期的窗口显示未知（`?`），不伪装为零用量。开启局域网会话共享后，Antigravity CLI 会话会出现在 Supernote Nomad 与第 10 代 Kindle Paperwhite 的当前会话列表，打开即可阅读并跟随更新。
+已验证 **Antigravity CLI (`agy`) 1.5.18 / 1.5.19**。终端聚焦、已阅与前台静默沿用 Apple Terminal、Ghostty 1.3+ 与 tmux 通路；宠物按项目分配皮肤，会话退出或关窗后 1.5 秒内自动离场。账号用量随 `statusLine` 自动采集，按模型组（如 `Gemini`、`Claude / GPT`）展示五小时与七天窗口，同账号多会话不重复计入；未使用过的窗口显示真实 `0%`，缺失、非法或已过期的窗口显示未知（`?`），不伪装为零用量。用量表存在多个额度组时每 8 秒自动轮播（悬停停在当前组），点击也可手动切换并重置计时。开启局域网会话共享后，Antigravity CLI 会话会出现在 Supernote Nomad 与第 10 代 Kindle Paperwhite 的当前会话列表，打开即可阅读并跟随更新；开启设备回复后也可在 Nomad 与 Kindle 上直接回复当前存活会话（不开放历史会话与继续对话）。
 
-限制：仅支持本机交互式 `agy` 会话，`agy -p` 非交互模式、`agy acp` 编辑器后端、Antigravity App 与 IDE 不在支持范围；`statusLine` 受 CLI 300ms 节流，极短瞬时状态可能合并；若手动停用 `hooks.json` 里的 `red-green`，`ask_question` 弹窗不会触发待确认；电纸书首期仅支持当前可读会话阅读，不含 Nomad 历史浏览、远程回复与继续对话；ESP-Mosaico 已更新固件源码支持 `Antigravity` 来源展示，已刷旧版固件遇到含 Antigravity 会话的快照时会安全回退 Mac 桌面，重刷固件后即可在设备显示。恢复安装前配置可使用自动生成的 `.red-green-时间戳.bak` 备份，或移除 `settings.json` 中的对应槽位、`hooks.json` 中的 `"red-green"` 条目并删除 `~/.gemini/antigravity-cli/red-green-status.sh`。
+限制：仅支持本机交互式 `agy` 会话，`agy -p` 非交互模式、`agy acp` 编辑器后端、Antigravity App 与 IDE 不在支持范围；`statusLine` 受 CLI 300ms 节流，极短瞬时状态可能合并；若手动停用 `hooks.json` 里的 `red-green`，`ask_question` 弹窗不会触发待确认；电纸书回复要求会话运行在 Apple Terminal、Ghostty 1.3+ 或 tmux 中且回合未在运行中/待确认，不支持历史浏览与继续对话；ESP-Mosaico 已更新固件支持 `Antigravity` 来源展示。恢复安装前配置可使用自动生成的 `.red-green-时间戳.bak` 备份，或移除 `settings.json` 中的对应槽位、`hooks.json` 中的 `"red-green"` 条目并删除 `~/.gemini/antigravity-cli/red-green-status.sh`。
 
 ### Kindle 与 Nomad 首次配对
 
@@ -86,7 +86,7 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 2. 在 Nomad 笔记中插入「网页」链接，填入完整的 `http://` 地址。Kindle 用内置浏览器打开同一地址，点「Kindle 阅读」，也可以直接收藏 `/kindle`。在第一台设备上输入配对码。
 3. 添加第二台时，在 Mac 菜单点「点此换码」，把新码输入第二台设备。每个码十分钟内可用一次。此后两台设备均可从自己的书签进入，切换时无须换码。升级前已经配对的浏览器可继续使用。
 
-要在设备上回复 Codex，请在两台都配对后选择「允许所有已配对设备回复 Codex」。换码或重启共享会关闭回复权限。关闭共享会保留配对记录，「解除所有设备配对」会让所有浏览器退出。某台浏览器清除了配对 Cookie 或 Cookie 到期（30 天）时，只需为该浏览器重新配对。
+要在设备上回复会话（Codex CLI 与 Antigravity CLI），请在两台都配对后选择「允许所有已配对设备回复」。换码或重启共享会关闭回复权限。关闭共享会保留配对记录，「解除所有设备配对」会让所有浏览器退出。某台浏览器清除了配对 Cookie 或 Cookie 到期（30 天）时，只需为该浏览器重新配对。
 
 ### 在 Supernote Nomad 上查看和回复会话
 
@@ -101,7 +101,7 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 
 打开详情时从最新一轮的开头读起，同轮的提问、补充和回复在同一页。轻点正文右半屏向下读一屏，左半屏向上读一屏，相邻两屏重叠约一行，到本轮首尾即停。向左滑进入下一轮，向右滑返回上一轮，底部的「上一屏」「下一屏」也能切换轮次。宽表格可在表格内横向拖动。在最新一轮末尾会自动跟随更新，回看时保留当前段落，点「有新消息」可跳到最新正文末尾。断网后重新连接，只要会话仍可读就会补齐消息。底部的「返回列表」回到首页，「返回历史」回到先前的筛选和位置。从笔记链接进入时，浏览器的后退键可直接回到笔记。
 
-**回复或继续 Codex 对话**　在 Mac 菜单选择「允许所有已配对设备回复 Codex」。从首页或历史进入已激活的会话，都可点底部的「回复」，在页面顶部输入并发送。审批在 Mac 终端处理。如果断网导致发送结果未知，先核对正文再发送。两端同时发送时，Codex 可能把两条输入合入同一回合。
+**回复当前会话或继续 Codex 对话**　在 Mac 菜单选择「允许所有已配对设备回复」。进入当前活跃的 Codex CLI 或 Antigravity CLI 会话（以及历史中已激活的 Codex 会话），都可点底部的「回复」，在页面顶部输入并发送。审批与 `ask_question` 仍在 Mac 终端处理。如果断网导致发送结果未知，先核对正文再发送。两端同时发送时可能合入同一回合。
 
 已退出终端的对话可以直接回看。要继续时，点「继续对话」，Mac 会在原工作目录恢复同一会话，并在连接后展开 Nomad 的输入框。Mac 已运行 Ghostty 时优先新开标签，也支持系统「终端」的新窗口。若原目录已移动或删除，已有记录仍可阅读。若提示在 Mac 上查看终端，先处理新窗口内的提示。确认窗口未打开或已关闭后，可在 Mac 关闭再开启共享，重新允许回复后再试。
 
@@ -113,7 +113,7 @@ terminal_title = ["thread-id", "activity", "thread-name", "project-name"]
 
 打开会话后从最新一轮的开头读起。每轮提问及其回复放在同一页，长文、表格和代码可上下滚动阅读。轻点正文左半屏向上读一屏，右半屏向下读一屏，两屏间保留约一行。点到页首或页末会停住。在正文上向左滑进入下一轮，向右滑回到上一轮，也可以点底部的「上一屏」「下一屏」切换轮次。固定底栏左侧显示当前会话状态，例如「运行中」或「待确认」。在前台阅读时约每 3 秒检查一次，回看旧轮次时状态也会更新，阅读位置会保留。关闭脚本时可手动刷新查看状态。底栏右侧显示「查看最新」「返回列表」「上一屏」「下一屏」，到达首轮或末轮时，相应方向显示为灰色。停在末尾会跟随新内容，回看时点「有新消息」可跳到最新。关闭脚本后仍可用底部链接阅读和手动更新。
 
-**在 Kindle 回复 Codex**　在 Mac 菜单栏选择「允许所有已配对设备回复 Codex」。打开当前 Codex 会话，点底部「上一屏」前的「回复」，输入文字后点「发送」，页面会回到最新正文。关闭脚本时，授权后刷新正文即可看到入口。回合进行中要等它结束，审批提示在 Mac 终端处理。如果发送结果待核对，先查看最新正文。Claude 会话可继续阅读。
+**在 Kindle 回复会话**　在 Mac 菜单栏选择「允许所有已配对设备回复」。打开当前 Codex CLI 或 Antigravity CLI 会话，点底部「上一屏」前的「回复」，输入文字后点「发送」，页面会回到最新正文。关闭脚本时，授权后刷新正文即可看到入口。回合进行中或待确认时需等其完成，审批提示在 Mac 终端处理。如果发送结果待核对，先查看最新正文。Claude 会话可继续阅读。
 
 ### 在 ESP-Mosaico 上显示宠物和用量
 

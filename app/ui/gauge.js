@@ -38,6 +38,7 @@ const RINGS = {
   1: { ch: "I", cells: clockwise(cells((d) => d >= 2.5 && d < 3.5)) },
 };
 
+const rotator = USAGE.createRotator(USAGE.ROTATE_MS);
 let groups = [];
 let view = null;
 let expanded = false;
@@ -118,29 +119,39 @@ function render() {
 }
 
 // 悬停由 Rust 轮询光标推来（非焦点窗口收不到 mousemove）：进入要真的落在圆表 / 卡片上，
-// 展开后只要还在窗口内就保持，避免圆表与卡片形状不同导致的反复开合
+// 展开后只要还在窗口内就保持，避免圆表与卡片形状不同导致的反复开合；悬停时停在当前额度组。
 listen("gauge-hover", (e) => {
   const p = e.payload;
   const hit = p ? stage.contains(document.elementFromPoint(p.x, p.y)) : false;
   const next = !!p && (expanded || hit);
   if (next === expanded) return;
   expanded = next;
+  rotator.setPaused(expanded, Date.now());
   render();
 });
 
 listen("usage-update", (e) => {
-  groups = e.payload ?? [];
-  view = USAGE.select(groups, view?.id);
+  view = rotator.update(e.payload ?? [], Date.now());
+  groups = rotator.groups();
   render();
 }).then(() => {
   // 首帧握手：窗口刚创建时 manager 的 emitTo 可能先于监听器就绪，就绪后请 manager 补发
   emit("gauge-ready");
 });
 
-// 整窗可拖；原地点击在来源/额度组之间轮换，选择在后续快照中保持。
+function maybeRotate() {
+  if (!rotator.tick(Date.now())) return;
+  view = rotator.current();
+  render();
+}
+// 可见窗用定时器维持 8 秒轮播，并复用 Rust 1.5s front-tick 兜底非焦点窗口定时节流。
+setInterval(maybeRotate, 1000);
+listen("front-tick", maybeRotate);
+
+// 整窗可拖；原地点击在来源/额度组之间轮换并重置自动轮播计时。
 function nextGroup() {
   if (groups.length < 2) return;
-  view = groups[(groups.findIndex((g) => g.id === view?.id) + 1) % groups.length];
+  view = rotator.next(Date.now());
   render();
 }
 installDrag(nextGroup);

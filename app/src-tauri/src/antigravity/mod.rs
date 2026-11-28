@@ -120,6 +120,35 @@ pub fn filter_alive(sessions: Vec<Value>) -> Vec<Value> {
     filter_with_map(sessions, &procs)
 }
 
+/// 校验指定 PID 是否仍是对应 tty 上存活的 Antigravity CLI 进程。
+pub fn is_live_process(pid: u32, expected_tty: &str) -> bool {
+    if std::env::var_os("RED_GREEN_DISABLE_ANTIGRAVITY_PID_CHECK").is_some() {
+        return true;
+    }
+    if pid == 0 || !expected_tty.starts_with("/dev/tty") {
+        return false;
+    }
+    let procs = query_live_processes(&HashSet::from([pid]));
+    procs
+        .get(&pid)
+        .is_some_and(|p| is_agy_comm(&p.comm) && p.tty.as_deref() == Some(expected_tty))
+}
+
+/// 校验并归一化电纸书远程回复文本：统一换行，拒绝空串、超长或任何可能突破括号粘贴的控制字符。
+pub fn validate_reply_text(text: &str) -> Result<String, u16> {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.trim().is_empty() || normalized.chars().count() > 8192 {
+        return Err(422);
+    }
+    if normalized
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+    {
+        return Err(422);
+    }
+    Ok(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +212,18 @@ mod tests {
             .map(|s| s["session_id"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(kept, ["c1", "vfy", "pid-100"]);
+    }
+
+    #[test]
+    fn validates_reply_text_and_rejects_terminal_control_characters() {
+        assert_eq!(
+            validate_reply_text("第一行\r\n第二行\t继续").as_deref(),
+            Ok("第一行\n第二行\t继续")
+        );
+        assert_eq!(validate_reply_text("   \n\t "), Err(422));
+        assert_eq!(validate_reply_text("hi\x1b[201~bad"), Err(422));
+        assert_eq!(validate_reply_text("hi\x03"), Err(422));
+        assert_eq!(validate_reply_text("hi\x04"), Err(422));
+        assert_eq!(validate_reply_text(&"a".repeat(8193)), Err(422));
     }
 }

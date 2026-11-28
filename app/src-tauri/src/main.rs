@@ -439,6 +439,156 @@ fn focus_terminal(tty: String) {
     dbg_log(&format!("focus_terminal tty={tty} tab_tty={tab_tty} {msg}"));
 }
 
+fn find_tmux_bin() -> Option<&'static str> {
+    for bin in ["tmux", "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
+        if Command::new(bin)
+            .arg("-V")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return Some(bin);
+        }
+    }
+    None
+}
+
+fn apple_terminal_has_tty(tty: &str) -> bool {
+    const SCRIPT: &str = r#"on run argv
+    if not (application "Terminal" is running) then return false
+    set targetTty to item 1 of argv
+    tell application "Terminal"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if tty of t is targetTty then return true
+            end repeat
+        end repeat
+    end tell
+    return false
+end run"#;
+    Command::new("/usr/bin/osascript")
+        .args(["-e", SCRIPT, tty])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+}
+
+pub(crate) fn prepare_antigravity_reply(
+    tty: &str,
+) -> Result<red_green::reader::live::AntigravityReplyTarget, u16> {
+    use red_green::reader::live::AntigravityReplyTarget;
+    if !tty.starts_with("/dev/tty") {
+        return Err(424);
+    }
+    if let Some((pane, _)) = tmux_locate(tty) {
+        return Ok(AntigravityReplyTarget::Tmux(pane));
+    }
+    match tty_host(tty) {
+        Some(Host::Ghostty) => ghostty::resolve_id(tty)
+            .map(AntigravityReplyTarget::Ghostty)
+            .ok_or(424),
+        Some(Host::AppleTerminal) => {
+            if apple_terminal_has_tty(tty) {
+                Ok(AntigravityReplyTarget::AppleTerminal(tty.to_owned()))
+            } else {
+                Err(424)
+            }
+        }
+        None => Err(424),
+    }
+}
+
+pub(crate) fn dispatch_antigravity_reply(
+    target: &red_green::reader::live::AntigravityReplyTarget,
+    text: &str,
+) -> Result<(), u16> {
+    use red_green::reader::live::AntigravityReplyTarget;
+    let res: Result<(), String> = match target {
+        AntigravityReplyTarget::Tmux(pane) => (|| {
+            use std::io::Write;
+            use std::process::Stdio;
+            let bin = find_tmux_bin().ok_or_else(|| "tmux not found".to_string())?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            let buf = format!("rg-reply-{}-{stamp:x}", std::process::id());
+            let mut child = Command::new(bin)
+                .args(["load-buffer", "-b", &buf, "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(text.as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            let load = child.wait_with_output().map_err(|e| e.to_string())?;
+            if !load.status.success() {
+                return Err(String::from_utf8_lossy(&load.stderr).trim().to_owned());
+            }
+            let paste = Command::new(bin)
+                .args(["paste-buffer", "-p", "-d", "-b", &buf, "-t", pane])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !paste.status.success() {
+                let _ = Command::new(bin).args(["delete-buffer", "-b", &buf]).output();
+                return Err(String::from_utf8_lossy(&paste.stderr).trim().to_owned());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let enter = Command::new(bin)
+                .args(["send-keys", "-t", pane, "Enter"])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !enter.status.success() {
+                return Err(String::from_utf8_lossy(&enter.stderr).trim().to_owned());
+            }
+            Ok(())
+        })(),
+        AntigravityReplyTarget::Ghostty(id) => ghostty::send_input(id, text),
+        AntigravityReplyTarget::AppleTerminal(tty) => {
+            const SCRIPT: &str = r#"on run argv
+    set targetTty to item 1 of argv
+    set payload to item 2 of argv
+    tell application "Terminal"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if tty of t is targetTty then
+                    do script payload in t
+                    return "ok"
+                end if
+            end repeat
+        end repeat
+    end tell
+    error "tab not found"
+end run"#;
+            let payload = format!("\x1b[200~{text}\x1b[201~");
+            Command::new("/usr/bin/osascript")
+                .args(["-e", SCRIPT, tty, &payload])
+                .output()
+                .map_err(|e| e.to_string())
+                .and_then(|o| {
+                    if o.status.success() {
+                        Ok(())
+                    } else {
+                        Err(String::from_utf8_lossy(&o.stderr).trim().to_owned())
+                    }
+                })
+        }
+        AntigravityReplyTarget::Custom(_) => Err("unsupported custom target".into()),
+    };
+    match res {
+        Ok(()) => {
+            dbg_log(&format!("antigravity_reply target={target:?} ok"));
+            Ok(())
+        }
+        Err(err) => {
+            dbg_log(&format!("antigravity_reply target={target:?} err={err}"));
+            Err(502)
+        }
+    }
+}
+
 fn session_ttys() -> Vec<String> {
     read_snapshot()
         .iter()

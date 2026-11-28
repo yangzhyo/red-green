@@ -23,7 +23,16 @@ pub enum ResumeTerminal {
     Terminal { tty: String, inode: u64 },
     Unknown,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AntigravityReplyTarget {
+    Tmux(String),
+    Ghostty(String),
+    AppleTerminal(String),
+    Custom(String),
+}
 type TerminalLauncher = fn(&Path, &str, &Path) -> Result<ResumeTerminal, u16>;
+type AntigravityReplyPrepare = fn(&str) -> Result<AntigravityReplyTarget, u16>;
+type AntigravityReplyDispatch = fn(&AntigravityReplyTarget, &str) -> Result<(), u16>;
 pub struct LiveSource {
     snapshot: fn() -> Vec<Value>,
     status_dir: PathBuf,
@@ -37,6 +46,8 @@ pub struct LiveSource {
     terminal_exists: fn(&ResumeTerminal) -> Result<bool, u16>,
     thread_terminal_exists: fn(&str, &[String]) -> Result<bool, u16>,
     launching: HashMap<String, ResumeTerminal>,
+    antigravity_prepare: AntigravityReplyPrepare,
+    antigravity_dispatch: AntigravityReplyDispatch,
 }
 
 struct StoredConversation {
@@ -264,6 +275,8 @@ impl LiveSource {
             terminal_exists: |_| Err(503),
             thread_terminal_exists: |_, _| Err(503),
             launching: HashMap::new(),
+            antigravity_prepare: |_| Err(424),
+            antigravity_dispatch: |_, _| Err(424),
         }
     }
 
@@ -276,6 +289,16 @@ impl LiveSource {
         self.launch = launch;
         self.terminal_exists = terminal_exists;
         self.thread_terminal_exists = thread_terminal_exists;
+        self
+    }
+
+    pub fn with_antigravity_reply(
+        mut self,
+        prepare: AntigravityReplyPrepare,
+        dispatch: AntigravityReplyDispatch,
+    ) -> Self {
+        self.antigravity_prepare = prepare;
+        self.antigravity_dispatch = dispatch;
         self
     }
 
@@ -502,6 +525,9 @@ impl Source for LiveSource {
         text: &str,
         admit: impl FnOnce() -> Result<(), u16>,
     ) -> Result<(), u16> {
+        if let Some(cid) = key.strip_prefix("antigravity-") {
+            return self.send_antigravity_reply(key, cid, text, admit);
+        }
         let id = key.strip_prefix("codex-").ok_or(405u16)?;
         if !self.directory().iter().any(|entry| entry.key == key) {
             return Err(UNAVAILABLE);
@@ -577,6 +603,77 @@ impl Source for LiveSource {
 }
 
 impl LiveSource {
+    fn send_antigravity_reply(
+        &mut self,
+        key: &str,
+        cid: &str,
+        text: &str,
+        admit: impl FnOnce() -> Result<(), u16>,
+    ) -> Result<(), u16> {
+        let sanitized = crate::antigravity::validate_reply_text(text)?;
+        let Some(session) = (self.snapshot)().into_iter().find(|s| {
+            if s["source"].as_str() != Some("antigravity") {
+                return false;
+            }
+            let session_cid = s["conversation_id"]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .or_else(|| s["session_id"].as_str());
+            session_cid == Some(cid)
+        }) else {
+            return Err(if self.mapping(key).is_some() {
+                self.selected.remove(key);
+                410
+            } else {
+                UNAVAILABLE
+            });
+        };
+        if !matches!(
+            self.selected.get(key),
+            Some(Selection {
+                history: History::Antigravity(_),
+                ..
+            })
+        ) {
+            return Err(412);
+        }
+        match session["state"].as_str() {
+            Some("idle" | "your_turn" | "completed" | "aborted") => (),
+            Some("running" | "awaiting") => return Err(409),
+            _ => return Err(UNAVAILABLE),
+        }
+        let tty = session["tty"]
+            .as_str()
+            .filter(|t| t.starts_with("/dev/tty"))
+            .ok_or(424u16)?;
+        if let Some(pid) = session["pid"]
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|&p| p > 0)
+        {
+            if !crate::antigravity::is_live_process(pid, tty) {
+                self.selected.remove(key);
+                return Err(410);
+            }
+            let file = self.status_dir.join(format!("antigravity-pid-{pid}.json"));
+            if let Ok(raw) = fs::read_to_string(&file) {
+                if let Ok(fresh) = serde_json::from_str::<Value>(&raw) {
+                    if fresh["conversation_id"].as_str() != Some(cid) {
+                        self.selected.remove(key);
+                        return Err(410);
+                    }
+                    if matches!(fresh["state"].as_str(), Some("running" | "awaiting")) {
+                        return Err(409);
+                    }
+                }
+            }
+        }
+        let target = (self.antigravity_prepare)(tty)?;
+        admit()?;
+        // 凭据已消费后不再重放；投递异常返回 502 由阅读端提示核对正文。
+        (self.antigravity_dispatch)(&target, &sanitized).map_err(|_| 502u16)
+    }
+
     fn current_messages(&mut self, key: &str, view: View) -> Result<Value, u16> {
         let Some(entry) = self.directory().into_iter().find(|row| row.key == key) else {
             if key
@@ -766,6 +863,7 @@ mod tests {
             "conversation_id": "cid-1",
             "title": "自定义标题",
             "project": "red-green",
+            "tty": "/dev/ttys012",
             "state": "completed",
         })];
 
@@ -779,10 +877,54 @@ mod tests {
         assert_eq!(delta["state"], "completed");
         assert_eq!(delta["title"], "自定义标题");
 
-        // 会话退出后返回 410，且不支持写接口
+        // 未绑定终端投递回调时返回 424；绑定后校验状态、控制符并按顺序消费凭据
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "hi", || panic!("424 前不应消费凭据")),
+            Err(424)
+        );
+        static SENT: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+        SENT.lock().unwrap().clear();
+        let mut source = source.with_antigravity_reply(
+            |tty| Ok(AntigravityReplyTarget::Custom(tty.to_owned())),
+            |target, text| {
+                let AntigravityReplyTarget::Custom(tty) = target else {
+                    return Err(424);
+                };
+                SENT.lock().unwrap().push((tty.clone(), text.to_owned()));
+                Ok(())
+            },
+        );
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "坏\x1b[201~字符", || panic!("422 前不应消费")),
+            Err(422)
+        );
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "第一行\r\n第二行", || Ok(())),
+            Ok(())
+        );
+        assert_eq!(
+            *SENT.lock().unwrap(),
+            vec![("/dev/ttys012".into(), "第一行\n第二行".into())]
+        );
+
+        // awaiting / running 时拒绝 409
+        *TEST_SNAPSHOT.lock().unwrap() = vec![json!({
+            "session_id": "pid-123",
+            "source": "antigravity",
+            "conversation_id": "cid-1",
+            "project": "red-green",
+            "tty": "/dev/ttys012",
+            "state": "awaiting",
+        })];
+        assert_eq!(
+            source.send_reply("antigravity-cid-1", "等待审批", || panic!("409 前不应消费")),
+            Err(409)
+        );
+
+        // 会话退出后返回 410
         TEST_SNAPSHOT.lock().unwrap().clear();
         assert_eq!(source.messages("antigravity-cid-1", ""), Err(410));
-        assert_eq!(source.send_reply("antigravity-cid-1", "hi", || Ok(())), Err(405));
+        assert_eq!(source.send_reply("antigravity-cid-1", "hi", || Ok(())), Err(410));
         assert_eq!(source.messages("antigravity-unknown", ""), Err(UNAVAILABLE));
 
         let _ = fs::remove_dir_all(dir);

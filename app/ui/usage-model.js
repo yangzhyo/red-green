@@ -69,6 +69,45 @@ globalThis.USAGE = (() => {
     return result;
   }
   const select = (groups, id) => groups.find((g) => g.id === id) ?? groups[0] ?? null;
+  const ROTATE_MS = 8000;
+  function createRotator(intervalMs = ROTATE_MS) {
+    let groups = [];
+    let view = null;
+    let since = 0;
+    let paused = false;
+    return {
+      current: () => view,
+      groups: () => groups,
+      update(nextGroups, now) {
+        const prevId = view?.id ?? null;
+        const wasSingle = groups.length < 2;
+        groups = Array.isArray(nextGroups) ? nextGroups : [];
+        view = select(groups, prevId);
+        if (wasSingle || groups.length < 2 || view?.id !== prevId) since = now;
+        return view;
+      },
+      next(now) {
+        if (groups.length < 2) return view;
+        const idx = groups.findIndex((g) => g.id === view?.id);
+        view = groups[(idx + 1) % groups.length];
+        since = now;
+        return view;
+      },
+      setPaused(nextPaused, now) {
+        const flag = Boolean(nextPaused);
+        if (flag === paused) return;
+        paused = flag;
+        if (!paused) since = now;
+      },
+      tick(now) {
+        if (paused || groups.length < 2 || now - since < intervalMs) return false;
+        const idx = groups.findIndex((g) => g.id === view?.id);
+        view = groups[(idx + 1) % groups.length];
+        since = now;
+        return true;
+      },
+    };
+  }
   function duration(minutes) {
     if (!(minutes > 0)) return "窗口";
     if (minutes % 1440 === 0) return `${minutes / 1440}d`;
@@ -102,5 +141,5 @@ globalThis.USAGE = (() => {
       status:w.used_percentage===null ? (typeof w.resets_at==="number" && w.resets_at>0 && w.resets_at*1000<=now?"expired":"unknown") : "known",
     }))}));
   }
-  return {groups, select, duration, deviceGroups};
+  return {groups, select, duration, deviceGroups, ROTATE_MS, createRotator};
 })();

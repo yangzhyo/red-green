@@ -45,7 +45,7 @@
 
 ## 电纸书可读会话与 ESP-Mosaico
 
-- **Supernote Nomad 与 Kindle Paperwhite**：实测 `agy` 1.5.18 的 `statusLine` 将 `transcript_path` 误报为 `/.gemini/antigravity/brain/.../transcript.jsonl`，采集脚本自动修正为 `~/.gemini/antigravity-cli/brain/<cid>/.system_generated/logs/transcript_full.jsonl` 登记至 `.reader/antigravity-<cid>`（不进入宠物快照）。新增 [reader/antigravity.rs](../../../app/src-tauri/src/reader/antigravity.rs) 增量解析 `USER_INPUT`（剥离 `<USER_REQUEST>` 外壳与 `<ADDITIONAL_METADATA>` 等内部块）与 `PLANNER_RESPONSE`（仅保留可见 `content`，过滤 `thinking`、`tool_calls` 与 `GENERIC` 工具输出）。会话名优先使用 `conversation_title`，缺席时回退首条可见提问。进程退出或同终端切换会话后返回 `410`（会话已结束）。首期不包含 Nomad 历史浏览、远程回复与继续对话。
+- **Supernote Nomad 与 Kindle Paperwhite**：实测 `agy` 1.5.18 的 `statusLine` 将 `transcript_path` 误报为 `/.gemini/antigravity/brain/.../transcript.jsonl`，采集脚本自动修正为 `~/.gemini/antigravity-cli/brain/<cid>/.system_generated/logs/transcript_full.jsonl` 登记至 `.reader/antigravity-<cid>`（不进入宠物快照）。新增 [reader/antigravity.rs](../../../app/src-tauri/src/reader/antigravity.rs) 增量解析 `USER_INPUT`（剥离 `<USER_REQUEST>` 外壳与 `<ADDITIONAL_METADATA>` 等内部块）与 `PLANNER_RESPONSE`（仅保留可见 `content`，过滤 `thinking`、`tool_calls` 与 `GENERIC` 工具输出）。会话名优先使用 `conversation_title`，缺席时回退首条可见提问。进程退出或同终端切换会话后返回 `410`（会话已结束）。开启回复权限后支持 Nomad 与 Kindle 向当前存活且非运行中/待确认的会话发送回复（经受支持终端括号粘贴并回车，Mac 终端继续处理审批）；保持不包含历史浏览与继续对话。
 - **ESP-Mosaico**：同步更新 [output/model.rs](../../../app/src-tauri/src/output/model.rs)、[device.c](../../../firmware/mosaico/main/device.c) 与 [ui.c](../../../firmware/mosaico/main/ui.c) 接受并展示 `antigravity` 来源（显示 `Antigravity`），补充 Rust 与 C 自动化测试。已刷旧版固件遇到含 Antigravity 会话的快照时会校验拒绝并安全回退 Mac 桌面，重新构建刷机后可在设备端展示。
 
 ## 实测验证摘要

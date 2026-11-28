@@ -6,13 +6,13 @@ use tiny_http::{Method, Request};
 fn explanation(status: u16) -> &'static str {
     match status {
         400 => "表单无效，请回到正文重新打开「回复」。",
-        403 => "请在 Mac 菜单开启「允许所有已配对设备回复 Codex」，再从正文打开回复。",
+        403 => "请在 Mac 菜单开启「允许所有已配对设备回复」，再从正文打开回复。",
         404 | 410 => "会话已结束或无法找到。",
         405 => "此会话只支持阅读。",
         409 => "当前回合正在进行，请等它结束后再发送。如有审批提示，请在 Mac 上处理。",
         412 => "发送凭据已失效。请先查看最新正文，确认是否已经发送。",
-        413 | 422 => "请输入 1 至 8192 个字。",
-        424 => "Codex 未受理这条回复，请回到正文后重试。",
+        413 | 422 => "请输入 1 至 8192 个有效字符（不含终端控制符）。",
+        424 => "当前会话未受理这条回复，请回到正文后重试。",
         502 => "发送结果待核对，请先查看最新正文。",
         _ => "会话暂时无法使用，请稍后重试。",
     }
@@ -89,7 +89,7 @@ pub(super) fn handle(
             if !device.allows(cookie) {
                 return Err(401);
             }
-            if !key.starts_with("codex-") {
+            if !crate::reader::server::supports_reply(&key) {
                 return Err(405);
             }
             if req.method() == &Method::Get && !device.replies_enabled() {

@@ -106,7 +106,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let toggle = item("reader-toggle", share_label, true)?;
     let address = item("reader-address", "共享已关闭", false)?;
     let code = item("reader-code", "生成新的配对码", false)?;
-    let allow_label = "允许所有已配对设备回复 Codex";
+    let allow_label = "允许所有已配对设备回复";
     let replies = item("reader-replies", allow_label, false)?;
     let revoke = item("reader-revoke", "解除所有设备配对", false)?;
     let menu = Menu::with_items(
@@ -162,6 +162,10 @@ pub fn install(app: &App) -> tauri::Result<()> {
                                 super::codex_terminals::resume,
                                 super::codex_terminals::terminal_exists,
                                 super::codex_terminals::thread_terminal_exists,
+                            )
+                            .with_antigravity_reply(
+                                super::prepare_antigravity_reply,
+                                super::dispatch_antigravity_reply,
                             );
                             Reader::with_store(
                                 addr,
@@ -197,10 +201,10 @@ pub fn install(app: &App) -> tauri::Result<()> {
                         let label = match reader.toggle_replies() {
                             Some(true) => {
                                 let _ = code.set_text("生成新的配对码");
-                                "关闭所有已配对设备回复 Codex"
+                                "关闭所有已配对设备回复"
                             }
                             Some(false) => allow_label,
-                            None => "请先配对，再点此允许回复 Codex",
+                            None => "请先配对，再点此允许回复",
                         };
                         let _ = replies.set_text(label);
                     }
