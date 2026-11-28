@@ -238,12 +238,14 @@ mod tests {
         let mut sessions = vec![
             json!({"session_id":"one", "state":"completed", "since":"1"}),
             json!({"source":"codex", "session_id":"codex-two", "state":"aborted", "since":"2"}),
+            json!({"source":"antigravity", "session_id":"pid-5", "state":"completed", "since":"5"}),
             json!({"session_id":"three", "state":"completed", "since":"new"}),
             json!({"session_id":"four", "state":"your_turn", "since":"4"}),
         ];
         let acknowledged = Acknowledged::from([
             ("claude-one".into(), "1".into()),
             ("codex-codex-two".into(), "2".into()),
+            ("antigravity-pid-5".into(), "5".into()),
             ("claude-three".into(), "old".into()),
             ("claude-four".into(), "4".into()),
         ]);
@@ -252,6 +254,6 @@ mod tests {
             .iter()
             .map(|s| s["state"].as_str().unwrap())
             .collect();
-        assert_eq!(states, ["idle", "idle", "completed", "your_turn"]);
+        assert_eq!(states, ["idle", "idle", "idle", "completed", "your_turn"]);
     }
 }

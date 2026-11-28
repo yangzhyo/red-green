@@ -1,4 +1,5 @@
 use super::{
+    antigravity,
     claude::{read_entries, SessionTitle, Transcript},
     codex::visible_items,
     history, kindle,
@@ -10,7 +11,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::{self, BufReader, Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
@@ -28,7 +29,8 @@ pub struct LiveSource {
     status_dir: PathBuf,
     socket: PathBuf,
     selected: HashMap<String, Selection>,
-    claude_titles: HashMap<String, ClaudeFile<SessionTitle>>,
+    claude_titles: HashMap<String, JsonlFile<SessionTitle>>,
+    antigravity_titles: HashMap<String, JsonlFile<antigravity::SessionTitle>>,
     stored: Option<StoredConversation>,
     history_directory: history::Directory,
     launch: TerminalLauncher,
@@ -58,12 +60,13 @@ struct Selection {
     history: History,
 }
 enum History {
-    Claude(ClaudeFile<Transcript>),
+    Claude(JsonlFile<Transcript>),
+    Antigravity(JsonlFile<antigravity::Transcript>),
     Codex(CodexHistory),
 }
 
 #[derive(Default)]
-struct ClaudeFile<T> {
+struct JsonlFile<T> {
     data: T,
     identity: (u64, u64),
     offset: u64,
@@ -77,12 +80,11 @@ enum FileChange {
     Replaced,
 }
 
-impl<T: Default> ClaudeFile<T> {
+impl<T: Default> JsonlFile<T> {
     fn refresh(
         &mut self,
         path: &Path,
-        sid: &str,
-        insert: fn(&mut T, &Value),
+        consume_entries: impl FnOnce(BufReader<io::Take<File>>, &mut T) -> io::Result<usize>,
     ) -> Result<FileChange, u16> {
         let mut file = File::open(path).map_err(|_| UNAVAILABLE)?;
         let meta = file.metadata().map_err(|_| UNAVAILABLE)?;
@@ -102,8 +104,7 @@ impl<T: Default> ClaudeFile<T> {
         file.seek(SeekFrom::Start(self.offset))
             .map_err(|_| UNAVAILABLE)?;
         let input = BufReader::new(file.take(meta.len() - self.offset));
-        let consumed =
-            read_entries(sid, input, |row| insert(&mut self.data, row)).map_err(|_| UNAVAILABLE)?;
+        let consumed = consume_entries(input, &mut self.data).map_err(|_| UNAVAILABLE)?;
         self.offset += consumed as u64;
         self.len = meta.len();
         self.modified = modified;
@@ -256,6 +257,7 @@ impl LiveSource {
             socket,
             selected: HashMap::new(),
             claude_titles: HashMap::new(),
+            antigravity_titles: HashMap::new(),
             stored: None,
             history_directory: history::Directory::default(),
             launch: |_, _, _| Err(424),
@@ -304,22 +306,45 @@ impl LiveSource {
     }
 
     fn directory(&self) -> Vec<DirectoryEntry> {
+        let mut seen = HashSet::new();
         (self.snapshot)()
             .into_iter()
             .filter_map(|session| {
                 let sid = session["session_id"].as_str()?;
-                let (key, source, path) = if session["source"] == "codex" {
-                    if session["reader_has_turn"] == false {
-                        return None;
+                let (key, source, path) = match session["source"].as_str() {
+                    Some("codex") => {
+                        if session["reader_has_turn"] == false {
+                            return None;
+                        }
+                        sid.strip_prefix("codex-")?;
+                        (sid.to_owned(), "Codex CLI", None)
                     }
-                    sid.strip_prefix("codex-")?;
-                    (sid.to_owned(), "Codex CLI", None)
-                } else {
-                    let path = PathBuf::from(self.mapping(sid)?);
-                    if !path.is_absolute() || !path.is_file() {
-                        return None;
+                    Some("antigravity") => {
+                        let cid = session["conversation_id"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| {
+                                self.mapping(&format!("antigravity-{sid}"))
+                                    .is_some()
+                                    .then_some(sid)
+                            })?;
+                        let key = format!("antigravity-{cid}");
+                        if !seen.insert(key.clone()) {
+                            return None;
+                        }
+                        let path = PathBuf::from(self.mapping(&key)?);
+                        if !path.is_absolute() || !path.is_file() {
+                            return None;
+                        }
+                        (key, "Antigravity CLI", Some(path))
                     }
-                    (format!("claude-{sid}"), "Claude Code", Some(path))
+                    _ => {
+                        let path = PathBuf::from(self.mapping(sid)?);
+                        if !path.is_absolute() || !path.is_file() {
+                            return None;
+                        }
+                        (format!("claude-{sid}"), "Claude Code", Some(path))
+                    }
                 };
                 Some(DirectoryEntry {
                     key,
@@ -340,7 +365,29 @@ impl LiveSource {
     fn with_title(&mut self, mut entry: DirectoryEntry) -> DirectoryEntry {
         if let (Some(path), Some(sid)) = (&entry.path, entry.key.strip_prefix("claude-")) {
             let file = self.claude_titles.entry(entry.key.clone()).or_default();
-            if file.refresh(path, sid, SessionTitle::insert).is_ok() {
+            if file
+                .refresh(path, |input, title| {
+                    read_entries(sid, input, |row| title.insert(row))
+                })
+                .is_ok()
+            {
+                entry.title = file.data.get().to_owned();
+            }
+        } else if let Some(path) = entry
+            .path
+            .as_ref()
+            .filter(|_| entry.key.starts_with("antigravity-") && entry.title == "未命名会话")
+        {
+            let file = self
+                .antigravity_titles
+                .entry(entry.key.clone())
+                .or_default();
+            if file
+                .refresh(path, |input, title| {
+                    antigravity::read_entries(input, |row| title.insert(row))
+                })
+                .is_ok()
+            {
                 entry.title = file.data.get().to_owned();
             }
         }
@@ -506,6 +553,8 @@ impl Source for LiveSource {
         let entries = self.directory();
         self.claude_titles
             .retain(|key, _| entries.iter().any(|row| row.key == *key));
+        self.antigravity_titles
+            .retain(|key, _| entries.iter().any(|row| row.key == *key));
         json!(entries
             .into_iter()
             .map(|entry| self.with_title(entry))
@@ -536,6 +585,10 @@ impl LiveSource {
                 .as_deref()
                 == Some("ended")
             {
+                self.selected.remove(key);
+                return Err(410);
+            }
+            if key.starts_with("antigravity-") && self.mapping(key).is_some() {
                 self.selected.remove(key);
                 return Err(410);
             }
@@ -571,19 +624,32 @@ impl LiveSource {
             .entry(key.to_owned())
             .or_insert_with(|| Selection {
                 body: Conversation::new(key, &entry.project, entry.source),
-                history: if entry.path.is_some() {
-                    History::Claude(ClaudeFile::default())
+                history: if entry.key.starts_with("antigravity-") {
+                    History::Antigravity(JsonlFile::default())
+                } else if entry.path.is_some() {
+                    History::Claude(JsonlFile::default())
                 } else {
                     History::Codex(CodexHistory::default())
                 },
             });
         let mut page = match &mut selection.history {
             History::Claude(file) => {
-                let change = file.refresh(
-                    &entry.path.ok_or(UNAVAILABLE)?,
-                    key.strip_prefix("claude-").ok_or(UNAVAILABLE)?,
-                    Transcript::insert,
-                )?;
+                let sid = key.strip_prefix("claude-").ok_or(UNAVAILABLE)?;
+                let change = file.refresh(&entry.path.ok_or(UNAVAILABLE)?, |input, transcript| {
+                    read_entries(sid, input, |row| transcript.insert(row))
+                })?;
+                if matches!(change, FileChange::Replaced) {
+                    selection.body.reconcile(vec![]);
+                }
+                if !matches!(change, FileChange::Unchanged) {
+                    selection.body.reconcile(file.data.visible_with_turns());
+                }
+                view.render(&selection.body, false)
+            }
+            History::Antigravity(file) => {
+                let change = file.refresh(&entry.path.ok_or(UNAVAILABLE)?, |input, transcript| {
+                    antigravity::read_entries(input, |row| transcript.insert(row))
+                })?;
                 if matches!(change, FileChange::Replaced) {
                     selection.body.reconcile(vec![]);
                 }
@@ -608,5 +674,105 @@ impl LiveSource {
         page["state"] = json!(entry.state);
         page["title"] = entry.title.into();
         Ok(page)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static TEST_SNAPSHOT: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+
+    fn test_snapshot() -> Vec<Value> {
+        TEST_SNAPSHOT.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn antigravity_readable_session_streams_for_nomad_and_kindle_and_ends_with_410() {
+        let dir = std::env::temp_dir().join(format!("rg-agy-reader-{}", rand::random::<u64>()));
+        let reader_dir = dir.join(".reader");
+        fs::create_dir_all(&reader_dir).unwrap();
+        let transcript = dir.join("transcript_full.jsonl");
+        fs::write(
+            &transcript,
+            format!(
+                "{}\n{}\n",
+                json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\n实现 Issue 42\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nx\n</ADDITIONAL_METADATA>"}),
+                json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","content":"第一轮答复"})
+            ),
+        )
+        .unwrap();
+        fs::write(
+            reader_dir.join("antigravity-cid-1"),
+            format!("{}\n", transcript.display()),
+        )
+        .unwrap();
+
+        *TEST_SNAPSHOT.lock().unwrap() = vec![json!({
+            "session_id": "pid-123",
+            "source": "antigravity",
+            "conversation_id": "cid-1",
+            "project": "red-green",
+            "state": "running",
+        })];
+
+        let mut source = LiveSource::new(test_snapshot, dir.clone(), dir.join("unused.sock"));
+        let list = source.sessions();
+        let rows = list.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["key"], "antigravity-cid-1");
+        assert_eq!(rows[0]["source"], "Antigravity CLI");
+        assert_eq!(rows[0]["project"], "red-green");
+        assert_eq!(rows[0]["state"], "running");
+        assert_eq!(rows[0]["title"], "实现 Issue 42");
+
+        let nomad = source.messages("antigravity-cid-1", "").unwrap();
+        assert_eq!(nomad["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(nomad["messages"][0]["role"], "user");
+        assert_eq!(nomad["messages"][0]["text"], "实现 Issue 42");
+        assert_eq!(nomad["messages"][1]["text"], "第一轮答复");
+
+        let kindle = source.kindle_messages("antigravity-cid-1", "").unwrap();
+        assert_eq!(kindle["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(kindle["state"], "running");
+
+        // 追加第二轮并模拟会话名更新
+        fs::write(
+            &transcript,
+            format!(
+                "{}{}\n{}\n",
+                fs::read_to_string(&transcript).unwrap(),
+                json!({"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\n再加一行\n</USER_REQUEST>"}),
+                json!({"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","content":"第二轮答复"})
+            ),
+        )
+        .unwrap();
+        *TEST_SNAPSHOT.lock().unwrap() = vec![json!({
+            "session_id": "pid-123",
+            "source": "antigravity",
+            "conversation_id": "cid-1",
+            "title": "自定义标题",
+            "project": "red-green",
+            "state": "completed",
+        })];
+
+        let delta = source
+            .messages(
+                "antigravity-cid-1",
+                &format!("since={}", nomad["since"].as_str().unwrap()),
+            )
+            .unwrap();
+        assert_eq!(delta["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(delta["state"], "completed");
+        assert_eq!(delta["title"], "自定义标题");
+
+        // 会话退出后返回 410，且不支持写接口
+        TEST_SNAPSHOT.lock().unwrap().clear();
+        assert_eq!(source.messages("antigravity-cid-1", ""), Err(410));
+        assert_eq!(source.send_reply("antigravity-cid-1", "hi", || Ok(())), Err(405));
+        assert_eq!(source.messages("antigravity-unknown", ""), Err(UNAVAILABLE));
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

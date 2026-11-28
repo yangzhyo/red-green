@@ -375,3 +375,124 @@ fn an_unmaterialized_codex_session_waits_outside_the_readable_directory() {
     );
     assert_eq!(reader.sessions(), serde_json::json!([]));
 }
+
+#[test]
+fn antigravity_and_claude_coexist_on_nomad_and_kindle_endpoints() {
+    use red_green::reader::live::LiveSource;
+    use serde_json::json;
+
+    static SNAP: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+    fn snap() -> Vec<serde_json::Value> {
+        SNAP.lock().unwrap().clone()
+    }
+    let response_body = |raw: &str| raw.split_once("\r\n\r\n").unwrap().1.to_owned();
+
+    let dir = std::env::temp_dir().join(format!("rg-agy-http-{}", rand::random::<u64>()));
+    let reader_dir = dir.join(".reader");
+    std::fs::create_dir_all(&reader_dir).unwrap();
+
+    let claude_path = dir.join("claude.jsonl");
+    std::fs::write(
+        &claude_path,
+        format!(
+            "{}\n{}\n",
+            json!({"type":"user","sessionId":"c1","uuid":"u1","message":{"role":"user","content":"Claude 提问"}}),
+            json!({"type":"assistant","sessionId":"c1","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":"Claude 回复"}})
+        ),
+    )
+    .unwrap();
+    std::fs::write(reader_dir.join("c1"), format!("{}\n", claude_path.display())).unwrap();
+
+    let agy_path = dir.join("transcript_full.jsonl");
+    std::fs::write(
+        &agy_path,
+        format!(
+            "{}\n{}\n",
+            json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\nAGY 提问\n</USER_REQUEST>"}),
+            json!({"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","content":"AGY 回复"})
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        reader_dir.join("antigravity-cid-42"),
+        format!("{}\n", agy_path.display()),
+    )
+    .unwrap();
+
+    *SNAP.lock().unwrap() = vec![
+        json!({"session_id":"c1","project":"alpha","state":"idle"}),
+        json!({"session_id":"pid-99","source":"antigravity","conversation_id":"cid-42","title":"AGY 调研","project":"red-green","state":"awaiting"}),
+    ];
+
+    let source = LiveSource::new(snap, dir.clone(), dir.join("unused.sock"));
+    let reader = Reader::start("127.0.0.1:0".parse().unwrap(), source).unwrap();
+    let code = reader.new_code();
+    let paired = request(&reader, "POST", "/pair", &json!({"code": code}).to_string(), "");
+    let cookie = paired
+        .lines()
+        .find_map(|l| l.strip_prefix("Set-Cookie: "))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+
+    let sessions: serde_json::Value =
+        serde_json::from_str(&response_body(&request(&reader, "GET", "/sessions", "", cookie)))
+            .unwrap();
+    let list = sessions.as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list
+        .iter()
+        .any(|e| e["key"] == "claude-c1" && e["source"] == "Claude Code"));
+    assert!(list.iter().any(|e| {
+        e["key"] == "antigravity-cid-42"
+            && e["source"] == "Antigravity CLI"
+            && e["state"] == "awaiting"
+            && e["title"] == "AGY 调研"
+    }));
+
+    let nomad_doc = request(&reader, "GET", "/read/current/antigravity-cid-42", "", cookie);
+    assert!(nomad_doc.contains("<title>Antigravity CLI · 待确认 · red-green · AGY 调研</title>"));
+
+    let nomad_msgs: serde_json::Value = serde_json::from_str(&response_body(&request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie,
+    )))
+    .unwrap();
+    assert_eq!(nomad_msgs["messages"][0]["text"], "AGY 提问");
+    assert_eq!(nomad_msgs["messages"][1]["text"], "AGY 回复");
+
+    let kindle_list = request(&reader, "GET", "/kindle", "", cookie);
+    assert!(
+        kindle_list.contains("AGY 调研")
+            && kindle_list.contains("Antigravity CLI")
+            && kindle_list.contains("Claude Code")
+    );
+
+    let kindle_page = request(&reader, "GET", "/kindle/read/antigravity-cid-42", "", cookie);
+    assert!(
+        kindle_page.contains("AGY 提问")
+            && kindle_page.contains("AGY 回复")
+            && kindle_page.contains("待确认")
+    );
+    assert!(!kindle_page.contains("kindle-reply"));
+
+    // 退出后返回 410，且另一来源仍不受影响
+    *SNAP.lock().unwrap() = vec![json!({"session_id":"c1","project":"alpha","state":"idle"})];
+    assert!(request(
+        &reader,
+        "GET",
+        "/sessions/antigravity-cid-42/messages",
+        "",
+        cookie
+    )
+    .starts_with("HTTP/1.1 410"));
+    assert!(request(&reader, "GET", "/sessions/claude-c1/messages", "", cookie)
+        .starts_with("HTTP/1.1 200"));
+
+    drop(reader);
+    let _ = std::fs::remove_dir_all(dir);
+}

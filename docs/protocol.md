@@ -1,6 +1,6 @@
 # 状态文件协议
 
-Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 的状态观察和阅读设备的回复使用文末的 App Server 协议。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
+Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，app 只读；Codex 的状态观察和阅读设备的回复使用文末的 App Server 协议；Antigravity CLI 由 `statusLine` 与极简 `hooks.json` 写同目录的独立状态与用量文件，app 只读并复核进程存活。领域词汇见根目录 [CONTEXT.md](../CONTEXT.md)。
 
 ## 文件
 
@@ -140,7 +140,7 @@ Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，ap
 
 问句规则与 Claude 的末行启发式一致；用户中断不是外部失败。归一化对象沿用会话结构，加 `source:"codex"`，`session_id:"codex-<UUID>"`，`event:"app-server"`。`since` 是回合 ID、状态、完成时间构成的稳定事件标识，不是采样时间。项目名首次观察时按 git 根目录锚定。复用已阅、前台静默与点击聚焦。
 
-`get_usage` / `usage-changed` 返回 `{claude:<原 usage.json 或 null>,codex:<快照或 null>}`。Codex 快照：
+`get_usage` / `usage-changed` 返回 `{claude:<原 usage.json 或 null>,codex:<快照或 null>,antigravity:<antigravity-usage.json 或 null>}`。Codex 快照：
 
 ```json
 {"updated_at":1792100000,"groups":[{"id":"codex:account:codex","source":"codex","account_id":"account","label":"Codex","windows":[{"key":"primary","used_percentage":23,"duration_minutes":300,"resets_at":1792103600}]}]}
@@ -148,7 +148,34 @@ Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，ap
 
 `account/rateLimits/read` 首次有会话时请求，随后每 60 秒刷新。优先使用 rateLimitsByLimitId，回退单一 rateLimits；不按会话累加。账号变化通知清缓存。未知、非法、过期或超过 120 秒的快照不显示成零；失败时旧快照仅在有效期内继续显示。用量表仅列有存活宠物的来源，点击切换额度组并保持选择，未知显示 `?` / `未知`。Claude 的既有过期规则不变。
 
-隔离验证可设置 `RED_GREEN_STATUS_DIR` 改用临时状态目录；配合 `RED_GREEN_DISABLE_CODEX=1` 停止原生观察器，并从该目录的 `codex-usage.json` 注入用量快照。此文件和 `usage.json` 均不当作会话。常规运行不读取 Codex 用量文件。
+隔离验证可设置 `RED_GREEN_STATUS_DIR` 改用临时状态目录；配合 `RED_GREEN_DISABLE_CODEX=1` 停止原生观察器，并从该目录的 `codex-usage.json` 注入用量快照。此文件、`usage.json` 与 `antigravity-usage.json` 均不当作会话。常规运行不读取 Codex 用量文件。
+
+## Antigravity CLI 接入
+
+安装脚本（`scripts/install-antigravity.sh`）将 `hooks/antigravity.sh` 链接为 `~/.gemini/antigravity-cli/red-green-status.sh`，并幂等写入：
+
+- `~/.gemini/antigravity-cli/settings.json`：优先配置 `statusLine`（`stack_with_default: true`，脚本零输出以保留内置底栏）；已有自定义 `statusLine` 时回退到零输出 `title` 槽位；两槽均被占用时不覆盖，提示在自定义脚本中转发 stdin。
+- `~/.gemini/config/hooks.json`：写入独立 `"red-green"` 条目，仅订阅 `Stop` 与 `matcher: "ask_question"` 的 `PreToolUse` / `PostToolUse`。脚本严格按 `/.gemini/antigravity-cli/` 路径过滤，忽略 Antigravity App、IDE 及无交互终端的 `agy -p` 运行。
+
+基线为 Antigravity CLI 1.5.18。交互式 `agy` 会话以进程身份写入 `~/.claude/session-status/antigravity-pid-<pid>.json`（`source: "antigravity"`、`session_id: "pid-<pid>"`，附 `pid`、`conversation_id`、`title`、`tty`、`project` 等字段）；项目名首次写入即按 Git 根目录锚定。app 侧保持只读，在读取快照与 1.5 秒心跳中通过一次批量 `ps` 校验 `pid` 仍为对应 `tty` 上存活的 `agy` 进程；进程退出后宠物在 1.5 秒内离场。隔离验证注入的不带 `pid` 假文件或设置 `RED_GREEN_DISABLE_ANTIGRAVITY_PID_CHECK=1` 时跳过进程复核。
+
+| 来源事件 / 字段 | 宠物状态 | 备注 |
+| --- | --- | --- |
+| `statusLine`: `authenticating` / `initializing` / 初始 `idle` | `idle` | 启动入场；未提问前 `conversation_id` 为空 |
+| `statusLine`: `working` / `thinking` / `tool_use` | `running` | 若处于 `PreToolUse:ask_question`，`tool_use` 不覆盖 `awaiting` |
+| `statusLine`: `tool_confirmation_pending: true` 或 `agent_state: "reviewing"` | `awaiting` | 权限确认与产物评审 |
+| 钩子 `PreToolUse` / `PostToolUse`（`ask_question`） | `awaiting` → `running` | 补齐 `ask_question` 弹窗不置 `tool_confirmation_pending` 的缺口 |
+| 钩子 `Stop`（`NO_TOOL_CALL` 等正常结束） | `your_turn` / `completed` | 读取当前回合末条可见助手答复，复用末行问句启发式 |
+| 钩子 `Stop`（`USER_CANCELED`） | `idle` | 用户取消不是外部异常中止 |
+| 钩子 `Stop`（`ERROR` / 超限 / 非空 `error`）或 `statusLine: error` | `aborted` | |
+
+`statusLine` 与 `Stop` 钩子并发写同一文件时经每 PID 目录锁串行化并原子重命名；`Stop` 先到后 `statusLine: idle` 保留终态与 `since`，`statusLine: idle` 先到时按对话记录兜底判定且后续同态 `Stop` 沿用同一 `since`。
+
+账号用量由 `statusLine` 中的 `quota` 与 `email` 归一化后写入 `~/.claude/session-status/antigravity-usage.json`（格式同 Codex 额度组，按 `Gemini`、`Claude / GPT` 等模型组拆分，值未变不重写；切换账号时立即刷新）。`remaining_fraction = 1` 且 `reset_time = 1970-01-01T00:00:00Z` 视为未消耗的真实 `0%`（`resets_at: null`）；缺失、非法或真实 `resets_at` 已过期时在用量表显示 `?` / `未知`，绝不显示成零。
+
+电纸书阅读路径写入 `.reader/antigravity-<conversation_id>`（不进入宠物快照），并自动修正 `agy` 1.5.18 `statusLine` 误指向 `/.gemini/antigravity/` 的路径，优先读取 `~/.gemini/antigravity-cli/brain/<conversation_id>/.system_generated/logs/transcript_full.jsonl`。服务端仅投影 `USER_INPUT`（`USER_EXPLICIT`，剥离 `<USER_REQUEST>` 与系统元数据块）和 `PLANNER_RESPONSE`（`MODEL` 非空 `content`，忽略 `thinking`、`tool_calls` 与 `GENERIC` 工具输出）。会话名优先使用 `conversation_title`，缺席时取首条可见提问。进程退出或同终端切换会话后返回 `410`。首期不开放 Nomad 历史会话、远程回复与继续对话。
+
+已知盲区：`statusLine` 有 300ms 节流，短于节流窗口的瞬时状态可能合并；未启用 `hooks.json` 时 `ask_question` 不进入 `awaiting` 且取消与结束仅凭对话记录推断。决策与实测依据见 [ADR 0007](adr/0007-antigravity-cli-integration.md) 与 [设计](superpowers/specs/2026-11-28-antigravity-cli-design.md)。
 
 ## 阅读设备配对
 

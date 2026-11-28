@@ -47,7 +47,7 @@ function fmtReset(ts, minutes) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
   const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  return minutes <= 1440 ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
+  return typeof minutes === "number" && minutes <= 1440 ? hm : `${WEEKDAY[d.getDay()]} ${hm}`;
 }
 
 // 颜色随用量升温：60% 起琥珀，85% 起红
@@ -102,9 +102,11 @@ function renderCard() {
 const stage = document.getElementById("stage");
 document.getElementById("num").style.color = C.white;
 
+const SOURCE_LABEL = { codex: "Codex", antigravity: "Antigravity", claude: "Claude" };
+
 function render() {
   const source = document.getElementById("source");
-  const label = view?.source === "codex" ? "Codex" : "Claude";
+  const label = SOURCE_LABEL[view?.source] ?? "Claude";
   source.textContent = label + (groups.length > 1 ? " ▸" : "");
   const bucket = view?.label && view.label.toLowerCase() !== label.toLowerCase() ? view.label : "";
   document.getElementById("bucket").textContent = bucket;

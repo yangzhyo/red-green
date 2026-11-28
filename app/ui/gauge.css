@@ -30,7 +30,8 @@ body {
 }
 
 #source, #bucket {
-  max-width: 108px;
+  max-width: 112px;
+  padding: 2px 8px;
 }
 #source { cursor: pointer; }
 #bucket:empty { display: none; }

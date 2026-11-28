@@ -119,6 +119,26 @@ static void unhealthy_request_and_json_suffix_are_rejected(void) {
           201) == RG_ERROR);
   rg_clear(&d);
 }
+static void antigravity_source_is_accepted_for_sessions_and_usage(void) {
+  rg_device d;
+  rg_init(&d, "boot1");
+  assert(receive(&d,
+                 "{\"type\":\"bind\",\"boot\":\"boot1\",\"generation\":\"g1\","
+                 "\"protocol\":1,\"assets\":\"" RG_RESOURCES "\"}",
+                 0) == RG_BIND);
+  assert(receive(
+             &d,
+             "{\"type\":\"snapshot\",\"generation\":\"g1\",\"version\":1,"
+             "\"sessions\":[{\"id\":\"s1\",\"slot\":0,\"name\":\"red-green\","
+             "\"source\":\"antigravity\",\"skin\":\"robot\",\"state\":\"running\"}],"
+             "\"usage\":[{\"id\":\"antigravity:u:gemini\",\"source\":\"antigravity\","
+             "\"label\":\"Gemini\",\"updated_label\":\"\","
+             "\"windows\":[{\"used_percentage\":15,\"duration_label\":\"5h\","
+             "\"reset_label\":\"16:28\",\"status\":\"known\"}]}]}",
+             0) == RG_SNAPSHOT);
+  assert(rg_commit(&d));
+  rg_clear(&d);
+}
 int main(void) {
   empty_snapshot_discards_queued_calls();
   assert(rg_recent(1000, 1001));
@@ -129,6 +149,7 @@ int main(void) {
   calls_deduplicate_expire_and_reject_old_generation();
   frames_bound_memory_and_parse_fragments();
   unhealthy_request_and_json_suffix_are_rejected();
+  antigravity_source_is_accepted_for_sessions_and_usage();
   puts("device: 授权、去重、过期与有界帧测试通过");
   return 0;
 }

@@ -33,6 +33,7 @@ fn status_dir() -> PathBuf {
 // 账号级用量文件：由 status line 脚本写入，与会话文件同目录、共用一个 watcher，
 // 靠文件名区分（见 docs/protocol.md「用量文件」）
 const USAGE_FILE: &str = "usage.json";
+const ANTIGRAVITY_USAGE_FILE: &str = "antigravity-usage.json";
 
 fn read_snapshot() -> Vec<Value> {
     let mut sessions = Vec::new();
@@ -44,7 +45,7 @@ fn read_snapshot() -> Vec<Value> {
             }
             if matches!(
                 path.file_name().and_then(|n| n.to_str()),
-                Some(USAGE_FILE | "codex-usage.json")
+                Some(USAGE_FILE | "codex-usage.json" | ANTIGRAVITY_USAGE_FILE)
             ) {
                 continue;
             }
@@ -55,6 +56,7 @@ fn read_snapshot() -> Vec<Value> {
             }
         }
     }
+    sessions = red_green::antigravity::filter_alive(sessions);
     sessions.extend(
         CODEX
             .lock()
@@ -94,7 +96,11 @@ fn read_usage() -> Value {
             .usage
             .clone()
     };
-    serde_json::json!({"claude":claude,"codex":codex})
+    let antigravity = std::fs::read_to_string(status_dir().join(ANTIGRAVITY_USAGE_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    serde_json::json!({"claude":claude,"codex":codex,"antigravity":antigravity})
 }
 
 #[tauri::command]
@@ -684,11 +690,26 @@ fn main() {
             });
 
             // 已阅心跳必须在 Rust 侧：manager 是隐藏窗口，
-            // WebKit 会挂起不可见 webview 的 JS 定时器（事件不受影响）
+            // WebKit 会挂起不可见 webview 的 JS 定时器（事件不受影响）。
+            // 同时复查 Antigravity CLI 进程存活：无 SessionEnd 钩子时，进程退出需在 1.5s 内同步托盘与宠物。
             let heartbeat = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                let _ = heartbeat.emit("front-tick", frontmost_tty_impl());
+            std::thread::spawn(move || {
+                let mut prev_agy: Vec<String> = Vec::new();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let snapshot = read_snapshot();
+                    let next_agy: Vec<String> = snapshot
+                        .iter()
+                        .filter(|s| s["source"] == "antigravity")
+                        .filter_map(|s| s["session_id"].as_str().map(str::to_owned))
+                        .collect();
+                    if next_agy != prev_agy {
+                        prev_agy = next_agy;
+                        let _ = heartbeat.emit("sessions-changed", snapshot);
+                        let _ = heartbeat.emit("usage-changed", read_usage());
+                    }
+                    let _ = heartbeat.emit("front-tick", frontmost_tty_impl());
+                }
             });
             Ok(())
         })
