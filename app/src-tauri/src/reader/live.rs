@@ -635,29 +635,23 @@ impl LiveSource {
         let mut page = match &mut selection.history {
             History::Claude(file) => {
                 let sid = key.strip_prefix("claude-").ok_or(UNAVAILABLE)?;
-                let change = file.refresh(&entry.path.ok_or(UNAVAILABLE)?, |input, transcript| {
-                    read_entries(sid, input, |row| transcript.insert(row))
-                })?;
-                if matches!(change, FileChange::Replaced) {
-                    selection.body.reconcile(vec![]);
-                }
-                if !matches!(change, FileChange::Unchanged) {
-                    selection.body.reconcile(file.data.visible_with_turns());
-                }
-                view.render(&selection.body, false)
+                refresh_jsonl_body(
+                    file,
+                    &entry.path.ok_or(UNAVAILABLE)?,
+                    &mut selection.body,
+                    view,
+                    |input, transcript| read_entries(sid, input, |row| transcript.insert(row)),
+                    Transcript::visible_with_turns,
+                )
             }
-            History::Antigravity(file) => {
-                let change = file.refresh(&entry.path.ok_or(UNAVAILABLE)?, |input, transcript| {
-                    antigravity::read_entries(input, |row| transcript.insert(row))
-                })?;
-                if matches!(change, FileChange::Replaced) {
-                    selection.body.reconcile(vec![]);
-                }
-                if !matches!(change, FileChange::Unchanged) {
-                    selection.body.reconcile(file.data.visible_with_turns());
-                }
-                view.render(&selection.body, false)
-            }
+            History::Antigravity(file) => refresh_jsonl_body(
+                file,
+                &entry.path.ok_or(UNAVAILABLE)?,
+                &mut selection.body,
+                view,
+                |input, transcript| antigravity::read_entries(input, |row| transcript.insert(row)),
+                antigravity::Transcript::visible_with_turns,
+            ),
             History::Codex(history) => {
                 let result = history.refresh(
                     &self.socket,
@@ -675,6 +669,24 @@ impl LiveSource {
         page["title"] = entry.title.into();
         Ok(page)
     }
+}
+
+fn refresh_jsonl_body<T: Default>(
+    file: &mut JsonlFile<T>,
+    path: &Path,
+    body: &mut Conversation,
+    view: View,
+    consume: impl FnOnce(BufReader<io::Take<File>>, &mut T) -> io::Result<usize>,
+    rows: impl FnOnce(&T) -> Vec<(&str, &'static str, &str, bool)>,
+) -> Result<Value, u16> {
+    let change = file.refresh(path, consume)?;
+    if matches!(change, FileChange::Replaced) {
+        body.reconcile(vec![]);
+    }
+    if !matches!(change, FileChange::Unchanged) {
+        body.reconcile(rows(&file.data));
+    }
+    view.render(body, false)
 }
 
 #[cfg(test)]

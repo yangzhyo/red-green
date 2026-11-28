@@ -169,9 +169,9 @@ Claude 的会话文件由 hooks 写，用量文件由 status line 脚本写，ap
 | 钩子 `Stop`（`USER_CANCELED`） | `idle` | 用户取消不是外部异常中止 |
 | 钩子 `Stop`（`ERROR` / 超限 / 非空 `error`）或 `statusLine: error` | `aborted` | |
 
-`statusLine` 与 `Stop` 钩子并发写同一文件时经每 PID 目录锁串行化并原子重命名；`Stop` 先到后 `statusLine: idle` 保留终态与 `since`，`statusLine: idle` 先到时按对话记录兜底判定且后续同态 `Stop` 沿用同一 `since`。
+`statusLine` 与 `Stop` 钩子并发写同一文件时经系统临时目录下的每 PID 锁目录串行化并原子重命名（不落入被监听的状态目录，避免未变化重绘触发 watcher）；`Stop` 先到后 `statusLine: idle` 保留终态与 `since`，`statusLine: idle` 先到时按对话记录末条非工具答复兜底判定且后续同态 `Stop` 沿用同一 `since`。`/clear` 产生显式空 `conversation_id` 时重置为 `idle` 并将旧会话阅读映射标为 `ended`。
 
-账号用量由 `statusLine` 中的 `quota` 与 `email` 归一化后写入 `~/.claude/session-status/antigravity-usage.json`（格式同 Codex 额度组，按 `Gemini`、`Claude / GPT` 等模型组拆分，值未变不重写；切换账号时立即刷新）。`remaining_fraction = 1` 且 `reset_time = 1970-01-01T00:00:00Z` 视为未消耗的真实 `0%`（`resets_at: null`）；缺失、非法或真实 `resets_at` 已过期时在用量表显示 `?` / `未知`，绝不显示成零。
+账号用量由 `statusLine` 中的 `quota` 与经单向哈希脱敏后的账号标识（不落盘明文邮箱，也不经 Mosaico 串口外发）归一化写入 `~/.claude/session-status/antigravity-usage.json`（格式同 Codex 额度组，按 `Gemini`、`Claude / GPT` 等模型组拆分，值未变不重写；切换账号、登出或会话进行中缺席 `quota` 时立即刷新为空分组以展示未知，同账号新窗口启动初期尚未拉回 `quota` 时不覆盖缓存以免闪烁）。`remaining_fraction = 1` 且 `reset_time = 1970-01-01T00:00:00Z` 视为未消耗的真实 `0%`（`resets_at: null`）；缺失、非法或真实 `resets_at` 已过期时在用量表显示 `?` / `未知`，绝不显示成零。
 
 电纸书阅读路径写入 `.reader/antigravity-<conversation_id>`（不进入宠物快照），并自动修正 `agy` 1.5.18 `statusLine` 误指向 `/.gemini/antigravity/` 的路径，优先读取 `~/.gemini/antigravity-cli/brain/<conversation_id>/.system_generated/logs/transcript_full.jsonl`。服务端仅投影 `USER_INPUT`（`USER_EXPLICIT`，剥离 `<USER_REQUEST>` 与系统元数据块）和 `PLANNER_RESPONSE`（`MODEL` 非空 `content`，忽略 `thinking`、`tool_calls` 与 `GENERIC` 工具输出）。会话名优先使用 `conversation_title`，缺席时取首条可见提问。进程退出或同终端切换会话后返回 `410`。首期不开放 Nomad 历史会话、远程回复与继续对话。
 

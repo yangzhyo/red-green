@@ -1,10 +1,10 @@
 <p align="center">
   <img src="docs/assets/hero.png" width="860"
-       alt="red-green — a desktop pet for every Claude Code or Codex CLI session, so you always know which one needs you" />
+       alt="red-green — a desktop pet for every Claude Code, Codex CLI, or Antigravity CLI session, so you always know which one needs you" />
 </p>
 
 <p align="center">
-  <em>A desktop pet for every Claude Code or Codex CLI session — so you always know which one needs you.</em>
+  <em>A desktop pet for every Claude Code, Codex CLI, or Antigravity CLI session — so you always know which one needs you.</em>
 </p>
 
 <p align="center">

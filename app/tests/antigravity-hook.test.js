@@ -9,6 +9,7 @@ import {
   isCliTranscriptPath,
   isQuestion,
   normalizeQuota,
+  opaqueAccountId,
   resolveTranscriptPath,
 } from "../../hooks/antigravity-state.mjs";
 import { mergeAntigravitySettings } from "../../scripts/merge-antigravity-settings.mjs";
@@ -57,7 +58,9 @@ test("normalizeQuota 区分额度组、保留未使用桶的真实零值、跳�
     "Google AI Pro",
     1795753000
   );
-  assert.equal(normalized.account_id, "dev@example.com");
+  assert.equal(normalized.account_id, opaqueAccountId("dev@example.com"));
+  assert.match(normalized.account_id, /^acct-[0-9a-f]{12}$/);
+  assert.equal(JSON.stringify(normalized).includes("dev@example.com"), false);
   assert.equal(normalized.plan_tier, "Google AI Pro");
   assert.equal(normalized.groups.length, 2);
   assert.equal(normalized.groups[0].label, "Gemini");
@@ -190,7 +193,7 @@ test("六种状态转换、ask_question 保护、Stop/statusLine 乱序竞态与
     assert.equal(ignoredHeadless.written, false);
     assert.equal(fs.existsSync(path.join(dir, "antigravity-pid-9999.json")), false);
 
-    // 10. 仅取当前回合末条可见答复，忽略旧回合答复
+    // 10. 仅取当前回合末条可见答复，忽略旧回合答复、带 tool_calls 的过渡句与工具输出前文本
     assert.equal(
       extractLastAssistantText(
         [
@@ -201,6 +204,73 @@ test("六种状态转换、ask_question 保护、Stop/statusLine 乱序竞态与
       ),
       ""
     );
+    assert.equal(
+      extractLastAssistantText(
+        [
+          JSON.stringify({ type: "USER_INPUT", source: "USER_EXPLICIT", content: "<USER_REQUEST>查一下</USER_REQUEST>" }),
+          JSON.stringify({
+            type: "PLANNER_RESPONSE",
+            source: "MODEL",
+            content: "我先运行检查命令。",
+            tool_calls: [{ name: "run_command" }],
+          }),
+          JSON.stringify({ type: "GENERIC", source: "MODEL", content: "tool output" }),
+        ].join("\n")
+      ),
+      ""
+    );
+
+    // 11. 锁目录不落在被 watch 的 statusDir 内
+    assert.equal(
+      fs.readdirSync(dir).some((name) => name.startsWith(".agy-lock-")),
+      false
+    );
+
+    // 12. /clear（显式空 conversation_id）清空旧终态与会话名，并把旧阅读映射标为 ended
+    step("statusline", { conversation_id: cid2, agent_state: "working", conversation_title: "旧任务" });
+    step("stop", { conversationId: cid2, transcriptPath: t2, terminationReason: "NO_TOOL_CALL", error: "" });
+    assert.equal(readSession().state, "completed");
+    step("statusline", { conversation_id: "", agent_state: "idle" });
+    assert.equal(readSession().state, "idle");
+    assert.equal(readSession().conversation_id, "");
+    assert.equal(readSession().title, undefined);
+    assert.equal(fs.readFileSync(path.join(dir, ".reader", `antigravity-${cid2}`), "utf8").trim(), "ended");
+
+    // 13. 同账号启动初期未拉到 quota 时不闪烁清缓存；账号切换/登出或会话进行中缺席 quota 时清为空分组
+    step("statusline", {
+      conversation_id: "",
+      agent_state: "idle",
+      email: "a@example.com",
+      quota: { "gemini-5h": { remaining_fraction: 0.5, reset_time: "2026-11-28T08:28:49Z" } },
+    });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "antigravity-usage.json"), "utf8")).groups.length, 1);
+    step("statusline", { conversation_id: "", agent_state: "initializing", email: "a@example.com" });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "antigravity-usage.json"), "utf8")).groups.length, 1);
+    step("statusline", { conversation_id: "", agent_state: "idle", email: "a@example.com" });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "antigravity-usage.json"), "utf8")).groups.length, 1);
+    step("statusline", { conversation_id: "", agent_state: "idle", email: "" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "antigravity-usage.json"), "utf8")).groups, []);
+    step("statusline", {
+      conversation_id: cid1,
+      agent_state: "idle",
+      email: "a@example.com",
+      quota: { "gemini-5h": { remaining_fraction: 0.5, reset_time: "2026-11-28T08:28:49Z" } },
+    });
+    step("statusline", { conversation_id: cid1, agent_state: "working", email: "a@example.com" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "antigravity-usage.json"), "utf8")).groups, []);
+
+    // 14. 跨进程 --resume 恢复旧死进程的同一 cid 时，清理死进程不得把活阅读映射覆写为 ended
+    fs.writeFileSync(
+      path.join(dir, "antigravity-pid-999999.json"),
+      JSON.stringify({ session_id: "pid-999999", source: "antigravity", pid: 999999, conversation_id: cid1, state: "idle" })
+    );
+    handleEvent(
+      "statusline",
+      { conversation_id: cid1, agent_state: "idle", cwd: "/tmp/demo-project" },
+      { dir, homeDir: home, processContext: { agyPid: 5353, tty: "/dev/ttys009" }, now: new Date((t += 1000)) }
+    );
+    assert.equal(fs.existsSync(path.join(dir, "antigravity-pid-999999.json")), false);
+    assert.equal(fs.readFileSync(path.join(dir, ".reader", `antigravity-${cid1}`), "utf8").trim(), t1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
@@ -252,10 +322,13 @@ test("mergeAntigravitySettings 幂等合并、备份、保留自定义 statusLin
     assert.equal(manual.slot, "manual");
     assert.equal(manual.settingsBackup, null);
 
-    // 拒绝符号链接与非法 JSON
+    // 拒绝符号链接（含悬空软链）与非法 JSON
     const linkPath = path.join(dir, "link.json");
     fs.symlinkSync(settingsPath, linkPath);
     assert.throws(() => mergeAntigravitySettings({ settingsPath: linkPath, hooksPath }), /符号链接/);
+    const danglingLink = path.join(dir, "dangling.json");
+    fs.symlinkSync(path.join(dir, "nonexistent.json"), danglingLink);
+    assert.throws(() => mergeAntigravitySettings({ settingsPath: danglingLink, hooksPath }), /符号链接/);
     const brokenPath = path.join(dir, "broken.json");
     fs.writeFileSync(brokenPath, "{bad");
     assert.throws(() => mergeAntigravitySettings({ settingsPath: brokenPath, hooksPath }), /合法 JSON/);

@@ -4,23 +4,10 @@ use std::io::{self, BufRead};
 
 /// 只消费以换行符结尾的完整 JSON 行，避免读取正在追加写入的半行。
 pub(super) fn read_entries(
-    mut input: impl BufRead,
-    mut insert: impl FnMut(&Value),
+    input: impl BufRead,
+    insert: impl FnMut(&Value),
 ) -> io::Result<usize> {
-    let mut consumed = 0;
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let size = input.read_until(b'\n', &mut line)?;
-        if line.last() != Some(&b'\n') {
-            break;
-        }
-        consumed += size;
-        if let Ok(row) = serde_json::from_slice::<Value>(&line) {
-            insert(&row);
-        }
-    }
-    Ok(consumed)
+    super::read_jsonl_lines(input, insert)
 }
 
 fn strip_tag_block(text: &str, tag: &str) -> String {
@@ -43,7 +30,7 @@ fn strip_tag_block(text: &str, tag: &str) -> String {
 pub fn extract_user_text(raw: &str) -> String {
     if let Some(start) = raw.find("<USER_REQUEST>") {
         let after = &raw[start + "<USER_REQUEST>".len()..];
-        let body = match after.find("</USER_REQUEST>") {
+        let body = match after.rfind("</USER_REQUEST>") {
             Some(end) => &after[..end],
             None => after,
         };

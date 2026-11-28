@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -102,13 +103,15 @@ export function resolveTranscriptPath(cid, reportedPath, homeDir = os.homedir(),
   return "";
 }
 
-// 仅提取当前回合（最后一条用户提问之后）的最后一条可见助手答复，避免误读上一回合旧答复。
+// 仅提取当前回合（最后一条用户提问之后）的最终可见助手答复。
+// 跳过带 tool_calls 的中间过渡文本，且若后续又执行了工具（GENERIC），清除旧答复，
+// 避免用户在工具阶段按 Esc 取消时把中间过渡句误判为已完成。
 export function extractLastAssistantText(jsonlContent) {
   if (typeof jsonlContent !== "string" || !jsonlContent) return "";
   const lines = jsonlContent.split("\n");
   let lastTurnReply = "";
   let seenUser = false;
-  let anyReply = "";
+  let anyTerminalReply = "";
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
@@ -121,17 +124,19 @@ export function extractLastAssistantText(jsonlContent) {
     if (row?.type === "USER_INPUT" && row?.source === "USER_EXPLICIT") {
       seenUser = true;
       lastTurnReply = "";
-    } else if (
-      row?.type === "PLANNER_RESPONSE" &&
-      row?.source === "MODEL" &&
-      typeof row?.content === "string" &&
-      row.content.trim().length > 0
-    ) {
-      lastTurnReply = row.content;
-      anyReply = row.content;
+    } else if (row?.type === "PLANNER_RESPONSE" && row?.source === "MODEL") {
+      const hasTools = Array.isArray(row?.tool_calls) && row.tool_calls.length > 0;
+      if (hasTools) {
+        lastTurnReply = "";
+      } else if (typeof row?.content === "string" && row.content.trim().length > 0) {
+        lastTurnReply = row.content;
+        anyTerminalReply = row.content;
+      }
+    } else if (row?.type === "GENERIC") {
+      lastTurnReply = "";
     }
   }
-  return seenUser ? lastTurnReply : anyReply;
+  return seenUser ? lastTurnReply : anyTerminalReply;
 }
 
 function readTranscriptTail(filePath) {
@@ -145,9 +150,9 @@ function readTranscriptTail(filePath) {
     }
     const fd = fs.openSync(filePath, "r");
     try {
-      const buf = Buffer.allocUnsafe(maxBytes);
-      fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
-      const text = buf.toString("utf8");
+      const buf = Buffer.alloc(maxBytes);
+      const bytesRead = fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes);
+      const text = buf.subarray(0, bytesRead).toString("utf8");
       const firstNewline = text.indexOf("\n");
       return firstNewline >= 0 ? text.slice(firstNewline + 1) : text;
     } finally {
@@ -195,10 +200,17 @@ function groupOrder(prefix) {
   return 2;
 }
 
+export function opaqueAccountId(email) {
+  if (typeof email !== "string" || !email.trim()) return "current";
+  const digest = crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 12);
+  return `acct-${digest}`;
+}
+
 // 将 Antigravity CLI statusLine 的 quota 映射归一化为账号级额度组。
+// 对邮箱做单向哈希后再作为 account_id 与组 ID，避免明文邮箱写入状态文件或经 Mosaico 串口外发。
 // remaining_fraction=1 且 reset_time="1970-01-01T00:00:00Z" 表示该窗口尚未消耗（真实 0%，暂无重置倒计时）。
 export function normalizeQuota(quota, email, planTier, nowSec) {
-  const accountId = typeof email === "string" && email.trim() ? email.trim() : "current";
+  const accountId = opaqueAccountId(email);
   const byPrefix = new Map();
   if (quota && typeof quota === "object" && !Array.isArray(quota)) {
     for (const [bucketId, info] of Object.entries(quota)) {
@@ -277,12 +289,19 @@ export function nextSessionState({
   transcriptText = "",
   nowIso = new Date().toISOString(),
 }) {
-  const cid =
-    (typeof payload?.conversation_id === "string" && payload.conversation_id) ||
-    (typeof payload?.conversationId === "string" && payload.conversationId) ||
-    (typeof payload?.session_id === "string" && payload.session_id) ||
-    prev?.conversation_id ||
-    "";
+  // statusLine 中显式传入 conversation_id: ""（如执行 /clear 后）必须按清空处理，不能回退到旧会话 ID。
+  const hasExplicitStatusCid =
+    kind === "statusline" &&
+    (typeof payload?.conversation_id === "string" || typeof payload?.session_id === "string");
+  const cid = hasExplicitStatusCid
+    ? (typeof payload?.conversation_id === "string" && payload.conversation_id) ||
+      (typeof payload?.session_id === "string" && payload.session_id) ||
+      ""
+    : (typeof payload?.conversation_id === "string" && payload.conversation_id) ||
+      (typeof payload?.conversationId === "string" && payload.conversationId) ||
+      (typeof payload?.session_id === "string" && payload.session_id) ||
+      prev?.conversation_id ||
+      "";
   const sameConv = !prev || !prev.conversation_id || prev.conversation_id === cid;
   const prevState = sameConv ? prev?.state : null;
   const prevEvent = sameConv ? prev?.event : null;
@@ -590,50 +609,76 @@ function updateUsage(dir, payload, nowSec) {
   }
   const hasQuota = payload?.quota && typeof payload.quota === "object" && Object.keys(payload.quota).length > 0;
   const agentState = String(payload?.agent_state ?? "").toLowerCase();
-  const email = typeof payload?.email === "string" ? payload.email.trim() : "";
+  const accountId = opaqueAccountId(payload?.email);
 
   if (!hasQuota) {
-    // 刚启动或认证中尚未拉取到 quota 时不覆盖旧数据；若明确切换到无 quota 的另一账号，则清空旧账号缓存。
-    if (!INIT_AGENT_STATES.has(agentState) && email && existing?.account_id && existing.account_id !== email) {
-      const cleared = { updated_at: nowSec, account_id: email, groups: [] };
-      atomicWrite(file, `${JSON.stringify(cleared)}\n`, 0o600);
+    // 刚启动或认证中尚未拉取到 quota 时不覆盖同账号缓存，避免新开第二个 agy 窗口时用量表闪现未知；
+    // 若账号已切换/登出（accountId 变化），或进入实际会话后仍缺席 quota，则清为空分组以展示未知。
+    if (!INIT_AGENT_STATES.has(agentState) && existing && Array.isArray(existing.groups) && existing.groups.length > 0) {
+      const accountChanged = existing.account_id !== accountId;
+      const inConversation =
+        Boolean(payload?.conversation_id || payload?.session_id) ||
+        RUNNING_AGENT_STATES.has(agentState);
+      if (accountChanged || inConversation) {
+        const cleared = { updated_at: nowSec, account_id: accountId, groups: [] };
+        atomicWrite(file, `${JSON.stringify(cleared)}\n`, 0o600);
+      }
     }
     return;
   }
-  const next = normalizeQuota(payload.quota, email, payload.plan_tier, nowSec);
+  const next = normalizeQuota(payload.quota, payload?.email, payload?.plan_tier, nowSec);
   const stripTime = (obj) => (obj ? JSON.stringify({ ...obj, updated_at: undefined }) : "");
   if (stripTime(existing) === stripTime(next)) return;
   atomicWrite(file, `${JSON.stringify(next)}\n`, 0o600);
 }
 
-function pruneDeadSessions(dir, currentPid) {
+function pruneDeadSessions(dir, currentPid, activeCid) {
   let entries;
   try {
     entries = fs.readdirSync(dir);
   } catch {
     return;
   }
+  const dead = [];
+  const liveCids = new Set();
+  if (activeCid) liveCids.add(activeCid);
   for (const name of entries) {
     const m = name.match(/^antigravity-pid-(\d+)\.json$/);
     if (!m) continue;
     const pid = Number(m[1]);
-    if (!pid || pid === currentPid) continue;
+    if (!pid) continue;
+    const full = path.join(dir, name);
+    let data = null;
+    try {
+      data = JSON.parse(fs.readFileSync(full, "utf8"));
+    } catch {
+      data = null;
+    }
+    if (pid === currentPid) {
+      if (data?.conversation_id) liveCids.add(data.conversation_id);
+      continue;
+    }
+    let alive = true;
     try {
       process.kill(pid, 0);
     } catch (e) {
-      if (e?.code === "ESRCH") {
-        try {
-          const stale = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
-          if (stale?.conversation_id) writeReaderMapping(dir, stale.conversation_id, "ended");
-        } catch {
-          // ignore
-        }
-        try {
-          fs.rmSync(path.join(dir, name), { force: true });
-        } catch {
-          // ignore
-        }
-      }
+      if (e?.code === "ESRCH") alive = false;
+    }
+    if (alive) {
+      if (data?.conversation_id) liveCids.add(data.conversation_id);
+    } else {
+      dead.push({ full, cid: data?.conversation_id || "" });
+    }
+  }
+  for (const item of dead) {
+    // 若新进程通过 --resume 接续了同一 conversation_id，不得把活映射覆写为 ended。
+    if (item.cid && !liveCids.has(item.cid)) {
+      writeReaderMapping(dir, item.cid, "ended");
+    }
+    try {
+      fs.rmSync(item.full, { force: true });
+    } catch {
+      // ignore
     }
   }
 }
@@ -716,7 +761,9 @@ export function handleEvent(kind, payload, opts = {}) {
     return { written: false, reason: "no-agy-pid" };
   }
 
-  const lockDir = path.join(dir, `.agy-lock-${agyPid ?? "shared"}`);
+  // 锁目录放在临时目录而非被 watch 的 statusDir，避免 statusLine 每次未变化重绘触发 Rust watcher。
+  const dirKey = crypto.createHash("sha256").update(path.resolve(dir)).digest("hex").slice(0, 12);
+  const lockDir = path.join(os.tmpdir(), `red-green-agy-lock-${dirKey}-${agyPid ?? "shared"}`);
   return withFileLock(lockDir, () => {
     let prev = null;
     try {
@@ -725,14 +772,18 @@ export function handleEvent(kind, payload, opts = {}) {
       prev = null;
     }
 
+    const hasExplicitStatusCid =
+      kind === "statusline" &&
+      (typeof payload?.conversation_id === "string" || typeof payload?.session_id === "string");
+    const effectiveCid = hasExplicitStatusCid ? cid : cid || prev?.conversation_id || "";
     const reportedTranscript = payload?.transcriptPath || payload?.transcript_path || "";
-    const resolvedTranscript = resolveTranscriptPath(cid || prev?.conversation_id || "", reportedTranscript, homeDir);
+    const resolvedTranscript = resolveTranscriptPath(effectiveCid, reportedTranscript, homeDir);
 
-    if (prev?.conversation_id && cid && prev.conversation_id !== cid) {
+    if (prev?.conversation_id && prev.conversation_id !== effectiveCid) {
       writeReaderMapping(dir, prev.conversation_id, "ended");
     }
-    if (validConversationId(cid) && resolvedTranscript) {
-      writeReaderMapping(dir, cid, resolvedTranscript);
+    if (validConversationId(effectiveCid) && resolvedTranscript) {
+      writeReaderMapping(dir, effectiveCid, resolvedTranscript);
     }
 
     const needsTranscript =
@@ -740,7 +791,7 @@ export function handleEvent(kind, payload, opts = {}) {
       (kind === "statusline" &&
         String(payload?.agent_state ?? "idle").toLowerCase() === "idle" &&
         prev &&
-        (!prev.conversation_id || prev.conversation_id === cid) &&
+        (!prev.conversation_id || prev.conversation_id === effectiveCid) &&
         !TERMINAL_STATES.has(prev.state));
     const transcriptText = needsTranscript ? readTranscriptTail(resolvedTranscript) : "";
 
@@ -759,7 +810,7 @@ export function handleEvent(kind, payload, opts = {}) {
         ? prev.project
         : projectName(cwd);
     const effectiveTty = tty || prev?.tty || "";
-    const sessionId = prev?.session_id || (agyPid ? `pid-${agyPid}` : `cid-${cid}`);
+    const sessionId = prev?.session_id || (agyPid ? `pid-${agyPid}` : `cid-${effectiveCid}`);
 
     const next = {
       session_id: sessionId,
@@ -798,7 +849,7 @@ export function handleEvent(kind, payload, opts = {}) {
       appendEventLog(dir, `${nowIso} agy:${agyPid ?? sessionId} ${next.event} -> ${next.state}`);
     }
     if (!prev && agyPid) {
-      pruneDeadSessions(dir, agyPid);
+      pruneDeadSessions(dir, agyPid, transition.conversation_id);
     }
     return { written: true, session: next };
   });

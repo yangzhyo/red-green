@@ -5,25 +5,14 @@ use std::io::{self, BufRead};
 /// Count complete lines so a growing file can resume before its unfinished tail.
 pub(super) fn read_entries(
     session: &str,
-    mut input: impl BufRead,
+    input: impl BufRead,
     mut insert: impl FnMut(&Value),
 ) -> io::Result<usize> {
-    let mut consumed = 0;
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let size = input.read_until(b'\n', &mut line)?;
-        if line.last() != Some(&b'\n') {
-            break;
+    super::read_jsonl_lines(input, |row| {
+        if row["sessionId"].as_str() == Some(session) && row["isSidechain"] != true {
+            insert(row);
         }
-        consumed += size;
-        if let Ok(row) = serde_json::from_slice::<Value>(&line) {
-            if row["sessionId"].as_str() == Some(session) && row["isSidechain"] != true {
-                insert(&row);
-            }
-        }
-    }
-    Ok(consumed)
+    })
 }
 
 #[derive(Default)]

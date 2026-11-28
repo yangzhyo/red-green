@@ -28,24 +28,29 @@ function isOurs(command, scriptPath) {
 }
 
 function readJsonObject(filePath, label) {
-  if (fs.existsSync(filePath)) {
-    const lst = fs.lstatSync(filePath);
-    if (lst.isSymbolicLink()) {
-      throw new Error(`${label}（${filePath}）是符号链接，请手动配置后再重试。`);
+  let lst;
+  try {
+    lst = fs.lstatSync(filePath);
+  } catch (e) {
+    if (e?.code === "ENOENT") {
+      return { exists: false, raw: null, data: {}, mode: 0o600 };
     }
-    const raw = fs.readFileSync(filePath, "utf8");
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      throw new Error(`${label}（${filePath}）不是合法 JSON：${e.message}`);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`${label}（${filePath}）顶层必须是 JSON 对象。`);
-    }
-    return { exists: true, raw, data: parsed, mode: lst.mode & 0o777 };
+    throw e;
   }
-  return { exists: false, raw: null, data: {}, mode: 0o600 };
+  if (lst.isSymbolicLink()) {
+    throw new Error(`${label}（${filePath}）是符号链接，请手动配置后再重试。`);
+  }
+  const raw = fs.readFileSync(filePath, "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${label}（${filePath}）不是合法 JSON：${e.message}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label}（${filePath}）顶层必须是 JSON 对象。`);
+  }
+  return { exists: true, raw, data: parsed, mode: lst.mode & 0o777 };
 }
 
 function writeJsonWithBackup(filePath, data, info, stamp) {

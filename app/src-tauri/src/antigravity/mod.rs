@@ -24,19 +24,17 @@ fn parse_ps_output(out: &str) -> HashMap<u32, LiveProc> {
         if trimmed.is_empty() {
             continue;
         }
-        let mut parts = trimmed.splitn(3, char::is_whitespace);
-        let Some(pid_str) = parts.next() else {
+        let Some((pid_str, after_pid)) = trimmed.split_once(char::is_whitespace) else {
             continue;
         };
         let Ok(pid) = pid_str.parse::<u32>() else {
             continue;
         };
-        let rest = parts.next().unwrap_or("").trim_start();
-        let (tty_raw, comm_raw) = if let Some(third) = parts.next() {
-            (rest, third.trim())
-        } else {
+        let Some((tty_raw, after_tty)) = after_pid.trim_start().split_once(char::is_whitespace)
+        else {
             continue;
         };
+        let comm_raw = after_tty.trim();
         if comm_raw.is_empty() {
             continue;
         }
@@ -128,8 +126,8 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn parses_macos_ps_rows_including_paths_with_spaces() {
-        let raw = "  2886 ttys000 /Users/y9g/.local/bin/agy\n  9999 ?? /Applications/My App/foo\n";
+    fn parses_macos_ps_rows_including_multiple_spaces_and_paths_with_spaces() {
+        let raw = "  2886   ttys000   /Users/y9g/.local/bin/agy\n  9999   ??   /Applications/My App/foo\n";
         let parsed = parse_ps_output(raw);
         assert_eq!(
             parsed.get(&2886),
